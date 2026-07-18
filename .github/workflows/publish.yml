@@ -1,12 +1,15 @@
 name: Publish
 
-# Manual-dispatch only, and inert until the repository owner supplies the
-# `NPM_TOKEN` secret. Nothing here publishes on push or on merge.
+# Manual-dispatch only. Nothing here publishes on push or on merge.
 #
-# The `@agent-relay` npm scope is owned outside this repository, so a scope
-# grant plus the token must be in place before a real (non-dry-run) publish can
-# succeed. Until then the guard below fails the job with an explanatory message
-# rather than attempting to publish.
+# Authentication is npm OIDC trusted publishing — tokenless. There is no
+# NPM_TOKEN and no NODE_AUTH_TOKEN: the `id-token: write` permission below lets
+# the runner exchange a short-lived GitHub OIDC token with the registry.
+#
+# A real publish therefore requires the repository owner to configure this repo
+# and this workflow path as a "trusted publisher" for the package on npmjs.org.
+# That configuration is the OIDC equivalent of granting a token, and it is the
+# owner's step. Until it exists, a non-dry-run publish fails at the registry.
 
 on:
   workflow_dispatch:
@@ -63,17 +66,11 @@ jobs:
           cache: npm
           registry-url: "https://registry.npmjs.org"
 
-      - name: Require NPM_TOKEN for a real publish
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN is not configured. A real publish needs the"
-            echo "::error::repository owner to add the secret and grant this repo"
-            echo "::error::publish rights on the @agent-relay npm scope."
-            exit 1
-          fi
+      # OIDC trusted publishing needs npm >= 11.5.1. Pinned to the 11 line
+      # rather than @latest on purpose: npm 12 requires Node >= 22.22.2, which
+      # would break against the Node 22 pinned above.
+      - name: Update npm for OIDC trusted publishing
+        run: npm install -g npm@11
 
       - run: npm ci
 
@@ -101,13 +98,11 @@ jobs:
 
       - name: Dry run publish
         if: ${{ github.event.inputs.dry_run == 'true' }}
-        run: npm publish --access public --dry-run --ignore-scripts
+        run: npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }} --ignore-scripts
 
       - name: Publish
         if: ${{ github.event.inputs.dry_run != 'true' }}
         run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Commit, tag, and release
         if: ${{ github.event.inputs.dry_run != 'true' }}
