@@ -53,10 +53,14 @@ Requires Node.js 20 or newer.
 
 ## Releasing
 
-Publishing is manual-dispatch only, via the `Publish` workflow. It defaults to a
-dry run and requires an `NPM_TOKEN` secret configured by the repository owner
-before a real publish will run. Nothing publishes automatically on push or
-merge.
+Publishing is manual-dispatch only, via the `Publish` workflow, and defaults to
+a dry run. Nothing publishes automatically on push or merge.
+
+Authentication is npm OIDC trusted publishing — there is no publish token to
+store. A real publish requires the repository owner to register this repository
+and workflow as a trusted publisher for the package on npmjs.org; releases carry
+[provenance](https://docs.npmjs.com/generating-provenance-statements) attesting
+the commit and workflow they were built from.
 
 ## License
 
