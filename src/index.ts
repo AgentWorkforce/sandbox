@@ -25,6 +25,8 @@ export type {
   AsyncRunStatus,
   DeclaredSandboxRuntimeCapabilities,
   RunScriptResult,
+  SandboxCountOptions,
+  SandboxLookupOptions,
   SandboxRuntime,
   SandboxRuntimeCapabilities,
 } from "./port.js";
@@ -60,11 +62,18 @@ export { E2BSandboxRuntime } from "./e2b/runtime.js";
 export type { E2BSandboxRuntimeOptions, E2BSandboxStatics } from "./e2b/runtime.js";
 
 export { LocalSandboxRuntime } from "./local/runtime.js";
+export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 
 // --- orchestration ---------------------------------------------------------
 export { SandboxOrchestrator } from "./orchestrator.js";
+export {
+  buildRelayfileMountCleanupInvocationShell,
+  buildRelayfileMountLifecycleShell,
+} from "./orchestrator.js";
 export type {
+  FlushMountOptions,
   RelayfileMountHandle,
+  RelayfileMountLifecycleShellOptions,
   SandboxBundleFile,
   SandboxCapturedOutput,
   SandboxCommandResult,
@@ -72,6 +81,8 @@ export type {
   SandboxOutputChunk,
   SandboxProvisionOptions,
   SandboxRunScriptOptions,
+  StartMountOptions,
+  StopMountOptions,
 } from "./orchestrator.js";
 
 // --- relayfile-mount shell builders ----------------------------------------
