@@ -1,0 +1,126 @@
+name: Publish
+
+# Manual-dispatch only, and inert until the repository owner supplies the
+# `NPM_TOKEN` secret. Nothing here publishes on push or on merge.
+#
+# The `@agent-relay` npm scope is owned outside this repository, so a scope
+# grant plus the token must be in place before a real (non-dry-run) publish can
+# succeed. Until then the guard below fails the job with an explanatory message
+# rather than attempting to publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+        default: "patch"
+      custom_version:
+        description: "Custom version (optional, overrides the bump type)"
+        required: false
+        type: string
+      tag:
+        description: "npm dist-tag"
+        required: false
+        type: choice
+        options:
+          - latest
+          - next
+          - beta
+        default: "latest"
+      dry_run:
+        description: "Dry run (pack and validate, do not publish)"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Require NPM_TOKEN for a real publish
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is not configured. A real publish needs the"
+            echo "::error::repository owner to add the secret and grant this repo"
+            echo "::error::publish rights on the @agent-relay npm scope."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Bump version
+        id: version
+        run: |
+          CUSTOM="${{ github.event.inputs.custom_version }}"
+          BUMP="${{ github.event.inputs.version }}"
+          if [ -n "$CUSTOM" ]; then
+            npm version "$CUSTOM" --no-git-tag-version
+          else
+            npm version "$BUMP" --no-git-tag-version
+          fi
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Dry run publish
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: npm publish --access public --dry-run --ignore-scripts
+
+      - name: Publish
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit, tag, and release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): v${NEW_VERSION}"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
