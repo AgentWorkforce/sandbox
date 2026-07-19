@@ -390,6 +390,14 @@ export class DaytonaRuntime implements WorkflowRuntime {
     }
 
     const sessionId = options.sessionId ?? `run-${handle.id}-${Date.now()}`;
+    const statusPath = this.scriptStatusPath(sessionId);
+    const pendingStatusPath = `${statusPath}.tmp`;
+    const cleanup = await sandbox.process.executeCommand(
+      `rm -f ${shellSingleQuote(statusPath)} ${shellSingleQuote(pendingStatusPath)}`,
+    );
+    if (cleanup.exitCode !== 0) {
+      throw new Error(`Failed to clear stale Daytona status for session ${sessionId}`);
+    }
     await sandbox.process.createSession(sessionId);
     // Capture the run's combined stdout+stderr to a per-session log file.
     //
@@ -407,8 +415,6 @@ export class DaytonaRuntime implements WorkflowRuntime {
     // persists the exit code. Fresh one-shot readers recover both files after
     // Daytona closes the original async session.
     const logPath = this.scriptLogPath(sessionId);
-    const statusPath = this.scriptStatusPath(sessionId);
-    const pendingStatusPath = `${statusPath}.tmp`;
     const command = [
       `(`,
       this.buildScriptCommand(options),

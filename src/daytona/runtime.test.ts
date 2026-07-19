@@ -684,13 +684,22 @@ describe('DaytonaRuntime shared primitives', () => {
         timeout: 15,
       },
     ]);
-    assert.deepEqual(sandbox.commands, [{
-      command:
-        "if [ -f '/tmp/.daytona-run-session-1.exit' ]; then cat '/tmp/.daytona-run-session-1.exit'; fi",
-      cwd: undefined,
-      env: undefined,
-      timeout: undefined,
-    }]);
+    assert.deepEqual(sandbox.commands, [
+      {
+        command:
+          "rm -f '/tmp/.daytona-run-session-1.exit' '/tmp/.daytona-run-session-1.exit.tmp'",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+      {
+        command:
+          "if [ -f '/tmp/.daytona-run-session-1.exit' ]; then cat '/tmp/.daytona-run-session-1.exit'; fi",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+    ]);
     assert.deepEqual(sandbox.polledCommands, [
       { sessionId: 'session-1', commandId: 'cmd-123' },
     ]);
@@ -728,13 +737,52 @@ describe('DaytonaRuntime shared primitives', () => {
       (sandbox.sessionCommands[0] as { req: { command: string } }).req.command,
       /\.daytona-run-session-terminal-file\.exit/u,
     );
-    assert.deepEqual(sandbox.commands, [{
-      command:
-        "if [ -f '/tmp/.daytona-run-session-terminal-file.exit' ]; then cat '/tmp/.daytona-run-session-terminal-file.exit'; fi",
-      cwd: undefined,
-      env: undefined,
-      timeout: undefined,
-    }]);
+    assert.deepEqual(sandbox.commands, [
+      {
+        command:
+          "rm -f '/tmp/.daytona-run-session-terminal-file.exit' '/tmp/.daytona-run-session-terminal-file.exit.tmp'",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+      {
+        command:
+          "if [ -f '/tmp/.daytona-run-session-terminal-file.exit' ]; then cat '/tmp/.daytona-run-session-terminal-file.exit'; fi",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+    ]);
+  });
+
+  it('clears a stale status sidecar before reusing an explicit session id', async () => {
+    const sandbox = fakeSandbox({
+      id: 'sbx-async-reused-session',
+      state: 'STARTED',
+      sessionResult: { cmdId: 'cmd-reused', output: null, exitCode: null },
+      sessionCommand: { id: 'cmd-reused', command: 'sleep 30', exitCode: null },
+      commandResults: [
+        // A stale exit from the prior run. The cleanup consumes this mock call;
+        // the following status read must see no terminal sidecar yet.
+        { exitCode: 0, result: '7\n' },
+        { exitCode: 0, result: '' },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    await runtime.startScript(handle, {
+      command: 'sleep 30',
+      sessionId: 'reused-session',
+      timeoutMs: 45_000,
+    });
+    const status = await runtime.getScriptStatus(handle, 'reused-session', 'cmd-reused');
+
+    assert.deepEqual(status, { exitCode: null });
+    assert.equal(
+      (sandbox.commands[0] as { command: string }).command,
+      "rm -f '/tmp/.daytona-run-reused-session.exit' '/tmp/.daytona-run-reused-session.exit.tmp'",
+    );
   });
 
   it('getScriptLogs falls back to the captured log file when the runAsync snapshot is empty', async () => {
@@ -996,6 +1044,7 @@ function fakeSandbox(input: {
   sessionResult?: Record<string, unknown>;
   sessionResults?: Array<Record<string, unknown>>;
   commandResult?: { exitCode: number; result: string; artifacts?: { stdout?: string } };
+  commandResults?: Array<{ exitCode: number; result: string; artifacts?: { stdout?: string } }>;
   sessionCommand?: Record<string, unknown>;
   sessionLogs?: Record<string, unknown>;
   supportsSession?: boolean;
@@ -1035,6 +1084,9 @@ function fakeSandbox(input: {
       timeout?: number,
     ) => {
       commands.push({ command, cwd, env, timeout });
+      if (input.commandResults && input.commandResults.length > 0) {
+        return input.commandResults.shift()!;
+      }
       return input.commandResult ?? { exitCode: 0, result: 'ok' };
     },
   };
