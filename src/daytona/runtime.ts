@@ -390,12 +390,20 @@ export class DaytonaRuntime implements WorkflowRuntime {
     }
 
     const sessionId = options.sessionId ?? `run-${handle.id}-${Date.now()}`;
+    const statusPath = this.scriptStatusPath(sessionId);
+    const pendingStatusPath = `${statusPath}.tmp`;
+    const cleanup = await sandbox.process.executeCommand(
+      `rm -f ${shellSingleQuote(statusPath)} ${shellSingleQuote(pendingStatusPath)}`,
+    );
+    if (cleanup.exitCode !== 0) {
+      throw new Error(`Failed to clear stale Daytona status for session ${sessionId}`);
+    }
     await sandbox.process.createSession(sessionId);
     // Capture the run's combined stdout+stderr to a per-session log file.
     //
     // Daytona's REST `getSessionCommandLogs` snapshot returns EMPTY for
-    // `runAsync: true` commands — the command RECORD keeps the exitCode (so
-    // getScriptStatus works), but the log BODY is only retrievable via the
+    // `runAsync: true` commands, and the command RECORD can remain without an
+    // exitCode after completion. The log BODY is otherwise only retrievable via the
     // follow=true WebSocket stream, which the SDK implements with
     // `isomorphic-ws` → node `ws`, so it does NOT run on edge runtimes without
     // WebSocket client support — which is where these runs are typically
@@ -403,12 +411,19 @@ export class DaytonaRuntime implements WorkflowRuntime {
     // failing run surfaces only as the bare "runner.mjs failed" fallback
     // string.
     //
-    // A command group redirects only this run's script and leaves the session's
-    // stdout/stderr intact for the later synchronous `tail` read. Its exit code
-    // is the exit code of the last command in the group, so this still preserves
-    // the script status. getScriptLogs reads this file back.
+    // A subshell redirects only this run's script, then its parent atomically
+    // persists the exit code. Fresh one-shot readers recover both files after
+    // Daytona closes the original async session.
     const logPath = this.scriptLogPath(sessionId);
-    const command = `{\n${this.buildScriptCommand(options)}\n} > ${shellSingleQuote(logPath)} 2>&1`;
+    const command = [
+      `(`,
+      this.buildScriptCommand(options),
+      `) > ${shellSingleQuote(logPath)} 2>&1`,
+      'daytona_run_status=$?',
+      `printf '%s\\n' "$daytona_run_status" > ${shellSingleQuote(pendingStatusPath)}`,
+      `mv ${shellSingleQuote(pendingStatusPath)} ${shellSingleQuote(statusPath)}`,
+      'exit "$daytona_run_status"',
+    ].join('\n');
     const result = await sandbox.process.executeSessionCommand(
       sessionId,
       {
@@ -434,8 +449,32 @@ export class DaytonaRuntime implements WorkflowRuntime {
       throw new Error('Daytona session execution is not available on this sandbox');
     }
     const command = await sandbox.process.getSessionCommand(sessionId, commandId);
+    if (typeof command.exitCode === 'number') {
+      return { exitCode: command.exitCode };
+    }
+
+    // Daytona's REST command projection can remain at exitCode:null after the
+    // async process has already finished. startScript writes an atomic status
+    // sidecar from inside the same shell; consult it before reporting running.
+    try {
+      const statusPath = this.scriptStatusPath(sessionId);
+      // The original async session is closed when its shell exits; Daytona
+      // rejects later commands on that session with a broken pipe. Read the
+      // durable sidecar through a fresh one-shot process instead.
+      const result = await sandbox.process.executeCommand(
+        `if [ -f ${shellSingleQuote(statusPath)} ]; then cat ${shellSingleQuote(statusPath)}; fi`,
+      );
+      const output = result.result ?? result.artifacts?.stdout ?? '';
+      const exitCode = parseShellExitCode(output);
+      if (exitCode !== null) {
+        return { exitCode };
+      }
+    } catch {
+      // Best-effort fallback. A missing file means the command is still
+      // running; a transient status read will be retried by the caller.
+    }
     return {
-      exitCode: typeof command.exitCode === 'number' ? command.exitCode : null,
+      exitCode: null,
     };
   }
 
@@ -453,18 +492,18 @@ export class DaytonaRuntime implements WorkflowRuntime {
     // Fallback for runAsync commands whose snapshot logs come back empty (see
     // startScript): read the per-session redirect file we captured. Bounded at
     // the source with `tail -c` so a multi-MB run can't pull the whole file
-    // into the poller. The read uses the sync (runAsync:false) path, which
-    // returns output inline over REST and works on runtimes without WebSocket
-    // support. Best-effort: a recycled sandbox / missing file / closed session
-    // yields empty — exactly the same blind state as before, never a throw.
+    // into the poller. The read uses a fresh one-shot process, which returns
+    // output inline over REST and works without WebSocket support. Best-effort:
+    // a recycled sandbox or missing file yields empty, never a throw.
     if (!output) {
       try {
         const logPath = this.scriptLogPath(sessionId);
-        const fileLogs = await sandbox.process.executeSessionCommand(sessionId, {
-          command: `tail -c ${SCRIPT_LOG_READ_MAX_BYTES} ${shellSingleQuote(logPath)} 2>/dev/null || true`,
-          runAsync: false,
-        });
-        output = fileLogs.output ?? fileLogs.stdout ?? fileLogs.stderr ?? '';
+        // Completed async sessions reject additional session commands. A
+        // one-shot process can still read the sandbox-scoped capture file.
+        const fileLogs = await sandbox.process.executeCommand(
+          `tail -c ${SCRIPT_LOG_READ_MAX_BYTES} ${shellSingleQuote(logPath)} 2>/dev/null || true`,
+        );
+        output = fileLogs.result ?? fileLogs.artifacts?.stdout ?? '';
       } catch {
         // best-effort; keep the empty snapshot result
       }
@@ -853,6 +892,10 @@ export class DaytonaRuntime implements WorkflowRuntime {
     return `/tmp/.daytona-run-${sessionSafeId(sessionId)}.log`;
   }
 
+  private scriptStatusPath(sessionId: string): string {
+    return `/tmp/.daytona-run-${sessionSafeId(sessionId)}.exit`;
+  }
+
   private matchesState(sandbox: Sandbox, states: readonly string[] | null): boolean {
     if (states === null) {
       return true;
@@ -1030,6 +1073,17 @@ function shellSingleQuote(value: string): string {
 
 function sessionSafeId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'sandbox';
+}
+
+function parseShellExitCode(value: string): number | null {
+  const normalized = value.trim();
+  if (!/^\d{1,3}$/u.test(normalized)) {
+    return null;
+  }
+  const exitCode = Number(normalized);
+  return Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255
+    ? exitCode
+    : null;
 }
 
 function parentDirectory(destination: string): string | null {

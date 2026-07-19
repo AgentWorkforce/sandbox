@@ -673,11 +673,31 @@ describe('DaytonaRuntime shared primitives', () => {
         sessionId: 'session-1',
         req: {
           command:
-            "{\nnode runner.mjs\n} > '/tmp/.daytona-run-session-1.log' 2>&1",
+            "(\nnode runner.mjs\n) > '/tmp/.daytona-run-session-1.log' 2>&1\n" +
+            "daytona_run_status=$?\n" +
+            "printf '%s\\n' \"$daytona_run_status\" > '/tmp/.daytona-run-session-1.exit.tmp'\n" +
+            "mv '/tmp/.daytona-run-session-1.exit.tmp' '/tmp/.daytona-run-session-1.exit'\n" +
+            "exit \"$daytona_run_status\"",
           runAsync: true,
           suppressInputEcho: true,
         },
         timeout: 15,
+      },
+    ]);
+    assert.deepEqual(sandbox.commands, [
+      {
+        command:
+          "rm -f '/tmp/.daytona-run-session-1.exit' '/tmp/.daytona-run-session-1.exit.tmp'",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+      {
+        command:
+          "if [ -f '/tmp/.daytona-run-session-1.exit' ]; then cat '/tmp/.daytona-run-session-1.exit'; fi",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
       },
     ]);
     assert.deepEqual(sandbox.polledCommands, [
@@ -688,6 +708,83 @@ describe('DaytonaRuntime shared primitives', () => {
     ]);
   });
 
+  it('recovers a terminal async exit code from the durable status file when Daytona keeps returning null', async () => {
+    const sandbox = fakeSandbox({
+      id: 'sbx-async-terminal-file',
+      state: 'STARTED',
+      sessionResult: { cmdId: 'cmd-terminal', output: null, exitCode: null },
+      // Production Daytona can keep this REST command projection at null even
+      // after the command itself exited and wrote its session output.
+      sessionCommand: { id: 'cmd-terminal', command: 'node runner.mjs', exitCode: null },
+      commandResult: { exitCode: 0, result: '0\n' },
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    await runtime.startScript(handle, {
+      command: 'node runner.mjs',
+      sessionId: 'session-terminal-file',
+      timeoutMs: 15_000,
+    });
+    const status = await runtime.getScriptStatus(
+      handle,
+      'session-terminal-file',
+      'cmd-terminal',
+    );
+
+    assert.deepEqual(status, { exitCode: 0 });
+    assert.match(
+      (sandbox.sessionCommands[0] as { req: { command: string } }).req.command,
+      /\.daytona-run-session-terminal-file\.exit/u,
+    );
+    assert.deepEqual(sandbox.commands, [
+      {
+        command:
+          "rm -f '/tmp/.daytona-run-session-terminal-file.exit' '/tmp/.daytona-run-session-terminal-file.exit.tmp'",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+      {
+        command:
+          "if [ -f '/tmp/.daytona-run-session-terminal-file.exit' ]; then cat '/tmp/.daytona-run-session-terminal-file.exit'; fi",
+        cwd: undefined,
+        env: undefined,
+        timeout: undefined,
+      },
+    ]);
+  });
+
+  it('clears a stale status sidecar before reusing an explicit session id', async () => {
+    const sandbox = fakeSandbox({
+      id: 'sbx-async-reused-session',
+      state: 'STARTED',
+      sessionResult: { cmdId: 'cmd-reused', output: null, exitCode: null },
+      sessionCommand: { id: 'cmd-reused', command: 'sleep 30', exitCode: null },
+      commandResults: [
+        // A stale exit from the prior run. The cleanup consumes this mock call;
+        // the following status read must see no terminal sidecar yet.
+        { exitCode: 0, result: '7\n' },
+        { exitCode: 0, result: '' },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    await runtime.startScript(handle, {
+      command: 'sleep 30',
+      sessionId: 'reused-session',
+      timeoutMs: 45_000,
+    });
+    const status = await runtime.getScriptStatus(handle, 'reused-session', 'cmd-reused');
+
+    assert.deepEqual(status, { exitCode: null });
+    assert.equal(
+      (sandbox.commands[0] as { command: string }).command,
+      "rm -f '/tmp/.daytona-run-reused-session.exit' '/tmp/.daytona-run-reused-session.exit.tmp'",
+    );
+  });
+
   it('getScriptLogs falls back to the captured log file when the runAsync snapshot is empty', async () => {
     const sandbox = fakeSandbox({
       id: 'sbx-async-empty',
@@ -695,8 +792,9 @@ describe('DaytonaRuntime shared primitives', () => {
       sessionResult: { cmdId: 'cmd-async', output: null, stdout: '', stderr: '', exitCode: null },
       // Daytona returns an EMPTY snapshot for runAsync commands.
       sessionLogs: { output: '', stdout: '', stderr: '' },
-      // The sync `tail -c` read of the redirect file returns the real output.
-      sessionSyncResult: { exitCode: 0, output: 'TypeError: cannot read x\nrunner exited 1' },
+      // A fresh one-shot `tail -c` read returns the real output after the
+      // original async session has closed.
+      commandResult: { exitCode: 0, result: 'TypeError: cannot read x\nrunner exited 1' },
     });
     const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
     const handle = runtime.attachSandbox(sandbox as never);
@@ -710,15 +808,14 @@ describe('DaytonaRuntime shared primitives', () => {
 
     // The empty snapshot is replaced by the file content.
     assert.equal(logs.output, 'TypeError: cannot read x\nrunner exited 1');
-    // The fallback issued a bounded `tail -c` of the per-session redirect file,
-    // as a SYNC (runAsync:false) command on the same session.
-    const tailCmd = (sandbox.sessionCommands as Array<{ req: Record<string, unknown> }>).find(
-      (entry) => typeof entry.req.command === 'string' && (entry.req.command as string).startsWith('tail -c'),
-    );
+    // The fallback issued a bounded `tail -c` in a fresh one-shot process.
+    const tailCmd = sandbox.commands.find(
+      (entry) => typeof (entry as { command?: unknown }).command === 'string'
+        && ((entry as { command: string }).command).startsWith('tail -c'),
+    ) as { command: string } | undefined;
     assert.ok(tailCmd, 'expected a tail -c fallback read');
-    assert.equal(tailCmd!.req.runAsync, false);
     assert.equal(
-      tailCmd!.req.command,
+      tailCmd!.command,
       "tail -c 262144 '/tmp/.daytona-run-session-2.log' 2>/dev/null || true",
     );
   });
@@ -740,7 +837,11 @@ describe('DaytonaRuntime shared primitives', () => {
 
     assert.equal(
       (sandbox.sessionCommands[0] as { req: { command: string } }).req.command,
-      "{\nnode runner.mjs\n} > '/tmp/.daytona-run-session-scoped.log' 2>&1",
+      "(\nnode runner.mjs\n) > '/tmp/.daytona-run-session-scoped.log' 2>&1\n" +
+      "daytona_run_status=$?\n" +
+      "printf '%s\\n' \"$daytona_run_status\" > '/tmp/.daytona-run-session-scoped.exit.tmp'\n" +
+      "mv '/tmp/.daytona-run-session-scoped.exit.tmp' '/tmp/.daytona-run-session-scoped.exit'\n" +
+      "exit \"$daytona_run_status\"",
     );
   });
 
@@ -750,7 +851,6 @@ describe('DaytonaRuntime shared primitives', () => {
       state: 'STARTED',
       sessionResult: { cmdId: 'cmd-async', output: null, stdout: '', stderr: '', exitCode: null },
       sessionLogs: { output: 'snapshot has it', stdout: 'snapshot has it', stderr: '' },
-      sessionSyncResult: { exitCode: 0, output: 'SHOULD NOT BE READ' },
     });
     const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
     const handle = runtime.attachSandbox(sandbox as never);
@@ -763,8 +863,9 @@ describe('DaytonaRuntime shared primitives', () => {
     const logs = await runtime.getScriptLogs(handle, 'session-3', 'cmd-async');
 
     assert.equal(logs.output, 'snapshot has it');
-    const tailCmd = (sandbox.sessionCommands as Array<{ req: Record<string, unknown> }>).find(
-      (entry) => typeof entry.req.command === 'string' && (entry.req.command as string).startsWith('tail -c'),
+    const tailCmd = sandbox.commands.find(
+      (entry) => typeof (entry as { command?: unknown }).command === 'string'
+        && ((entry as { command: string }).command).startsWith('tail -c'),
     );
     assert.equal(tailCmd, undefined, 'non-empty snapshot must not trigger a file read');
   });
@@ -942,10 +1043,8 @@ function fakeSandbox(input: {
   lastActivityAt?: string;
   sessionResult?: Record<string, unknown>;
   sessionResults?: Array<Record<string, unknown>>;
-  // Result for a SYNCHRONOUS (runAsync:false) session command — e.g. the
-  // `tail -c` log-file read getScriptLogs falls back to. When
-  // unset, sync commands reuse sessionResult.
-  sessionSyncResult?: Record<string, unknown>;
+  commandResult?: { exitCode: number; result: string; artifacts?: { stdout?: string } };
+  commandResults?: Array<{ exitCode: number; result: string; artifacts?: { stdout?: string } }>;
   sessionCommand?: Record<string, unknown>;
   sessionLogs?: Record<string, unknown>;
   supportsSession?: boolean;
@@ -985,7 +1084,10 @@ function fakeSandbox(input: {
       timeout?: number,
     ) => {
       commands.push({ command, cwd, env, timeout });
-      return { exitCode: 0, result: 'ok' };
+      if (input.commandResults && input.commandResults.length > 0) {
+        return input.commandResults.shift()!;
+      }
+      return input.commandResult ?? { exitCode: 0, result: 'ok' };
     },
   };
   if (input.supportsSession !== false) {
@@ -998,9 +1100,6 @@ function fakeSandbox(input: {
       timeout?: number,
     ) => {
       sessionCommands.push({ sessionId, req, timeout });
-      if (req.runAsync === false && input.sessionSyncResult !== undefined) {
-        return input.sessionSyncResult;
-      }
       if (input.sessionResults && input.sessionResults.length > 0) {
         return input.sessionResults.shift()!;
       }
