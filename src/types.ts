@@ -41,6 +41,11 @@ export interface ExecResult {
 export interface AsyncExecStartResult {
   sessionId: string;
   commandId: string;
+  /**
+   * True when an outcome-unknown transport failure was resolved by finding
+   * the exact command in the fresh deterministic session.
+   */
+  reconciled?: true;
 }
 
 export interface AsyncExecStatus {

@@ -424,15 +424,43 @@ export class DaytonaRuntime implements WorkflowRuntime {
       `mv ${shellSingleQuote(pendingStatusPath)} ${shellSingleQuote(statusPath)}`,
       'exit "$daytona_run_status"',
     ].join('\n');
-    const result = await sandbox.process.executeSessionCommand(
-      sessionId,
-      {
-        command,
-        runAsync: true,
-        suppressInputEcho: options.suppressInputEcho,
-      },
-      this.msToSeconds(options.timeoutMs),
-    );
+    let result;
+    try {
+      result = await sandbox.process.executeSessionCommand(
+        sessionId,
+        {
+          command,
+          runAsync: true,
+          suppressInputEcho: options.suppressInputEcho,
+        },
+        this.msToSeconds(options.timeoutMs),
+      );
+    } catch (error) {
+      if (isOutcomeUnknownAdmissionError(error)) {
+        try {
+          // This session was freshly created above and callers execute one
+          // command per session. If Daytona admitted the POST before its
+          // response was lost, the session is the authoritative idempotency
+          // record. Match the complete generated command so an unexpected
+          // prior or duplicate command can never be mistaken for this run.
+          const session = await sandbox.process.getSession(sessionId);
+          const matches = session.commands.filter(
+            (candidate) => candidate.command === command && Boolean(candidate.id),
+          );
+          if (matches.length === 1) {
+            return {
+              sessionId,
+              commandId: matches[0]!.id,
+              reconciled: true,
+            };
+          }
+        } catch {
+          // Preserve the original admission error. Failed reconciliation is
+          // still outcome-unknown and belongs on the caller's quarantine path.
+        }
+      }
+      throw error;
+    }
     if (!result.cmdId) {
       throw new Error('Daytona async session command did not return a command id');
     }
@@ -1084,6 +1112,30 @@ function parseShellExitCode(value: string): number | null {
   return Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255
     ? exitCode
     : null;
+}
+
+function isOutcomeUnknownAdmissionError(error: unknown): boolean {
+  const record = error && typeof error === 'object'
+    ? error as { code?: unknown; name?: unknown; message?: unknown }
+    : null;
+  const code = typeof record?.code === 'string' ? record.code.toUpperCase() : '';
+  const name = typeof record?.name === 'string' ? record.name : '';
+  const message = error instanceof Error
+    ? error.message
+    : typeof record?.message === 'string'
+      ? record.message
+      : String(error);
+  return (
+    code === 'ECONNABORTED'
+    || code === 'ETIMEDOUT'
+    || code === 'ECONNRESET'
+    || name === 'DaytonaTimeoutError'
+    || /\btimeout of \d+ms exceeded\b/iu.test(message)
+    || /\btimed out\b/iu.test(message)
+    || /\bnetwork connection lost\b/iu.test(message)
+    || /\bsocket hang up\b/iu.test(message)
+    || /\bfetch failed\b/iu.test(message)
+  );
 }
 
 function parentDirectory(destination: string): string | null {
