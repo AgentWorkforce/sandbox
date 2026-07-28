@@ -708,6 +708,350 @@ describe('DaytonaRuntime shared primitives', () => {
     ]);
   });
 
+  it('reconciles an outcome-unknown async admission without executing the command twice', async () => {
+    const admissionTimeout = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const sandbox = fakeSandbox({
+      id: 'sbx-async-admission-timeout',
+      state: 'STARTED',
+      sessionExecuteError: admissionTimeout,
+      sessionReads: [
+        { commands: [] },
+        {
+          commands: [
+            {
+              id: 'cmd-admitted-before-timeout',
+              command: generatedAsyncCommand('session-admission-timeout'),
+            },
+          ],
+        },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    const started = await runtime.startScript(handle, {
+      command: 'node runner.mjs',
+      sessionId: 'session-admission-timeout',
+      timeoutMs: 15_000,
+    });
+
+    assert.deepEqual(started, {
+      sessionId: 'session-admission-timeout',
+      commandId: 'cmd-admitted-before-timeout',
+      reconciled: true,
+    });
+    assert.equal(sandbox.sessionCommands.length, 1);
+    assert.deepEqual(sandbox.inspectedSessions, [
+      'session-admission-timeout',
+      'session-admission-timeout',
+    ]);
+  });
+
+  it('does not confuse a stale generated command with the command admitted by this attempt', async () => {
+    const admissionTimeout = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const sessionId = 'session-stale-baseline';
+    const command = generatedAsyncCommand(sessionId);
+    const sandbox = fakeSandbox({
+      id: 'sbx-stale-baseline',
+      state: 'STARTED',
+      sessionExecuteError: admissionTimeout,
+      sessionReads: [
+        { commands: [{ id: 'cmd-stale', command }] },
+        {
+          commands: [
+            { id: 'cmd-stale', command },
+            { id: 'cmd-admitted-now', command },
+          ],
+        },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    const started = await runtime.startScript(handle, {
+      command: 'node runner.mjs',
+      sessionId,
+      timeoutMs: 15_000,
+    });
+
+    assert.deepEqual(started, {
+      sessionId,
+      commandId: 'cmd-admitted-now',
+      reconciled: true,
+    });
+    assert.equal(sandbox.sessionCommands.length, 1, 'must never resubmit after outcome-unknown');
+  });
+
+  it('preserves the original timeout for zero, duplicate, or conflicting newly observed commands', async () => {
+    const cases = [
+      { label: 'zero', commands: [{ id: 'cmd-other', command: 'echo unrelated' }] },
+      {
+        label: 'duplicate',
+        commands: [
+          { id: 'cmd-new-a', command: generatedAsyncCommand('session-duplicate') },
+          { id: 'cmd-new-b', command: generatedAsyncCommand('session-duplicate') },
+        ],
+      },
+      {
+        label: 'conflicting',
+        commands: [
+          { id: 'cmd-expected', command: generatedAsyncCommand('session-conflicting') },
+          { id: 'cmd-conflict', command: 'echo unexpected' },
+        ],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const admissionTimeout = Object.assign(
+        new Error('timeout of 15000ms exceeded'),
+        { code: 'ECONNABORTED' },
+      );
+      const sessionId = `session-${testCase.label}`;
+      const sandbox = fakeSandbox({
+        id: `sbx-${testCase.label}`,
+        state: 'STARTED',
+        sessionExecuteError: admissionTimeout,
+        sessionReads: [{ commands: [] }, { commands: testCase.commands }],
+      });
+      const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+      const handle = runtime.attachSandbox(sandbox as never);
+
+      await assert.rejects(
+        () => runtime.startScript(handle, { command: 'node runner.mjs', sessionId, timeoutMs: 15_000 }),
+        admissionTimeout,
+        testCase.label,
+      );
+      assert.equal(sandbox.sessionCommands.length, 1, `${testCase.label}: must never resubmit`);
+      assert.equal(sandbox.inspectedSessions.length, 2, `${testCase.label}: baseline and post-error reads`);
+    }
+  });
+
+  it('preserves the original timeout when a post-error snapshot repeats a command id', async () => {
+    const admissionTimeout = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const sessionId = 'session-duplicate-command-id';
+    const sandbox = fakeSandbox({
+      id: 'sbx-duplicate-command-id',
+      state: 'STARTED',
+      sessionExecuteError: admissionTimeout,
+      sessionReads: [
+        { commands: [{ id: 'cmd-duplicated', command: 'echo stale' }] },
+        {
+          commands: [
+            { id: 'cmd-duplicated', command: 'echo stale' },
+            { id: 'cmd-duplicated', command: generatedAsyncCommand(sessionId) },
+            { id: 'cmd-expected', command: generatedAsyncCommand(sessionId) },
+          ],
+        },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    await assert.rejects(
+      () => runtime.startScript(handle, { command: 'node runner.mjs', sessionId, timeoutMs: 15_000 }),
+      admissionTimeout,
+    );
+    assert.equal(sandbox.sessionCommands.length, 1);
+  });
+
+  it('preserves the original timeout when either reconciliation snapshot is unreadable', async () => {
+    const baselineFailure = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const baselineSandbox = fakeSandbox({
+      id: 'sbx-unreadable-baseline',
+      state: 'STARTED',
+      sessionExecuteError: baselineFailure,
+      readSession: async () => { throw new Error('baseline session read lost'); },
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    await assert.rejects(
+      () => runtime.startScript(runtime.attachSandbox(baselineSandbox as never), {
+        command: 'node runner.mjs', sessionId: 'session-unreadable-baseline', timeoutMs: 15_000,
+      }),
+      baselineFailure,
+    );
+    assert.equal(baselineSandbox.inspectedSessions.length, 1, 'no post-error lookup without a readable baseline');
+
+    const postFailure = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const postSandbox = fakeSandbox({
+      id: 'sbx-unreadable-post',
+      state: 'STARTED',
+      sessionExecuteError: postFailure,
+      readSession: async (sessionId, readCount) => {
+        if (readCount === 0) return { sessionId, commands: [] };
+        throw new Error('post-error session read lost');
+      },
+    });
+    await assert.rejects(
+      () => runtime.startScript(runtime.attachSandbox(postSandbox as never), {
+        command: 'node runner.mjs', sessionId: 'session-unreadable-post', timeoutMs: 15_000,
+      }),
+      postFailure,
+    );
+    assert.equal(postSandbox.inspectedSessions.length, 2);
+  });
+
+  it('preserves the original timeout when the post-error snapshot is for another session', async () => {
+    const admissionTimeout = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const sandbox = fakeSandbox({
+      id: 'sbx-wrong-session',
+      state: 'STARTED',
+      sessionExecuteError: admissionTimeout,
+      sessionReads: [
+        { commands: [] },
+        {
+          sessionId: 'session-not-requested',
+          commands: [{ id: 'cmd-wrong-session', command: generatedAsyncCommand('session-requested') }],
+        },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    await assert.rejects(
+      () => runtime.startScript(runtime.attachSandbox(sandbox as never), {
+        command: 'node runner.mjs', sessionId: 'session-requested', timeoutMs: 15_000,
+      }),
+      admissionTimeout,
+    );
+  });
+
+  it('uses a separate bounded post-error lookup budget and preserves the original admission timeout', async () => {
+    const admissionTimeout = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const sandbox = fakeSandbox({
+      id: 'sbx-bounded-reconciliation',
+      state: 'STARTED',
+      sessionExecuteError: admissionTimeout,
+      readSession: async (sessionId, readCount) => {
+        if (readCount === 0) return { sessionId, commands: [] };
+        return new Promise<Record<string, unknown>>(() => undefined);
+      },
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const startedAt = Date.now();
+    await assert.rejects(
+      () => runtime.startScript(runtime.attachSandbox(sandbox as never), {
+        command: 'node runner.mjs', sessionId: 'session-bounded-reconciliation', timeoutMs: 15_000,
+      }),
+      admissionTimeout,
+    );
+    assert.ok(Date.now() - startedAt >= 800, 'post-error lookup must use its own bounded budget');
+    assert.equal(sandbox.inspectedSessions.length, 2);
+  });
+
+  it('preserves the original timeout when the deterministic session cannot prove admission', async () => {
+    const admissionTimeout = Object.assign(
+      new Error('timeout of 15000ms exceeded'),
+      { code: 'ECONNABORTED' },
+    );
+    const sandbox = fakeSandbox({
+      id: 'sbx-async-admission-unproven',
+      state: 'STARTED',
+      sessionExecuteError: admissionTimeout,
+      sessionReads: [
+        { commands: [] },
+        { commands: [{ id: 'cmd-other', command: 'echo unrelated' }] },
+      ],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    await assert.rejects(
+      () => runtime.startScript(handle, {
+        command: 'node runner.mjs',
+        sessionId: 'session-admission-unproven',
+        timeoutMs: 15_000,
+      }),
+      admissionTimeout,
+    );
+    assert.equal(sandbox.sessionCommands.length, 1);
+    assert.deepEqual(sandbox.inspectedSessions, [
+      'session-admission-unproven',
+      'session-admission-unproven',
+    ]);
+  });
+
+  it('does not reconcile an explicit Daytona rejection', async () => {
+    const explicitRejection = Object.assign(
+      new Error('Daytona rejected command: invalid request'),
+      { code: 'ERR_BAD_REQUEST' },
+    );
+    const sandbox = fakeSandbox({
+      id: 'sbx-async-admission-rejected',
+      state: 'STARTED',
+      sessionExecuteError: explicitRejection,
+      sessionReads: [{ commands: [] }],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+    const handle = runtime.attachSandbox(sandbox as never);
+
+    await assert.rejects(
+      () => runtime.startScript(handle, {
+        command: 'node runner.mjs',
+        sessionId: 'session-admission-rejected',
+        timeoutMs: 15_000,
+      }),
+      explicitRejection,
+    );
+    assert.equal(sandbox.sessionCommands.length, 1);
+    assert.deepEqual(sandbox.inspectedSessions, ['session-admission-rejected']);
+  });
+
+  it('does not inspect a post-error session after an arbitrary non-transport failure', async () => {
+    const nonTransportFailure = new Error('request validation failed');
+    const sandbox = fakeSandbox({
+      id: 'sbx-non-transport-failure',
+      state: 'STARTED',
+      sessionExecuteError: nonTransportFailure,
+      sessionReads: [{ commands: [] }],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+
+    await assert.rejects(
+      () => runtime.startScript(runtime.attachSandbox(sandbox as never), {
+        command: 'node runner.mjs', sessionId: 'session-non-transport-failure', timeoutMs: 15_000,
+      }),
+      nonTransportFailure,
+    );
+    assert.equal(sandbox.sessionCommands.length, 1);
+    assert.equal(sandbox.inspectedSessions.length, 1, 'baseline only');
+  });
+
+  it('reports a direct command admission separately from a reconciled admission', async () => {
+    const sandbox = fakeSandbox({
+      id: 'sbx-direct-admission',
+      state: 'STARTED',
+      sessionResult: { cmdId: 'cmd-direct', output: null, exitCode: null },
+      sessionReads: [{ commands: [] }],
+    });
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: {} as never });
+
+    const started = await runtime.startScript(runtime.attachSandbox(sandbox as never), {
+      command: 'node runner.mjs', sessionId: 'session-direct-admission', timeoutMs: 15_000,
+    });
+
+    assert.deepEqual(started, { sessionId: 'session-direct-admission', commandId: 'cmd-direct' });
+    assert.equal(sandbox.inspectedSessions.length, 1, 'baseline only');
+  });
+
   it('recovers a terminal async exit code from the durable status file when Daytona keeps returning null', async () => {
     const sandbox = fakeSandbox({
       id: 'sbx-async-terminal-file',
@@ -1043,6 +1387,10 @@ function fakeSandbox(input: {
   lastActivityAt?: string;
   sessionResult?: Record<string, unknown>;
   sessionResults?: Array<Record<string, unknown>>;
+  sessionExecuteError?: Error;
+  session?: Record<string, unknown>;
+  sessionReads?: Array<Record<string, unknown>>;
+  readSession?: (sessionId: string, readCount: number) => Promise<Record<string, unknown>>;
   commandResult?: { exitCode: number; result: string; artifacts?: { stdout?: string } };
   commandResults?: Array<{ exitCode: number; result: string; artifacts?: { stdout?: string } }>;
   sessionCommand?: Record<string, unknown>;
@@ -1055,6 +1403,8 @@ function fakeSandbox(input: {
   const sessionCommands: Array<unknown> = [];
   const polledCommands: Array<unknown> = [];
   const polledLogs: Array<unknown> = [];
+  const inspectedSessions: string[] = [];
+  const sessionReads = [...(input.sessionReads ?? [])];
   const process: {
     executeCommand: (
       command: string,
@@ -1072,6 +1422,7 @@ function fakeSandbox(input: {
       sessionId: string,
       commandId: string,
     ) => Promise<Record<string, unknown>>;
+    getSession?: (sessionId: string) => Promise<Record<string, unknown>>;
     getSessionCommandLogs?: (
       sessionId: string,
       commandId: string,
@@ -1100,10 +1451,25 @@ function fakeSandbox(input: {
       timeout?: number,
     ) => {
       sessionCommands.push({ sessionId, req, timeout });
+      if (input.sessionExecuteError) {
+        throw input.sessionExecuteError;
+      }
       if (input.sessionResults && input.sessionResults.length > 0) {
         return input.sessionResults.shift()!;
       }
       return input.sessionResult ?? { exitCode: 0, output: 'ok' };
+    };
+    process.getSession = async (sessionId: string) => {
+      inspectedSessions.push(sessionId);
+      const readCount = inspectedSessions.length - 1;
+      if (input.readSession) {
+        return input.readSession(sessionId, readCount);
+      }
+      const next = sessionReads.shift();
+      if (next) {
+        return { sessionId, ...next };
+      }
+      return input.session ?? { sessionId, commands: [] };
     };
     process.getSessionCommand = async (
       sessionId: string,
@@ -1133,6 +1499,7 @@ function fakeSandbox(input: {
     sessionCommands,
     polledCommands,
     polledLogs,
+    inspectedSessions,
     getUserHomeDir: async () => '/home/sandbox',
     fs: {
       uploadFile: async (source: Buffer | string, destination: string) => {
@@ -1142,6 +1509,14 @@ function fakeSandbox(input: {
     },
     process,
   };
+}
+
+function generatedAsyncCommand(sessionId: string): string {
+  return "(\nnode runner.mjs\n) > '/tmp/.daytona-run-" + sessionId + ".log' 2>&1\n"
+    + 'daytona_run_status=$?\n'
+    + "printf '%s\\n' \"$daytona_run_status\" > '/tmp/.daytona-run-" + sessionId + ".exit.tmp'\n"
+    + "mv '/tmp/.daytona-run-" + sessionId + ".exit.tmp' '/tmp/.daytona-run-" + sessionId + ".exit'\n"
+    + 'exit "$daytona_run_status"';
 }
 
 async function* sandboxIterator(sandboxes: Array<ReturnType<typeof fakeSandbox>>) {

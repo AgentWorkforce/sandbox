@@ -100,6 +100,7 @@ interface RegisteredSandbox {
 // so the trailing bytes are the useful ones.
 const SCRIPT_LOG_READ_MAX_BYTES = 262_144; // 256 KiB
 const DEFAULT_DAYTONA_LOOKUP_TIMEOUT_MS = 10_000;
+const DAYTONA_ADMISSION_RECONCILIATION_LOOKUP_TIMEOUT_MS = 1_000;
 
 export class DaytonaRuntime implements WorkflowRuntime {
   readonly id = 'daytona';
@@ -424,15 +425,66 @@ export class DaytonaRuntime implements WorkflowRuntime {
       `mv ${shellSingleQuote(pendingStatusPath)} ${shellSingleQuote(statusPath)}`,
       'exit "$daytona_run_status"',
     ].join('\n');
-    const result = await sandbox.process.executeSessionCommand(
-      sessionId,
-      {
-        command,
-        runAsync: true,
-        suppressInputEcho: options.suppressInputEcho,
-      },
-      this.msToSeconds(options.timeoutMs),
-    );
+    // A deterministic session can outlive a previous caller. Capture its
+    // command IDs before this POST so a response-lost admission can only be
+    // reconciled to a command that appeared during this attempt. The Daytona
+    // SDK exposes no AbortSignal/timeout for getSession, so the caller waits
+    // only for this bounded race; an unreadable baseline simply disables
+    // reconciliation and keeps the normal direct-admission path intact.
+    let baselineCommandIds: ReadonlySet<string> | null = null;
+    try {
+      const baselineSession = await readBoundedDaytonaSession(
+        sandbox.process.getSession(sessionId),
+        admissionReconciliationLookupDeadline(),
+      );
+      baselineCommandIds = daytonaSessionCommandIds(baselineSession, sessionId);
+    } catch {
+      // Do not turn a best-effort idempotency observation into a new
+      // pre-admission failure. If the subsequent POST is outcome-unknown,
+      // preserving its original error is safer than guessing.
+    }
+    let result;
+    try {
+      result = await sandbox.process.executeSessionCommand(
+        sessionId,
+        {
+          command,
+          runAsync: true,
+          suppressInputEcho: options.suppressInputEcho,
+        },
+        this.msToSeconds(options.timeoutMs),
+      );
+    } catch (error) {
+      if (baselineCommandIds && isOutcomeUnknownAdmissionError(error)) {
+        try {
+          // A timeout/network error can mean the POST was admitted before its
+          // response was lost. Accept exactly one *new* complete generated
+          // command, never a stale, duplicate, conflicting, or unreadable
+          // record, and never submit again.
+          const postAdmissionSession = await readBoundedDaytonaSession(
+            sandbox.process.getSession(sessionId),
+            admissionReconciliationLookupDeadline(),
+          );
+          const newMatches = matchingNewDaytonaSessionCommandIds(
+            postAdmissionSession,
+            baselineCommandIds,
+            command,
+            sessionId,
+          );
+          if (newMatches.length === 1) {
+            return {
+              sessionId,
+              commandId: newMatches[0]!,
+              reconciled: true,
+            };
+          }
+        } catch {
+          // Preserve the original admission error. Failed reconciliation is
+          // still outcome-unknown and belongs on the caller's quarantine path.
+        }
+      }
+      throw error;
+    }
     if (!result.cmdId) {
       throw new Error('Daytona async session command did not return a command id');
     }
@@ -1052,6 +1104,89 @@ async function awaitLookupOperation<T>(
   }
 }
 
+function admissionReconciliationLookupDeadline(): LookupDeadline {
+  return lookupDeadline(DAYTONA_ADMISSION_RECONCILIATION_LOOKUP_TIMEOUT_MS);
+}
+
+/**
+ * Daytona's getSession currently accepts no timeout or AbortSignal. Keep the
+ * underlying request best-effort, but never let reconciliation add an
+ * unbounded wait after the separate admission timeout has already elapsed.
+ */
+async function readBoundedDaytonaSession<T>(
+  operation: Promise<T>,
+  deadline: LookupDeadline,
+): Promise<T> {
+  return awaitLookupOperation(
+    operation,
+    deadline,
+    'reading async session for admission reconciliation',
+  );
+}
+
+type DaytonaSessionCommandRecord = {
+  id: string;
+  command?: unknown;
+};
+
+function daytonaSessionCommands(
+  session: unknown,
+  expectedSessionId: string,
+): DaytonaSessionCommandRecord[] {
+  if (!session || typeof session !== 'object') {
+    throw new Error('Daytona async session response is unreadable');
+  }
+  const record = session as { sessionId?: unknown; commands?: unknown };
+  if (record.sessionId !== expectedSessionId) {
+    throw new Error('Daytona async session response belongs to another session');
+  }
+  const commands = record.commands;
+  if (!Array.isArray(commands)) {
+    throw new Error('Daytona async session command list is unreadable');
+  }
+  const parsedCommands = commands.map((candidate) => {
+    if (!candidate || typeof candidate !== 'object') {
+      throw new Error('Daytona async session command is unreadable');
+    }
+    const id = (candidate as { id?: unknown }).id;
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new Error('Daytona async session command id is unreadable');
+    }
+    return {
+      id,
+      command: (candidate as { command?: unknown }).command,
+    };
+  });
+  if (new Set(parsedCommands.map((candidate) => candidate.id)).size !== parsedCommands.length) {
+    throw new Error('Daytona async session command ids are ambiguous');
+  }
+  return parsedCommands;
+}
+
+function daytonaSessionCommandIds(
+  session: unknown,
+  expectedSessionId: string,
+): ReadonlySet<string> {
+  return new Set(daytonaSessionCommands(session, expectedSessionId).map((candidate) => candidate.id));
+}
+
+function matchingNewDaytonaSessionCommandIds(
+  session: unknown,
+  baselineCommandIds: ReadonlySet<string>,
+  command: string,
+  expectedSessionId: string,
+): string[] {
+  const newCommands = daytonaSessionCommands(session, expectedSessionId)
+    .filter((candidate) => !baselineCommandIds.has(candidate.id));
+  // A newly-created deterministic session should gain exactly one command from
+  // this admission. More than one new record — including a different command —
+  // is an ambiguous outcome, not evidence that our command may be adopted.
+  if (newCommands.length !== 1 || newCommands[0]!.command !== command) {
+    return [];
+  }
+  return [newCommands[0]!.id];
+}
+
 function closeAsyncIteratorBestEffort(iterator: AsyncIterableIterator<unknown>): void {
   if (!iterator.return) {
     return;
@@ -1084,6 +1219,30 @@ function parseShellExitCode(value: string): number | null {
   return Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255
     ? exitCode
     : null;
+}
+
+function isOutcomeUnknownAdmissionError(error: unknown): boolean {
+  const record = error && typeof error === 'object'
+    ? error as { code?: unknown; name?: unknown; message?: unknown }
+    : null;
+  const code = typeof record?.code === 'string' ? record.code.toUpperCase() : '';
+  const name = typeof record?.name === 'string' ? record.name : '';
+  const message = error instanceof Error
+    ? error.message
+    : typeof record?.message === 'string'
+      ? record.message
+      : String(error);
+  return (
+    code === 'ECONNABORTED'
+    || code === 'ETIMEDOUT'
+    || code === 'ECONNRESET'
+    || name === 'DaytonaTimeoutError'
+    || /\btimeout of \d+ms exceeded\b/iu.test(message)
+    || /\btimed out\b/iu.test(message)
+    || /\bnetwork connection lost\b/iu.test(message)
+    || /\bsocket hang up\b/iu.test(message)
+    || /\bfetch failed\b/iu.test(message)
+  );
 }
 
 function parentDirectory(destination: string): string | null {
