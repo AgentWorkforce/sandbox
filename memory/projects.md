@@ -46,8 +46,13 @@ workstream.
   dossiers, competitor deep-dives via the `competitor-deep-dive` skill,
   partnership scoring handed to cmo; never outreach, never executes
   third-party code locally), and **cpo** (Chief Product Officer — product
-  direction memos in `direction/`, owns product side projects; project leads
-  report to cpo: **marquee** and **burn**, the latter also owning the
-  software factory `../factory` with burn as its proving ground). Chief
-  dispatches to department leads; chief's own subagents cover only what has
-  no department yet.
+  direction memos in `direction/`; two manager agents share the cpo
+  repo/roster under it: **head-of-ecosystem** runs the Agent Relay
+  ecosystem projects — chief-app, burn (which also owns `../factory`),
+  relaycron-cloud, parked marquee — and **head-of-experiments** runs
+  non-OSS-core side projects — notesnumber (inside `../ladd`) and
+  hoopsheet (`~/Projects/hoopsheet`, outside the AgentWorkforce tree).
+  File-ownership partition in the cpo repo: `direction/` = cpo alone;
+  `ecosystem/` and `experiments/` = each head alone). Chief dispatches to
+  department leads; chief's own subagents cover only what has no
+  department yet.
