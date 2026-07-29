@@ -9,7 +9,11 @@
   issue): agent-session heartbeat/responsiveness probe surfaced in
   `node agent list` + health — distinct from node/broker liveness. Also
   the wake-on-delivery design should treat "delivered but never
-  processed" as a first-class state.
+  processed" as a first-class state. Post-mortem data: both hung
+  sessions were idle-sleeping (relay: 72 min, 0.3% CPU), not spinning —
+  injection stopped waking the session. Interim watchdog candidate
+  (org's pager, not shadow-polling): scheduled check flagging any
+  resident with unread DMs older than ~15 min → alert chief/kickstart.
 
 - **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29):** at the
   10 GiB ceiling now, rolling brownout, hard-stuck in days (cloud's
