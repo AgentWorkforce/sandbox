@@ -1,5 +1,16 @@
 # Open threads
 
+- **Resident sessions go alive-but-unresponsive; nothing detects it
+  (2026-07-29, twice in one day):** cmo (claude) ignored an urgent brief
+  for ~50 min; relay (codex) sat on three unread orders for ~75 min —
+  both with green broker health, zero pending deliveries, live PTYs.
+  There is no session-level liveness signal; the org notices only when a
+  human looks. Remedy today: kickstart. Platform fix candidate (relay
+  issue): agent-session heartbeat/responsiveness probe surfaced in
+  `node agent list` + health — distinct from node/broker liveness. Also
+  the wake-on-delivery design should treat "delivered but never
+  processed" as a first-class state.
+
 - **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29):** at the
   10 GiB ceiling now, rolling brownout, hard-stuck in days (cloud's
   analysis: the protected 14–90-day audit band grows monotonically — GC
