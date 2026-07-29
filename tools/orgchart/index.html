@@ -124,7 +124,48 @@
     background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
-  .projects { display: flex; flex-direction: column; gap: 12px; }
+  #projects.projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+  }
+  #projects.projects-detail { display: block; }
+
+  .project-card-mini {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: var(--shadow);
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: border-color .12s ease;
+  }
+  .project-card-mini:hover, .project-card-mini:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .project-mini-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .project-mini-title {
+    font-weight: 620; font-size: 13.5px; letter-spacing: -.005em;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .project-mini-tldr {
+    color: var(--muted); font-size: 12.5px; line-height: 1.45;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    font: inherit; font-size: 12.5px; font-weight: 550;
+    padding: 0; margin-bottom: 12px;
+    border: none; background: transparent; color: var(--muted);
+    cursor: pointer;
+  }
+  .back-link:hover { color: var(--accent); }
+
   .project-card {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -195,7 +236,7 @@
   </section>
 
   <section id="projectsView" hidden>
-    <div class="projects" id="projects"></div>
+    <div class="projects-grid" id="projects"></div>
   </section>
 </main>
 <div id="toast" role="status" aria-live="polite"></div>
@@ -367,9 +408,52 @@ function field(label, value) {
   return row;
 }
 
-function projectCard(p) {
+// Titles follow "short-name — long description"; the grid shows only the
+// short half, but the full title is kept on the element for reference.
+function shortTitle(title) {
+  const dash = title.indexOf('—');
+  if (dash !== -1 && title.length > 20) return title.slice(0, dash).trim();
+  return title;
+}
+
+function miniCard(p) {
+  const el = document.createElement('div');
+  el.className = 'project-card-mini';
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  const fullTitle = p.title || p.file;
+  el.dataset.fullTitle = fullTitle;
+
+  const head = document.createElement('div');
+  head.className = 'project-mini-head';
+  const title = document.createElement('div');
+  title.className = 'project-mini-title';
+  title.textContent = shortTitle(fullTitle);
+  title.title = fullTitle;
+  head.append(title, chip(p.status));
+
+  const tldr = document.createElement('div');
+  tldr.className = 'project-mini-tldr';
+  tldr.textContent = p.tldr || '—';
+
+  el.append(head, tldr);
+  const open = () => selectProject(p.file);
+  el.addEventListener('click', open);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
+  return el;
+}
+
+function detailCard(p) {
   const el = document.createElement('div');
   el.className = 'project-card';
+
+  const back = document.createElement('button');
+  back.className = 'back-link';
+  back.type = 'button';
+  back.textContent = '← back to all';
+  back.addEventListener('click', () => selectProject(null));
 
   const head = document.createElement('div');
   head.className = 'project-head';
@@ -382,15 +466,37 @@ function projectCard(p) {
   meta.className = 'project-meta';
   meta.textContent = [p.owner, p.updated, p.repos?.join(', ')].filter(Boolean).join(' · ');
 
-  el.append(head, meta, field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
+  el.append(back, head, meta, field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
   return el;
+}
+
+let projectsCache = [];
+let selectedProject = null;
+
+function renderProjects() {
+  const list = document.getElementById('projects');
+  if (selectedProject && !projectsCache.some((p) => p.file === selectedProject)) {
+    selectedProject = null; // the selected project vanished from disk
+  }
+  if (selectedProject) {
+    const p = projectsCache.find((x) => x.file === selectedProject);
+    list.className = 'projects-detail';
+    list.replaceChildren(detailCard(p));
+    return;
+  }
+  list.className = 'projects-grid';
+  list.replaceChildren(...projectsCache.map(miniCard));
+}
+
+function selectProject(file) {
+  selectedProject = file;
+  renderProjects();
 }
 
 async function loadProjects() {
   try {
-    const projects = await (await fetch('/api/projects')).json();
-    const list = document.getElementById('projects');
-    list.replaceChildren(...projects.map(projectCard));
+    projectsCache = await (await fetch('/api/projects')).json();
+    renderProjects();
   } catch { /* keep the last known state on a transient failure */ }
 }
 

@@ -65,6 +65,19 @@ function clean(text, cap = 400) {
   return collapsed.length > cap ? `${collapsed.slice(0, cap).trim()}…` : collapsed;
 }
 
+// Frontmatter string values (tldr) are quoted; strip the surrounding quotes.
+function stripQuotes(text) {
+  const match = text.match(/^"(.*)"$/s) ?? text.match(/^'(.*)'$/s);
+  return match ? match[1] : text;
+}
+
+// Fallback for workstreams without a tldr: the first sentence of Goal.
+function firstSentence(text) {
+  if (!text) return '';
+  const match = text.match(/^.*?[.!?](?=\s|$)/s);
+  return (match ? match[0] : text).trim();
+}
+
 // A field runs from its `**Label:**` marker to the next section label
 // (Goal/Now/Next), the next heading, or end of body — whichever comes
 // first. Bounded to the known labels rather than any bold-prefixed line:
@@ -84,6 +97,7 @@ async function loadProjects() {
   const projects = await Promise.all(files.map(async (file) => {
     const raw = await readFile(join(WORKSTREAMS_DIR, file), 'utf8');
     const { meta, body } = parseFrontmatter(raw);
+    const goal = extractField(body, 'Goal');
     return {
       file,
       status: meta.status ?? '',
@@ -91,7 +105,8 @@ async function loadProjects() {
       updated: meta.updated ?? '',
       repos: meta.repos ?? [],
       title: extractTitle(body),
-      goal: extractField(body, 'Goal'),
+      tldr: (meta.tldr ? stripQuotes(meta.tldr) : '') || firstSentence(goal),
+      goal,
       now: extractField(body, 'Now'),
       next: extractField(body, 'Next'),
     };
