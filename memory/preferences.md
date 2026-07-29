@@ -43,6 +43,12 @@ session; don't restate it. Chief-specific emphases:
   owner when one is seated (chief DMs them the finding), by a chief
   subagent when no owner exists. Open-threads holds the pointer, never the
   only copy.
+- **Trust reports; don't shadow-poll (Will, 2026-07-29).** Once work is
+  dispatched to an owner with report obligations, chief does not stand up
+  watchers/polling over the same work — that duplicates the delegate's
+  reporting duty and un-delegates it. Verify evidence AT report time
+  (spot-check the sha, one glance); escalate on silence (one ping after a
+  reasonable window), not by surveillance.
 - **Chief dispatches; delegates do.** The rule is literal: *anything* chief
   would do itself — including org scaffolding, repo seeding, plists, node
   boots — goes to a subagent; anything with an owner (cpo, cso, project
