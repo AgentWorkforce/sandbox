@@ -19,6 +19,15 @@ resident relay agent — registered, posting to #general, DM-able.
 GitHub/Slack/Notion from hosted relayfile (Gate 3 is done), and a scheduled
 daily /digest (launchd until relaycron has a message transport).
 
+**Senses leg is blocked on Will** (senses-mount worker report, 07-29): no
+Relayfile-backed workspace exists — chief-dev is messaging-only. Unblock is a
+~3-min browser task: `relayfile login --provision-messaging-only`, then
+`relayfile integration connect github|slack|notion`. Worker standing by to
+mount and verify. Scoping decision (chief, 07-29): the shipped CLI takes a
+single `--remote-path`, so mount one tight subtree first
+(`/github/repos/AgentWorkforce`); the multi-allowlist brief becomes a
+relayfile CLI issue (expose repeated `--remote-path` / `--local-layout`).
+
 ## History
 - 2026-07-29 — Chief came online as a durable relay agent for the first time:
   session-start ritual from files alone, readiness posted to #general,
