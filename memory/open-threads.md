@@ -12,11 +12,14 @@
   processed" as a first-class state. Post-mortem data: both hung
   sessions were idle-sleeping (relay: 72 min, 0.3% CPU), not spinning —
   injection stopped waking the session. Interim watchdog
-  (building, Will's design 2026-07-29): **active ping-ACK** — a watchdog
-  identity DMs every resident "liveness check, reply ACK" every 30 min;
-  no reply within 10 min = hung, alert chief (alert-only v1, kickstart
-  stays manual). Ping-ACK exercises the actual failing path; passive
-  file signals are corroboration only.
+  (building, Will's tiered design 2026-07-29): **T1 passive** every 10
+  min, zero tokens — trip only when a resident has unread-stale messages
+  addressed to it AND lastSeen predates them (idle + empty inbox =
+  healthy, never trips); **T2** targeted ping-ACK to the suspect only;
+  **T3** alert chief with the evidence chain (alert-only v1, kickstart
+  manual). v2 options: broker action events via --log-file, observer
+  stream (needs ot_ token); durable fix = broker-native responsiveness
+  (filed with relay).
 
 - **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29):** at the
   10 GiB ceiling now, rolling brownout, hard-stuck in days (cloud's
