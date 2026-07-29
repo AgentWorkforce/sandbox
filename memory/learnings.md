@@ -29,3 +29,16 @@ Distilled 2026-07-29 from six months of session history
   twice. Fakes locally; real runtimes in CI/sandboxes only.
 - **Secrets never enter prompts or tracked files.** Live keys in prompt history
   forced rotations. Env vars only; any pasted secret gets flagged for rotation.
+  Corollary (2026-07-29, learned the hard way): **never dump raw `env`** — a
+  length-based redaction filter missed `RELAY_BROKER_API_KEY` (`br_` + 32 chars
+  = 35, under the cutoff) and leaked it into a transcript. Grep for the specific
+  variables you need, or filter by key name, never by value length.
+- **Start chief's node from launchd, never from a Claude Code session.** Claude
+  Code stamps `CLAUDE_CODE_CHILD_SESSION=1` into every Bash-spawned subprocess;
+  `agent-relay node up` passes its env through the broker into chief's PTY, so
+  chief sees the marker and silently stops saving transcripts. The plist
+  (`com.agentworkforce.chief.node`) has a clean env and the warning never
+  appears on that path. `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` overrides the
+  symptom; the fix is the launch path. Note the job exits 1 if a manually
+  started broker already holds the project — `agent-relay down` first, then
+  `launchctl kickstart -k gui/$UID/com.agentworkforce.chief.node`.
