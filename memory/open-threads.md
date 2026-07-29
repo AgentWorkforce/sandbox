@@ -70,8 +70,6 @@
 - **relaycron-cloud repo:** zero commits — an empty placeholder (unlike the
   real relayfile-cloud/relayhistory-cloud extractions). Use as the extraction
   target or delete when [relaycron-migration] starts.
-- **chief-app:** 41 uncommitted changes on main (headless-chief pivot).
-  Decide commit / harvest / archive. Parked 2026-07-29; this repo supersedes it.
 - **burn macOS updater dead on arrival → now the factory's first work unit**
   (2026-07-29): the in-app updater (PR #495) ships against `macos-v*` tags
   that don't exist. Owned by the burn project owner via [burn-factory];
