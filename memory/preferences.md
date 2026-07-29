@@ -28,6 +28,11 @@ session; don't restate it. Chief-specific emphases:
   absolute, resolved threads deleted, duplicates merged. Runs headless via
   `com.agentworkforce.chief.groom` (/groom skill); aborts if the tree is
   dirty so it never fights the resident.
+- **Found issues become GitHub issues (Will, 2026-07-29):** every defect
+  found in passing gets filed on the owning repo — by the repo's product
+  owner when one is seated (chief DMs them the finding), by a chief
+  subagent when no owner exists. Open-threads holds the pointer, never the
+  only copy.
 - **Chief dispatches; delegates do.** The rule is literal: *anything* chief
   would do itself — including org scaffolding, repo seeding, plists, node
   boots — goes to a subagent; anything with an owner (cpo, cso, project
