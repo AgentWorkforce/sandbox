@@ -21,9 +21,14 @@ markdown in git; there is no app and no database.
 
 ## Talking to Chief
 
-Open Claude Code in this directory. The persona loads, Chief reads its brain,
-and you can ask anything: "what did we ship this month?", "status", "what's
-next on relaycron?".
+One Chief runs resident on this repo's broker (`agent-relay node up` starts
+both; `teams.json` autoSpawn). Three ways in:
 
-With the broker up (`agent-relay up` here), Chief is also a durable relay
-agent reachable by DM from anywhere in the workspace.
+- **Attach (primary):** `agent-relay node agent attach chief --mode drive` —
+  Chief's live TUI, type as in any Claude session. Inbound relay messages
+  queue while you drive and flush when you detach (`Ctrl+]`).
+- **DM from anywhere:** any registered agent or session in the workspace can
+  DM `chief`; it answers from its brain.
+- **Maintenance shell:** a bare `claude` session here edits the repo but is
+  **not** Chief — don't hold Chief conversations in it while the resident is
+  online; two writers corrupt continuity.

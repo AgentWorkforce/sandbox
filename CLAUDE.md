@@ -44,6 +44,14 @@ plain messages. Never rewrite journal history.
 `**Next:**`, `## History` dated notes newest-first. A workstream without a
 Next is either done or blocked — say which.
 
+**Bodies — one Chief.** The resident broker-spawned agent (via `teams.json`)
+is the one Chief; the principal talks to it by attaching
+(`agent-relay node agent attach chief --mode drive`, detach `Ctrl+]`), and
+scheduled headless digest runs are its cron body. An interactive `claude`
+session opened by a human in this repo is a maintenance shell: it may fix
+structure and skills, but while the resident is online it must not act as
+Chief or write `memory/`, `journal/`, or `workstreams/` — one writer.
+
 ## 3. Session start — always do this first
 
 1. Read every file in `memory/`.

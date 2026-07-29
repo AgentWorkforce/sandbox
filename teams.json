@@ -1,12 +1,12 @@
 {
   "team": "chief",
-  "autoSpawn": false,
+  "autoSpawn": true,
   "agents": [
     {
       "name": "chief",
       "cli": "claude",
       "role": "chief of staff",
-      "task": "Read CLAUDE.md and follow the session-start ritual. Serve the principal: track workstreams, keep the journal, answer status and retro questions, delegate real work to repo agents."
+      "task": "Read CLAUDE.md and follow the session-start ritual (memory/, workstreams/, two most recent journal dailies). You are the resident Chief: stay online, answer DMs (status, retros, delegation), keep the brain current, and never self-remove. When the principal attaches in drive mode, let them lead; queued messages flush when they detach."
     }
   ]
 }
