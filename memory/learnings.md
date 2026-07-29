@@ -1,5 +1,15 @@
 # Learnings — expensive lessons as operating rules
 
+- **Infra outages must enter the brain when they happen.** The 2026-07-22
+  relayauth D1-full outage (10 GiB ceiling, token mints failing, 14.7M rows
+  emergency-deleted; runbook
+  cloud/docs/runbooks/relayauth-d1-retention-gc.md, tracking cloud#2801)
+  never made memory/ — so its 07-29 recurrence burned a full diagnosis
+  cycle reading as a brand-new bug. Standing condition to remember:
+  relayauth's 90-day retention does not fit in D1's 10 GiB; until
+  archive-to-R2 (or equivalent) lands, mint-flapping = check DB fill
+  first.
+
 Distilled 2026-07-29 from six months of session history
 (`~/.claude/docs/claude-usage-review-2026-07.md`).
 

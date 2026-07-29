@@ -1,5 +1,15 @@
 # Open threads
 
+- **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29, escalated
+  to cloud):** the 10 GiB ceiling is hit again (July-22 recurrence); token
+  mints flap on the 5-min GC cadence, dragging workspace
+  creation/relayfile provisioning with them. Legibility fix: relayauth
+  PR #70 (typed 503 + Retry-After, CI green) awaiting cloud's adversarial
+  review + chief merge confirm; tracking issue relayauth#71. Durable fix:
+  cloud#2801 / archive-to-R2 — cloud resident owns the plan, execution
+  gated. Will's relayfile retries succeed only in post-GC-tick windows
+  until then. See [learnings] for the standing capacity rule.
+
 - **Principal senses: email + Granola (Will, 2026-07-29)** — chief gets
   read-only access to Will's email and Granola (meeting recordings/recaps +
   self-notes). Email path: relayfile Gmail provider (confirmed in catalog)
