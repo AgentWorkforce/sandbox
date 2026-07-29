@@ -1,14 +1,18 @@
 # Open threads
 
-- **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29, escalated
-  to cloud):** the 10 GiB ceiling is hit again (July-22 recurrence); token
-  mints flap on the 5-min GC cadence, dragging workspace
-  creation/relayfile provisioning with them. Legibility fix: relayauth
-  PR #70 (typed 503 + Retry-After, CI green) awaiting cloud's adversarial
-  review + chief merge confirm; tracking issue relayauth#71. Durable fix:
-  cloud#2801 / archive-to-R2 — cloud resident owns the plan, execution
-  gated. Will's relayfile retries succeed only in post-GC-tick windows
-  until then. See [learnings] for the standing capacity rule.
+- **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29):** at the
+  10 GiB ceiling now, rolling brownout, hard-stuck in days (cloud's
+  analysis: the protected 14–90-day audit band grows monotonically — GC
+  structurally cannot win; policy problem, not throughput). Decisions
+  taken: **Plan A approved** (archive-to-R2: additive archiver PRs first,
+  destructive retention cut last + Will-visible); emergency bounded sweep
+  **pre-authorized contingent on CF creds** (GC-mode check first);
+  relayauth#70 merging; cloud queue PRs #2864/#2865/#2869 green-lit on
+  green CI. **Blocker on Will: ALL Cloudflare creds on this machine are
+  dead** (env + .env tokens rejected, wrangler OAuth invalid) — `wrangler
+  login` re-auth needed for telemetry + mitigation; PostHog MCP OAuth
+  optional second. Will's relayfile retries flap on the 5-min GC windows
+  until mitigated. See [learnings] for the capacity rule.
 
 - **Principal senses: email + Granola (Will, 2026-07-29)** — chief gets
   read-only access to Will's email and Granola (meeting recordings/recaps +
