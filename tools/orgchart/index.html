@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Org Chart</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #14161a;
+    --muted: #6b7280;
+    --line: #d8dce3;
+    --edge: #c3c9d3;
+    --accent: #3b6fd4;
+    --shadow: 0 1px 2px rgba(15, 20, 30, .08), 0 4px 12px rgba(15, 20, 30, .05);
+    --up: #22c55e;
+    --down: #9ca3af;
+    --hold: #f59e0b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101216;
+      --panel: #191c22;
+      --ink: #e8eaee;
+      --muted: #9aa2ae;
+      --line: #2c313a;
+      --edge: #3a404b;
+      --accent: #7aa2f7;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 64px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.45 ui-sans-serif, -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 780px; margin: 0 auto; }
+
+  header { margin-bottom: 28px; }
+  h1 { font-size: 19px; font-weight: 620; letter-spacing: -.01em; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 6px 18px;
+    margin: 16px 0 0; padding: 0; list-style: none;
+    color: var(--muted); font-size: 12.5px;
+  }
+  .legend li { display: flex; align-items: center; gap: 7px; }
+
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--down); flex: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--down) 18%, transparent);
+  }
+  .dot.up   { background: var(--up);   box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); }
+  .dot.hold { background: var(--hold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--hold) 22%, transparent); }
+  .dot.none { background: transparent; border: 1.5px solid var(--edge); box-shadow: none; }
+
+  /* Tree: each child draws its own elbow so the spine stops at the last item. */
+  ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
+  ul.tree ul { padding-left: 30px; }
+  ul.tree ul > li { position: relative; }
+  ul.tree ul > li::before {
+    content: ""; position: absolute; left: -15px; top: 0; bottom: 0;
+    width: 1px; background: var(--edge);
+  }
+  ul.tree ul > li:last-child::before { bottom: auto; height: 27px; }
+  ul.tree ul > li::after {
+    content: ""; position: absolute; left: -15px; top: 27px;
+    width: 15px; height: 1px; background: var(--edge);
+  }
+
+  .card {
+    display: flex; align-items: center; gap: 12px;
+    margin: 7px 0;
+    padding: 11px 13px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: var(--shadow);
+  }
+  .card .id { min-width: 0; flex: 1; }
+  .name { font-weight: 600; font-size: 14px; letter-spacing: -.005em; }
+  .title {
+    color: var(--muted); font-size: 12.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .meta { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .card.principal {
+    background: var(--ink); color: var(--bg); border-color: var(--ink);
+  }
+  .card.principal .title { color: color-mix(in srgb, var(--bg) 62%, transparent); }
+
+  button.view {
+    flex: none;
+    font: inherit; font-size: 12.5px; font-weight: 550;
+    padding: 5px 13px; border-radius: 7px;
+    border: 1px solid var(--edge); background: transparent; color: var(--ink);
+    cursor: pointer;
+  }
+  button.view:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.view:disabled { opacity: .35; cursor: not-allowed; }
+
+  footer { margin-top: 36px; color: var(--muted); font-size: 12.5px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
+    max-width: min(520px, 88vw);
+    padding: 10px 16px; border-radius: 9px;
+    background: var(--panel); border: 1px solid var(--line);
+    box-shadow: 0 6px 24px rgba(10, 14, 22, .18);
+    font-size: 13px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.err { border-color: #dc2626; color: #dc2626; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agent org chart</h1>
+    <p class="sub">Live node health across the workforce. Click <strong>View</strong> to open a terminal attached to an agent.</p>
+    <ul class="legend">
+      <li><span class="dot up"></span> node up</li>
+      <li><span class="dot"></span> node down</li>
+      <li><span class="dot hold"></span> parked / pending spawn</li>
+      <li><span class="dot none"></span> unseated</li>
+    </ul>
+  </header>
+
+  <ul class="tree" id="tree"></ul>
+
+  <footer>View mode is read-only; <code>Ctrl+]</code> detaches.</footer>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const NOT_ATTACHABLE = new Set(['unseated', 'pending-spawn']);
+let org = null;
+let status = {};
+
+function dotClass(agent) {
+  if (agent.status === 'unseated') return 'none';
+  if (agent.status === 'parked' || agent.status === 'pending-spawn') return 'hold';
+  return status[agent.repo]?.up ? 'up' : '';
+}
+
+function metaText(agent) {
+  if (agent.status === 'unseated') return 'unseated';
+  if (agent.status === 'pending-spawn') return 'pending spawn';
+  if (agent.status === 'parked') return 'parked';
+  const s = status[agent.repo];
+  if (!s) return '';
+  if (!s.up) return 'down';
+  return s.agentCount === 1 ? '1 agent' : `${s.agentCount} agents`;
+}
+
+function card(agent) {
+  const el = document.createElement('div');
+  el.className = 'card';
+
+  const dot = document.createElement('span');
+  dot.className = 'dot ' + dotClass(agent);
+  dot.dataset.dotFor = agent.name;
+
+  const id = document.createElement('div');
+  id.className = 'id';
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = agent.name;
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = agent.title;
+  id.append(name, title);
+
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.dataset.metaFor = agent.name;
+  meta.textContent = metaText(agent);
+
+  const btn = document.createElement('button');
+  btn.className = 'view';
+  btn.textContent = 'View';
+  btn.disabled = NOT_ATTACHABLE.has(agent.status);
+  if (btn.disabled) btn.title = `${agent.name} is ${agent.status.replace('-', ' ')}`;
+  btn.addEventListener('click', () => attach(agent.name, btn));
+
+  el.append(dot, id, meta, btn);
+  return el;
+}
+
+function principalCard(name) {
+  const el = document.createElement('div');
+  el.className = 'card principal';
+  const id = document.createElement('div');
+  id.className = 'id';
+  const n = document.createElement('div');
+  n.className = 'name';
+  n.textContent = name;
+  const t = document.createElement('div');
+  t.className = 'title';
+  t.textContent = 'Principal';
+  id.append(n, t);
+  el.append(id);
+  return el;
+}
+
+function render() {
+  const byParent = new Map();
+  for (const a of org.agents) {
+    if (!byParent.has(a.reportsTo)) byParent.set(a.reportsTo, []);
+    byParent.get(a.reportsTo).push(a);
+  }
+
+  const branch = (parentName) => {
+    const kids = byParent.get(parentName) || [];
+    if (!kids.length) return null;
+    const ul = document.createElement('ul');
+    for (const kid of kids) {
+      const li = document.createElement('li');
+      li.append(card(kid));
+      const sub = branch(kid.name);
+      if (sub) li.append(sub);
+      ul.append(li);
+    }
+    return ul;
+  };
+
+  const tree = document.getElementById('tree');
+  tree.replaceChildren();
+  const root = document.createElement('li');
+  root.append(principalCard(org.principal.name));
+  const sub = branch(org.principal.name);
+  if (sub) root.append(sub);
+  tree.append(root);
+}
+
+function refreshDots() {
+  for (const agent of org.agents) {
+    const dot = document.querySelector(`[data-dot-for="${agent.name}"]`);
+    if (dot) dot.className = 'dot ' + dotClass(agent);
+    const meta = document.querySelector(`[data-meta-for="${agent.name}"]`);
+    if (meta) meta.textContent = metaText(agent);
+  }
+}
+
+let toastTimer;
+function toast(message, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.classList.toggle('err', !!isError);
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3600);
+}
+
+async function attach(name, btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/attach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const body = await res.json();
+    if (res.ok && body.ok) toast(body.message);
+    else toast(body.error || `Could not attach to ${name}`, true);
+  } catch (err) {
+    toast(`Could not reach the org chart server: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function poll() {
+  try {
+    status = await (await fetch('/api/status')).json();
+    refreshDots();
+  } catch { /* keep the last known state on a transient failure */ }
+}
+
+(async () => {
+  org = await (await fetch('/org.json')).json();
+  render();
+  await poll();
+  setInterval(poll, 10000);
+})();
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@
     "chief:view": "sh scripts/chief.sh view",
     "up": "agent-relay node up",
     "status": "agent-relay node status",
-    "digest:now": "launchctl kickstart -k gui/501/com.agentworkforce.chief.digest"
+    "digest:now": "launchctl kickstart -k gui/501/com.agentworkforce.chief.digest",
+    "orgchart": "node tools/orgchart/serve.mjs"
   }
 }
