@@ -33,6 +33,11 @@ Distilled 2026-07-29 from six months of session history
   `RELAY_BROKER_API_KEY` (`br_` + 32 chars = 35, under the cutoff) and leaked
   it into a transcript. Grep for the specific variables you need, or filter by
   key name, never by value length.
+- **Never `git add -A` in the chief repo.** Headless cron bodies (groom,
+  digest) edit brain files concurrently with the resident; a blanket `add
+  -A` sweeps their mid-flight edits into unrelated commits (happened
+  2026-07-29 — the "Pilot go" commit silently absorbed a groom pass).
+  Stage explicit paths, always.
 - **Start chief's node from launchd, never from a Claude Code session.** Claude
   Code stamps `CLAUDE_CODE_CHILD_SESSION=1` into every Bash-spawned subprocess;
   `agent-relay node up` passes its env through the broker into chief's PTY, so
