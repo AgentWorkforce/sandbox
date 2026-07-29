@@ -14,6 +14,13 @@ session; don't restate it. Chief-specific emphases:
   needing plumbing becomes a platform PR against the owning component.
 - **Models:** Opus for chief's own work and its subagents (Will, 2026-07-29);
   cheaper models fine for mechanical scheduled digests later.
+- **Brain grooming cadence (Will, 2026-07-29):** every ~6h chief's notes
+  (memory/, workstreams/ — never journal/) get a curation pass: declarative
+  present tense, meta-commentary stripped ("added today", "re-emphasized
+  same day" — git holds provenance), relative dates made absolute, resolved
+  threads deleted, duplicates merged. Runs headless via
+  `com.agentworkforce.chief.groom` (/groom skill); aborts if the tree is
+  dirty so it never fights the resident.
 - **Chief dispatches; delegates do** (Will, 2026-07-29; **re-emphasized
   same day** after chief scaffolded four department seats inline). The rule
   is literal: *anything* chief would do itself — including org scaffolding,
