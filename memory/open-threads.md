@@ -1,12 +1,14 @@
 # Open threads
 
 - **cso watchlist is empty (2026-07-29); seed corpus = #research-market** —
-  mounts into **cso's own** `senses/` (own relayfile workspace; decided over
-  chief-side mount — senses belong to the consuming department, and it keeps
-  chief's one-mount slot for the GitHub tree). Blocked on Will's browser
-  provisioning (`relayfile login` + `connect slack`). After mount: cso
-  sweeps → dedupes → dossiers, no chief in the data path. Interim habit:
-  DM fresh finds to cso directly.
+  mounts into **cso's own** `senses/` (own relayfile workspace; senses
+  belong to the consuming department, which also keeps chief's one-mount
+  slot for the GitHub tree). **Blocker moved off Will 2026-07-29:**
+  `relayfile login --provision-messaging-only` fails server-side — `http
+  500: Failed to create workspace` from agentrelay.com/cloud; diagnosis
+  subagent dispatched (suspect: handler on torn-down cloud/AWS infra).
+  After the fix: Will's OAuth (~3 min) → mount → cso sweeps → dossiers.
+  Interim habit: DM fresh finds to cso directly.
 
 - **YC F26 decision due by 08-28** — applications submitted ~07-26 (YC on
   time, a16z Speedrun off-cycle for SR008). Watch for responses; see
