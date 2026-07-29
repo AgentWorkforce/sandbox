@@ -9,26 +9,29 @@ repos: [coo]
 **Goal:** Agent Relay applies to Y Combinator and a16z Speedrun with settled
 positioning; deadlines never sneak up on us.
 
-**Now:** deadlines verified 07-29 (`coo/docs/deadlines.md`): **YC Fall 2026
-closed 07-27 — two days ago; late applications still accepted** with no
-guaranteed decision timeline (on-time applicants hear back by 08-28); W27
-window expected ~early Nov. Speedrun SR007 closed; **off-cycle submissions at
-speedrun.a16z.com/apply are auto-reviewed for SR008** (late Jan–Apr 2027,
-formal window expected ~Sept). Positioning brief distilled from the 07-24
-Codex session → `coo/docs/positioning-brief.md`: positioning is settled
-(collaboration infrastructure for agent teams, model/harness-independent;
-"agents unblock one another, humans set goals and escalation boundaries";
-open source earns protocol status; Supabase-pattern monetization) and most
-YC + Speedrun answers exist in near-final draft. The session named no batch
-or deadline — the deadline picture above is chief's addition.
+**Now:** **both submitted ~2026-07-26.** YC went in **on time for Fall 2026**
+(ahead of the 07-27 8pm PT close), so the on-time track applies: **decision
+by 08-28**. a16z Speedrun went in the same day as an **off-cycle submission,
+auto-reviewed for SR008** (cohort late Jan–Apr 2027; formal window expected
+~Sept 2026). Positioning is settled and written down in
+`coo/docs/positioning-brief.md`: collaboration infrastructure for agent
+teams, model/harness-independent; "agents unblock one another, humans set
+goals and escalation boundaries"; open source earns protocol status;
+Supabase-pattern monetization.
 
-**Next:** Will decides: late YC F26 submission now vs. wait for W27. Will
-supplies the blanks only he can fill (see open-threads: YC-app blanks).
-Then the COO agent assembles final drafts from the brief; Speedrun off-cycle
-submission can go as soon as drafts are ready. Re-check both program windows
-in September.
+**Next:** monitor for responses from both programs. Run interview prep off
+the positioning brief — the interview is the live surface now, not the
+application. Settle the facts an interviewer will probe (see open-threads:
+interview-prep facts; the Tailwind ARR figure conflicts across drafts).
+Re-check the SR008 window in September.
 
 ## History
+- 2026-07-29 — Submissions confirmed by Will: YC F26 on time ~07-26, a16z
+  Speedrun off-cycle the same day. Supersedes the 07-29 reading that F26 had
+  closed unsubmitted and Will still had to choose late-F26 vs W27 — that
+  decision is moot. Stale-doc note: `coo/docs/deadlines.md` §"What a company
+  applying in August 2026 should target" still advises *whether* to submit;
+  its deadline table remains accurate.
 - 2026-07-29 — Department renamed CTO → COO (Will: "cto implies technical").
 - 2026-07-29 — Named by Will. Source thinking: Codex session
   019f94fd-5a9e-7910-9893-80065a6dc898 (07-24, ran in willwashburn/persona).

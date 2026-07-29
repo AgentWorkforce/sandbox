@@ -1,12 +1,15 @@
 # Open threads
 
-- **YC-app blanks — only Will can fill** (feed to coo/docs/positioning-brief.md
-  §5-Open before drafts finalize): who encouraged the application + any YC
-  events attended; money in bank + monthly spend (runway); "agents" metric
-  definition (active vs created in window); one ARR figure for Tailwind
-  ("eight-figure" vs "~$7M" — drafts conflict); assemble "things you've
-  built" (NotesNumber in or out + its details); design-partner SF locations;
-  record the founder video from the finalized script.
+- **YC F26 decision due by 08-28** — applications submitted ~07-26 (YC on
+  time, a16z Speedrun off-cycle for SR008). Watch for responses; see
+  [fundraise-yc-a16z].
+
+- **Interview-prep facts to settle — only Will can fill** (was the YC-app
+  blanks list; application fields are moot now that both are submitted, these
+  are what an interviewer will probe): one ARR figure for Tailwind
+  ("eight-figure" vs "~$7M" — drafts conflict, and the submitted application
+  used one of them); the "agents" metric definition (active vs created in
+  window); money in bank + monthly spend (runway).
 
 - **relayfile Gate 3: DONE** (signed GREEN 2026-06-20, DO state byte-intact —
   `relayfile-cloud/docs/decisions/2026-06-20-gate3-sign.md`). `senses/` can
