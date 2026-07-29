@@ -11,9 +11,12 @@
   the wake-on-delivery design should treat "delivered but never
   processed" as a first-class state. Post-mortem data: both hung
   sessions were idle-sleeping (relay: 72 min, 0.3% CPU), not spinning —
-  injection stopped waking the session. Interim watchdog candidate
-  (org's pager, not shadow-polling): scheduled check flagging any
-  resident with unread DMs older than ~15 min → alert chief/kickstart.
+  injection stopped waking the session. Interim watchdog
+  (building, Will's design 2026-07-29): **active ping-ACK** — a watchdog
+  identity DMs every resident "liveness check, reply ACK" every 30 min;
+  no reply within 10 min = hung, alert chief (alert-only v1, kickstart
+  stays manual). Ping-ACK exercises the actual failing path; passive
+  file signals are corroboration only.
 
 - **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29):** at the
   10 GiB ceiling now, rolling brownout, hard-stuck in days (cloud's
