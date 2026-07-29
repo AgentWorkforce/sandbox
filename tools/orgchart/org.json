@@ -4,6 +4,7 @@
     {"name":"chief","title":"Chief of Staff","reportsTo":"Will","repo":"/Users/will/Projects/AgentWorkforce/chief","status":"resident"},
     {"name":"cmo","title":"CMO — GTM dept","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cmo","status":"resident"},
     {"name":"scout","title":"Relay Scout (CRM)","reportsTo":"cmo","repo":"/Users/will/Projects/AgentWorkforce/scout","status":"resident"},
+    {"name":"agentrelay-com","title":"agentrelay.com + content pipeline","reportsTo":"cmo","repo":"/Users/will/Projects/AgentWorkforce/agentrelay.com","status":"resident"},
     {"name":"coo","title":"COO — biz ops","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/coo","status":"unseated"},
     {"name":"cso","title":"CSO — research & competitive intel","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cso","status":"resident"},
     {"name":"cpo","title":"CPO — product","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cpo","status":"resident"},
