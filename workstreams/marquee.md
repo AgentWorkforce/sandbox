@@ -20,11 +20,13 @@ Feasibility spike dispatched: verify libghostty's current embedding story
 from primary sources, fallback table if immature, pane-rendering choice,
 v1 build plan → docs/architecture.md.
 
-**Next:** cpo reviews the spike's architecture.md and green-lights or
-redirects the v1 build plan. Reporting line (Will, same day): **cpo seated;
-marquee reports to cpo** (Will → chief → cpo → marquee); chief only for
-escalations. Name chosen: marquee (alternates offered: playbill, callsheet,
-chyron).
+**Next:** existential question open (Will, 2026-07-29, after stating the
+chief-app cockpit vision): "maybe marquee is useless… a lighter-weight
+version of it?" On cpo's desk: kill / merge (marquee's file-described
+live-pane protocol becomes chief-app's tile + side-pane primitive; the 4x4
+grid is 16 marquee tiles) / keep both — chief's read is merge. The spike
+completes as briefed regardless: libghostty-embedding feasibility is
+decision input for both products. Then cpo's memo recommends; Will decides.
 
 ## History
 - 2026-07-29 — Commissioned by Will (terminal + live markdown sidecar,
