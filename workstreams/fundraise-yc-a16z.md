@@ -14,11 +14,17 @@ closed 07-27 — two days ago; late applications still accepted** with no
 guaranteed decision timeline (on-time applicants hear back by 08-28); W27
 window expected ~early Nov. Speedrun SR007 closed; **off-cycle submissions at
 speedrun.a16z.com/apply are auto-reviewed for SR008** (late Jan–Apr 2027,
-formal window expected ~Sept). Positioning brief being distilled from the
-07-24 Codex session (019f94fd…) into `coo/docs/positioning-brief.md`.
+formal window expected ~Sept). Positioning brief distilled from the 07-24
+Codex session → `coo/docs/positioning-brief.md`: positioning is settled
+(collaboration infrastructure for agent teams, model/harness-independent;
+"agents unblock one another, humans set goals and escalation boundaries";
+open source earns protocol status; Supabase-pattern monetization) and most
+YC + Speedrun answers exist in near-final draft. The session named no batch
+or deadline — the deadline picture above is chief's addition.
 
-**Next:** Will decides: late YC F26 submission now vs. wait for W27. Either
-way the COO agent drafts both applications from the brief; Speedrun off-cycle
+**Next:** Will decides: late YC F26 submission now vs. wait for W27. Will
+supplies the blanks only he can fill (see open-threads: YC-app blanks).
+Then the COO agent assembles final drafts from the brief; Speedrun off-cycle
 submission can go as soon as drafts are ready. Re-check both program windows
 in September.
 

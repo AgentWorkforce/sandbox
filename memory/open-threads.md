@@ -1,5 +1,13 @@
 # Open threads
 
+- **YC-app blanks — only Will can fill** (feed to coo/docs/positioning-brief.md
+  §5-Open before drafts finalize): who encouraged the application + any YC
+  events attended; money in bank + monthly spend (runway); "agents" metric
+  definition (active vs created in window); one ARR figure for Tailwind
+  ("eight-figure" vs "~$7M" — drafts conflict); assemble "things you've
+  built" (NotesNumber in or out + its details); design-partner SF locations;
+  record the founder video from the finalized script.
+
 - **relayfile Gate 3: DONE** (signed GREEN 2026-06-20, DO state byte-intact —
   `relayfile-cloud/docs/decisions/2026-06-20-gate3-sign.md`). `senses/` can
   mount hosted `file.agentrelay.com`. Open tails: `api.relayfile.dev` compat
