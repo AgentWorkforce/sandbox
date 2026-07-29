@@ -8,15 +8,21 @@ repos: [agentrelay.com]
 
 **Goal:** one domain, docs current with the shipped product.
 
-**Now:** the apex is claimed and non-prod hosts are off agentrelay.cloud
-(June). Sitting uncommitted on main: 12 files — the four Factory docs pages,
-docs layout, GitHub-stars components — plus two untracked blog drafts, one a
-literal duplicate ("build-your-first-agent-team copy.mdx"). Local main was 10
-days stale at last fetch; worktrees open for the agent-team blog post and the
-v11 skill page.
+**Now:** resident lead being seated 2026-07-29 (codex, reports to cmo —
+Will: the front door belongs to GTM). New mandate alongside the site: the
+**content pipeline** — `content/pipeline.md`, a running list of blog posts
+(idea → notes → ready-for-will → drafting → published). Will fires ideas
+at chief or the resident; the resident develops each into research-backed
+notes; Will writes the human form. GTM-team-lead middle layer under cmo:
+noted as cmo's call once its reports multiply (currently scout +
+agentrelay-com). Still sitting uncommitted on main: 12 files (Factory docs
+pages, docs layout, GitHub-stars components) + two untracked blog drafts,
+one a literal duplicate; local main stale; blog + v11-skill worktrees
+open.
 
-**Next:** commit/land the Factory docs, delete the duplicate draft, land the
-blog worktree.
+**Next:** resident's day-one — triage/land the Factory docs, delete the
+dup draft, land the blog worktrees, seed the pipeline from the existing
+drafts; then steady-state idea intake.
 
 ## History
 - 2026-07-29 — Backfilled: edge-router conventions (Mar), blog + waitlist +
