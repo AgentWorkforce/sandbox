@@ -11,9 +11,18 @@
   used one of them); the "agents" metric definition (active vs created in
   window); money in bank + monthly spend (runway).
 
-- **Rotate `RELAY_BROKER_API_KEY`** (`br_…`) — leaked unredacted into the
-  2026-07-29 transcript when chief dumped raw `env` while diagnosing the
-  child-session marker. Rotate and confirm; see [learnings] for the rule.
+- **Credential rotation batch (2026-07-29) — rotate together, then fix the
+  platform leak:** (1) `RELAY_BROKER_API_KEY` (`br_…`) — leaked into the
+  07-29 transcript via a raw `env` dump. (2) The chief workspace key
+  (`rk_live_…`) and chief agent token (`at_live_…`) — both embedded in the
+  broker/claude process argv (world-readable via `ps`) and printed in
+  plaintext by `agent-relay node up` into `~/Library/Logs/chief-node.log`;
+  both landed in the 07-29 restart-verification transcript. Rotating alone is
+  insufficient — the next boot re-leaks the new values. **Platform fix needed
+  in relay:** pass workspace key/agent token via env or file instead of
+  `--mcp-config` argv, and redact key values from node/broker logs. File as a
+  relay issue. This also subsumes the July-review `rk_live_` rotation item
+  below; see [learnings] for the no-raw-env rule.
 
 - **relayfile Gate 3: DONE** (signed GREEN 2026-06-20, DO state byte-intact —
   `relayfile-cloud/docs/decisions/2026-06-20-gate3-sign.md`). `senses/` can
@@ -21,9 +30,10 @@
   domain still bound (migration-plan steps 6–7), SST `home: "aws"` not yet
   flipped to cloudflare (Stream H), and `relayfile-cloud/CLAUDE.md:13` stale —
   still says "in progress"; fix it.
-- **rk_live_ key rotation:** the July usage review found a live workspace key
-  (plus PostHog/Cloudflare/Neon creds) in prompt history and recommended
-  rotation. Verify it actually happened.
+- **July-review credential sweep:** the July usage review also found
+  PostHog/Cloudflare/Neon creds in prompt history and recommended rotation.
+  Verify that happened; the workspace-key part is folded into the rotation
+  batch above.
 - **relaycron-cloud repo:** zero commits — an empty placeholder (unlike the
   real relayfile-cloud/relayhistory-cloud extractions). Use as the extraction
   target or delete when [relaycron-migration] starts.

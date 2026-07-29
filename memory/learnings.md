@@ -42,3 +42,9 @@ Distilled 2026-07-29 from six months of session history
   symptom; the fix is the launch path. Note the job exits 1 if a manually
   started broker already holds the project — `agent-relay down` first, then
   `launchctl kickstart -k gui/$UID/com.agentworkforce.chief.node`.
+  Refinements (2026-07-29 restart): any clean-env path works — `npm run
+  chief` from Will's own terminal is fine; the hazard is specifically
+  Claude-Code-spawned envs. And the marker **cannot be checked from inside a
+  session** (`printenv CLAUDE_CODE_CHILD_SESSION` in the Bash tool always
+  shows `1` — Claude Code stamps every Bash subprocess); verify persistence
+  by watching the session's `.jsonl` under `~/.claude/projects/...` grow.
