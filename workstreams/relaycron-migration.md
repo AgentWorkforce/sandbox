@@ -1,8 +1,8 @@
 ---
 status: active
-owner: chief
+owner: relaycron-cloud
 updated: 2026-07-29
-repos: [relaycron, cloud, relaycron-cloud]
+repos: [relaycron-cloud, cloud, relaycron]
 ---
 # relaycron migration
 
@@ -20,11 +20,14 @@ scheduler-do Durable Object, D1 schema, sweeps, alerts. Consumers on main:
 proactive-runtime-worker, web sweep routes, the public schedules API;
 dynamic one-shot schedules and managed cloud schedules landed July.
 
-**Next:** extract `cloud/packages/relaycron` + `infra/relaycron.ts` into its
-own repo following the relayfile-cloud pattern (infra/README names
-worker-cluster extraction as the stated direction), rewire the two service
-bindings, then add the relay-message transport ("at 9am, DM chief") — see
-[agent-org-primitives].
+**Next:** owner seated 2026-07-29 (Will: the migration "needs an agent
+owner in relaycron-cloud… work with cpo") — resident project owner in
+`relaycron-cloud` under cpo. Bootstrap brief: migration spike →
+docs/migration-plan.md (deployment-layer inventory in cloud, extraction
+sequence per relayfile-cloud precedent, binding rewires, transport designed
+into the target architecture), no code moves until cpo green-lights. The
+relay-message transport lands in the new home, not bolted onto cloud —
+see [agent-org-primitives].
 
 ## History
 - 2026-07-29 — Named a workstream by Will. Mining corrected the story:
