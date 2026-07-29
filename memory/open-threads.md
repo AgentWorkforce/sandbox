@@ -5,11 +5,18 @@
   self-notes). Email path: relayfile Gmail provider (confirmed in catalog)
   → after provisioning heals, `relayfile integration connect gmail` OAuth →
   scoped mount in a second chief relayfile workspace (first slot = GitHub
-  tree). Granola: investigation subagent running — prior art is the
-  `agents/granola` gallery persona (reacts to new-recording events); options
-  report pending. Privacy rule: raw email/meeting content never enters
-  git-tracked files — gitignored senses/ projections only, conclusions only
-  in the brain.
+  tree). **Granola: resolved 2026-07-29 — zero build needed.** First-party
+  adapter ships (`@relayfile/adapter-granola`, catalog entry `granola`,
+  Nango 5-min sync, notes + full transcripts + calendar/attendees into
+  `/granola/notes/**` with by-day indexes). **Gate: Granola API keys need
+  Business/Enterprise** — Will decides plan-upgrade vs the free-tier
+  fallback (official `granola-mcp`, OAuth, 30-day window, pull-only, no
+  dogfood). Setup when gated-through: Granola Settings → Connectors → API
+  key (Personal-notes scope), `relayfile integration connect granola`,
+  mount. Phase 2 (push, not just read): workforce persona on the
+  file.created trigger DMs chief summaries — needs a cloud deploy.
+  Privacy rule now in CLAUDE.md §6: transcripts/attendee text never enter
+  the tracked brain.
 
 - **cso watchlist is empty (2026-07-29); seed corpus = #research-market** —
   mounts into **cso's own** `senses/` (own relayfile workspace; senses

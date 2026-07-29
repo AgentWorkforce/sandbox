@@ -98,6 +98,11 @@ work.
 - Capture a fact the moment it's confirmed — "later" may be a different session.
 - **Never store secrets** — no keys, tokens, or connection strings in any
   git-tracked file. Flag any pasted live secret for rotation.
+- **Third-party content stays out of the tracked brain.** `senses/` may
+  project meeting transcripts, email bodies, attendee lists; chief reads
+  them freely but never copies verbatim transcript or person-identifying
+  content into `memory/`, `journal/`, or `workstreams/` — conclusions
+  only. The journal is git-tracked and permanent.
 
 ## 7. Journal discipline
 
