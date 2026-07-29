@@ -12,16 +12,17 @@ cmo agent chief dispatches all GTM work to. Scout is its instrument; targeting
 machinery is never rebuilt here (the old SST/AWS CRM was deleted for exactly
 that). Cloudflare-only by charter.
 
-**Now:** repo was reset to a clean slate 07-20, keeping the strategy docs
-(`docs/gtm-metrics-spec.md`, `docs/gtm-proof-plan.md`). Same day: GTM metrics
-agent built (daily collectors, D1 history, dashboard, digest) plus
-deploy-on-merge CI. **All of it sits on local branch `feat/gtm-metrics-agent`,
-unpushed** — origin/main still ends at the April CRM merge; this machine holds
-the only copy of the July work.
+**Now:** the July work (GTM metrics agent: daily collectors, D1 history,
+dashboard, digest, deploy-on-merge CI) is **safe on origin** —
+`feat/gtm-metrics-agent` pushed 2026-07-29 (tip b3bcec4; the only-copy risk
+is retired). The cmo resident is seated and respawned on pinned opus;
+scout reports to it.
 
-**Next:** push the branch and land it on main (which also activates the
-Cloudflare deploy); then stand up the cmo agent persona (teams.json + persona
-doc, chief-DM-able) so GTM asks route Will → chief → cmo → scout crew.
+**Next:** cmo opens the PR to main (merge gated on chief — merging
+activates the Cloudflare deploy), onboards scout (first assignment: land
+scout's uncommitted crew work), then the two GTM campaigns as scout
+campaigns. Open question: why the first cmo session went silent on an
+urgent brief — transcript review pending.
 
 ## History
 - 2026-07-29 — Seeded at Will's request. Working tree clean; the unpushed
