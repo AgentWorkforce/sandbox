@@ -1,5 +1,18 @@
 # Open threads
 
+- **SEV-1 platform bug: broker restarts can come up deaf-but-green
+  (2026-07-29, watchdog's first catch):** ~3 of 7 nodes restarted in the
+  19:00–19:16Z wave (burn, cloud, cpo) lost hosted→broker inbound
+  delivery entirely — messages visible in Relaycast, 0 pending at the
+  broker, green health, idle PTYs, 2–4h deaf until the watchdog's first
+  sweep paged chief. Suspect: hosted delivery session/cursor never
+  re-binds to the restarted broker (relaycast delivery/cursor territory);
+  broker health claiming a live link it lacks is a second defect. Filed
+  via relay's issue batch. **New standing rule: every restart's
+  verification includes an inbound-delivery proof** (test DM → non-empty
+  readers), not just health checks. Cloud's unprocessed D1
+  decisions/orders re-deliver via its recovery.
+
 - **Resident sessions go alive-but-unresponsive; nothing detects it
   (2026-07-29, twice in one day):** cmo (claude) ignored an urgent brief
   for ~50 min; relay (codex) sat on three unread orders for ~75 min —
