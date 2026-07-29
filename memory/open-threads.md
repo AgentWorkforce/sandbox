@@ -10,8 +10,11 @@
   assess whether the dormant rebuild solves the capacity math. Emergency
   bounded sweep **pre-authorized contingent on CF creds** (GC-mode check
   first; comment intent on #2857 before executing);
-  relayauth#70 merging; cloud queue PRs #2864/#2865/#2869 green-lit on
-  green CI. **Blocker on Will: ALL Cloudflare creds on this machine are
+  relayauth#70 MERGED (6c339af) — but inert in prod until cloud's D1
+  adapter translates the capacity error into the exported
+  `StorageCapacityExhaustedError` (small cloud PR, required, rides the
+  same release+pin train; cloud tasked). Cloud queue PRs
+  #2864/#2865/#2869 green-lit on green CI. **Blocker on Will: ALL Cloudflare creds on this machine are
   dead** (env + .env tokens rejected, wrangler OAuth invalid) — `wrangler
   login` re-auth needed for telemetry + mitigation; PostHog MCP OAuth
   optional second. Will's relayfile retries flap on the 5-min GC windows
