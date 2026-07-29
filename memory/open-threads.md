@@ -3,10 +3,13 @@
 - **relayauth D1 at capacity — LIVE PROD CONDITION (2026-07-29):** at the
   10 GiB ceiling now, rolling brownout, hard-stuck in days (cloud's
   analysis: the protected 14–90-day audit band grows monotonically — GC
-  structurally cannot win; policy problem, not throughput). Decisions
-  taken: **Plan A approved** (archive-to-R2: additive archiver PRs first,
-  destructive retention cut last + Will-visible); emergency bounded sweep
-  **pre-authorized contingent on CF creds** (GC-mode check first);
+  structurally cannot win; policy problem, not throughput). Ownership
+  (Will): **Khaliq handles the durable fix** — evidence: the #2857
+  dormant-rebuild branch + #2847; cloud stood down from implementing
+  archive-to-R2, role now = post analysis on cloud#2857 for Khaliq and
+  assess whether the dormant rebuild solves the capacity math. Emergency
+  bounded sweep **pre-authorized contingent on CF creds** (GC-mode check
+  first; comment intent on #2857 before executing);
   relayauth#70 merging; cloud queue PRs #2864/#2865/#2869 green-lit on
   green CI. **Blocker on Will: ALL Cloudflare creds on this machine are
   dead** (env + .env tokens rejected, wrangler OAuth invalid) — `wrangler
