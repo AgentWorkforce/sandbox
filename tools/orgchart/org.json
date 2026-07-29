@@ -13,6 +13,7 @@
     {"name":"chief-app","title":"chief-app (org cockpit)","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/chief-app","status":"resident"},
     {"name":"burn","title":"burn + software factory","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/burn","status":"resident"},
     {"name":"relaycron-cloud","title":"relaycron-cloud (migration)","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/relaycron-cloud","status":"resident"},
+    {"name":"mobile","title":"Agent Relay Mobile","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/mobile","status":"resident"},
     {"name":"marquee","title":"marquee (parked)","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/marquee","status":"parked"},
     {"name":"notesnumber","title":"notesnumber (in ladd)","reportsTo":"head-of-experiments","repo":"/Users/will/Projects/AgentWorkforce/ladd","status":"unseated"},
     {"name":"hoopsheet","title":"hoopsheet","reportsTo":"head-of-experiments","repo":"/Users/will/Projects/hoopsheet","status":"unseated"},
