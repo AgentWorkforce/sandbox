@@ -17,12 +17,25 @@
   (`rk_live_…`) and chief agent token (`at_live_…`) — both embedded in the
   broker/claude process argv (world-readable via `ps`) and printed in
   plaintext by `agent-relay node up` into `~/Library/Logs/chief-node.log`;
-  both landed in the 07-29 restart-verification transcript. Rotating alone is
+  both landed in the 07-29 restart-verification transcript. (3) The cloud
+  access token (`cld_at_…`) — `agent-relay cloud session --json` prints it in
+  plaintext; it landed in the senses-mount worker's 07-29 transcript
+  (rotate: `agent-relay cloud login --force`). Rotating alone is
   insufficient — the next boot re-leaks the new values. **Platform fix needed
   in relay:** pass workspace key/agent token via env or file instead of
-  `--mcp-config` argv, and redact key values from node/broker logs. File as a
-  relay issue. This also subsumes the July-review `rk_live_` rotation item
-  below; see [learnings] for the no-raw-env rule.
+  `--mcp-config` argv, redact key values from node/broker logs, and redact
+  the token in `cloud session --json` (or gate behind an explicit flag).
+  File as a relay issue. This also subsumes the July-review `rk_live_`
+  rotation item below; see [learnings] for the no-raw-env rule.
+- **relayfile CLI gaps (senses-mount worker, 2026-07-29) — file as relayfile
+  issues:** (1) `relayfile login --no-open` broken end-to-end — forwards
+  `--no-open` to `agent-relay cloud login`, which doesn't have the option
+  (agent-relay 11.2.0); headless/CI login impossible. (2) Multi-subtree
+  mounts unreachable from the shipped CLI — `mount` takes a single
+  `--remote-path`, rejects `--local-layout`; the README's repeated-flag
+  syntax belongs to the unshipped `relayfile-mount` daemon binary. Expose
+  repeated `--remote-path` / `--local-layout=scoped` (or `--paths-file`)
+  through the CLI.
 
 - **relayfile Gate 3: DONE** (signed GREEN 2026-06-20, DO state byte-intact —
   `relayfile-cloud/docs/decisions/2026-06-20-gate3-sign.md`). `senses/` can
