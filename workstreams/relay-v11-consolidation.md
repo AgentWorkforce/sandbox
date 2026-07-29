@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "Relay is in deliberate hardening; it gained a resident lead, merged the telemetry fix, and filed today's platform gaps as issues."
+card: "Relay Core"
 owner: relay
 updated: 2026-07-29
 repos: [relay]

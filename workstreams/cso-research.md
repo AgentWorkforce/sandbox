@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "The research department is seated with an empty watchlist, waiting on the Slack mount to seed years of shared product links."
+card: "Competitive Intel"
 owner: cso
 updated: 2026-07-29
 repos: [cso]

@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "The front door has a resident owner at last; the blog pipeline is live and the stale docs and drafts are being triaged into PRs."
+card: "Front Door & Blog"
 owner: agentrelay.com
 updated: 2026-07-29
 repos: [agentrelay.com]

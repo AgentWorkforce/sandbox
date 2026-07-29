@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "Chat-replay work sits uncommitted on a feature branch; landing it unlocks the queue of unmerged branches behind it."
+card: "Pear Chat Replay"
 owner: pear
 updated: 2026-07-29
 repos: [pear]

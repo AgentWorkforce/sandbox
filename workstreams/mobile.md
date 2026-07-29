@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "Agent Relay Mobile is commissioned; the spike is working out auth, Swift SDK gaps, and a world-class v1 cut."
+card: "Mobile App"
 owner: mobile
 updated: 2026-07-29
 repos: [mobile, relaycast]

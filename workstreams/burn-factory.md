@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "Burn's owner is proving the software factory on a real release, currently blocked on one GitHub-integration reconnect from Will."
+card: "Software Factory"
 owner: burn
 updated: 2026-07-29
 repos: [burn, factory]

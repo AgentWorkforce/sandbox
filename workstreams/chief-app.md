@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "Reviving as the org cockpit; triage found origin healthy and the old code reusable as foundations rather than a rewrite."
+card: "Org Cockpit"
 owner: chief-app
 updated: 2026-07-29
 repos: [chief-app]

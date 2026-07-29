@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "AWS is mostly dismantled; S3 storage and four SQS queues are the big remaining pieces before Cloudflare-only."
+card: "AWS Teardown"
 owner: cloud
 updated: 2026-07-29
 repos: [cloud]

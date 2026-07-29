@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "Scout is landing its uncommitted crew work under cmo's direction before the two GTM discovery campaigns spin up."
+card: "Developer CRM"
 owner: scout
 updated: 2026-07-29
 repos: [scout]

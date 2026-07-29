@@ -1,6 +1,7 @@
 ---
 status: active
 tldr: "July's GTM metrics agent is safe on origin with its PR open; cmo is seated and onboarding scout."
+card: "GTM Department"
 owner: cmo
 updated: 2026-07-29
 repos: [cmo]
