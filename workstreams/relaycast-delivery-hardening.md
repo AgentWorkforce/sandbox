@@ -1,5 +1,6 @@
 ---
 status: active
+tldr: "The silent-delivery-loss era is closing out; the arbitration branch and the long-open directory and auth PRs are next."
 owner: relaycast
 updated: 2026-07-29
 repos: [relaycast, relaycast-cloud]

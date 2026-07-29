@@ -1,5 +1,6 @@
 ---
 status: active
+tldr: "Extraction into relaycron-cloud is underway with Phase 0 done; the schedule-to-DM transport lands in the new home."
 owner: relaycron-cloud
 updated: 2026-07-29
 repos: [relaycron-cloud, cloud, relaycron]

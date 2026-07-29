@@ -1,5 +1,6 @@
 ---
 status: active
+tldr: "The most active repo in the ecosystem; the trigger-routing and memory-SDK designs are the next bets that matter to chief."
 owner: workforce
 updated: 2026-07-29
 repos: [workforce, internal-agents]

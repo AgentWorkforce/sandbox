@@ -1,5 +1,6 @@
 ---
 status: active
+tldr: "Both applications are in; YC decides by Aug 28 and interview prep is now the live surface."
 owner: coo
 updated: 2026-07-29
 repos: [coo]

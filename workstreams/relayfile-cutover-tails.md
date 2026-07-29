@@ -1,5 +1,6 @@
 ---
 status: active
+tldr: "The hosted migration has been done since June; three small tails remain — a stale doc line, the compat domain, the home flag."
 owner: relayfile
 updated: 2026-07-29
 repos: [relayfile, relayfile-cloud, relayauth]

@@ -1,5 +1,6 @@
 ---
 status: parked
+tldr: "Parked donor project; its spike and live-pane protocol feed the chief-app cockpit."
 owner: cpo
 updated: 2026-07-29
 repos: [marquee]
