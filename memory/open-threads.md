@@ -1,9 +1,12 @@
 # Open threads
 
-- **cso watchlist is empty (2026-07-29)** — the department is seated and the
-  officer online; it needs its first targets. Will finds candidate products
-  constantly: the habit to build is DM the link to cso (or to chief, who
-  forwards) the moment one surfaces.
+- **cso watchlist is empty (2026-07-29); seed corpus identified** — the
+  **#research-market Slack channel** holds the products/links Will and Khaliq
+  have shared "forever". Pipeline staged: senses mount of that channel
+  (blocked on Will's relayfile provisioning — `connect slack` is now the
+  must-have integration) → chief sweeps history, dedupes → batch-DMs targets
+  to cso → dossiers. Ongoing: new links flow the same path. Interim habit
+  still applies: DM fresh finds to cso directly.
 
 - **YC F26 decision due by 08-28** — applications submitted ~07-26 (YC on
   time, a16z Speedrun off-cycle for SR008). Watch for responses; see
