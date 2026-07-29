@@ -20,11 +20,14 @@ session; don't restate it. Chief-specific emphases:
   implementation. Scheduled bodies (digest, groom) = sonnet. Chief's
   subagents: Opus for judgment work, sonnet for mechanical scaffolding.
   Every seat's harness/model is explicit in its teams.json — never left to
-  the machine's default (an implicit default likely had every resident
-  burning the priciest model). If the recon finds teams.json/relay cannot
-  pin a per-agent model, that gap gets a relay GitHub issue immediately
-  (Will's directive) — harness choice via `cli` exists; model pinning is
-  the open question.
+  the machine's default (recon 2026-07-29 confirmed all 11 residents were
+  on unpinned Fable 5). Mechanics: teams.json has NO model field — the
+  working pin is `"cli": "claude --model opus"` (the doc-comment's
+  `claude:opus` syntax is dead code and fails); codex = `"cli": "codex"`,
+  no live model-switching (respawn to change). Live claude switch without
+  restart: `agent-relay node agent set-model <name> <model>`. Rosters are
+  read once at broker start — changes need a kickstart. First-class
+  `model` field is a filed relay issue.
 - **Brain grooming cadence:** every ~6h chief's notes (memory/, workstreams/
   — never journal/) get a curation pass: declarative present tense,
   meta-commentary stripped (git holds provenance), relative dates made
