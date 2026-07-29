@@ -12,10 +12,10 @@ relay — DM chief from anywhere. Design bar explicitly world-class
 ("sleek and awesome"). Dogfood angle: first real consumer of the Relaycast
 Swift SDK; surface gaps become SDK issues (all-language parity applies).
 
-**Now:** commissioned 2026-07-29; repo + locked brief (docs/brief.md) +
-codex lead being seated. Chain: Will → chief → cpo → head-of-ecosystem →
-mobile — head-of-ecosystem's first full management rep (it issues the
-spike brief and reviews).
+**Now:** commissioned and seated 2026-07-29 — repo at 4a06a17 (locked
+brief in docs/brief.md), codex lead verified live in the workspace. Chain:
+Will → chief → cpo → head-of-ecosystem → mobile — head-of-ecosystem's
+first full management rep; it has the trigger to issue the spike brief.
 
 **Next:** feasibility spike → docs/architecture.md: on-device auth/token
 flow (observer-token model right from day one), Swift SDK gap list, push
