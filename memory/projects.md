@@ -42,10 +42,12 @@ workstream.
   motions, OSS-dev engagement and affiliate/paid-promo targets on X/LinkedIn,
   are scout campaigns, never rebuilt in cmo) and **coo** (business
   operations — investor/accelerator applications first; mandate YC + a16z
-  Speedrun; renamed from cto 2026-07-29 because "cto implies technical") and
+  Speedrun; renamed from cto 2026-07-29 because "cto implies technical"),
   **cso** (Chief Strategy Officer, seated 2026-07-29 — market research &
   competitive intel: watchlist dossiers, competitor deep-dives via the
   `competitor-deep-dive` skill, partnership scoring handed to cmo; never
-  outreach, never executes third-party code locally). Chief dispatches to
-  department leads; chief's own subagents cover only what has no department
-  yet.
+  outreach, never executes third-party code locally), and **cpo** (Chief
+  Product Officer, seated 2026-07-29 — product direction memos in
+  `direction/`, owns product side projects; project leads report to cpo,
+  first instrument: marquee). Chief dispatches to department leads; chief's
+  own subagents cover only what has no department yet.

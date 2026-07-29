@@ -20,10 +20,11 @@ Feasibility spike dispatched: verify libghostty's current embedding story
 from primary sources, fallback table if immature, pane-rendering choice,
 v1 build plan → docs/architecture.md.
 
-**Next:** review the spike's architecture.md, green-light or redirect the
-v1 build plan. Reporting line: project lead under chief — no product/eng
-C-level seated; marquee is the first candidate instrument if one ever is.
-Name chosen: marquee (alternates offered: playbill, callsheet, chyron).
+**Next:** cpo reviews the spike's architecture.md and green-lights or
+redirects the v1 build plan. Reporting line (Will, same day): **cpo seated;
+marquee reports to cpo** (Will → chief → cpo → marquee); chief only for
+escalations. Name chosen: marquee (alternates offered: playbill, callsheet,
+chyron).
 
 ## History
 - 2026-07-29 — Commissioned by Will (terminal + live markdown sidecar,
