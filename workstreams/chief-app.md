@@ -27,6 +27,11 @@ plan. This resolves the former open-thread "chief-app: decide commit /
 harvest / archive".
 
 ## History
+- 2026-07-29 — Previously-flagged history-rewrite scare closed out: no
+  action needed, no npm-cache reachable from any origin ref. Produced a
+  standing three-tier git-hygiene rule (ignore always safe, untrack
+  disruptive-but-recoverable, rewrite irreversible/needs owner sign-off);
+  repo added an ignore for generated agent-runtime artifacts under it.
 - 2026-07-29 — Unparked at Will's request after one day parked; the
   disposition decision became the new owner's first triage instead of a
   Will decision.

@@ -31,6 +31,13 @@ file-described live-pane protocol into chief-app as its tile/side-pane
 primitive (chief's read: merge).
 
 ## History
+- 2026-07-29 — Wind-down artifacts made durable: GhosttyKit proof + spike
+  handoff pushed to a private origin remote (previously local-disk-only).
+  Attach-fork question resolved: same-machine attach is SDK consumption of
+  relay's existing local-node broker API, no new SDK work; a cheap
+  `cfg.command`-as-relay-attach-CLI experiment could pull the 3-5 day
+  estimate toward its floor. Spun out a three-tier git-hygiene rule
+  (ignore/untrack/rewrite by risk) adopted as a repo convention.
 - 2026-07-29 — Commissioned by Will (terminal + live markdown sidecar,
   profiles/color schemes per window, per-agent panes). Brief locked same
   hour; agent online and ACK-pending on the spike.

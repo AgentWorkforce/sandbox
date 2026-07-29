@@ -37,6 +37,9 @@ multi-allowlist brief becomes a relayfile CLI issue (expose repeated
 `--remote-path` / `--local-layout`).
 
 ## History
+- 2026-07-29 — Orgchart dashboard shipped (`tools/orgchart/`, localhost:4780):
+  live org tree, attach-in-terminal launcher, Projects overview reading tldr
+  and curated card labels straight from `workstreams/*.md` frontmatter.
 - 2026-07-29 — Chief came online as a durable relay agent for the first time:
   session-start ritual from files alone, readiness posted to #general,
   resident on DMs.
