@@ -21,8 +21,10 @@
   used one of them); the "agents" metric definition (active vs created in
   window); money in bank + monthly spend (runway).
 
-- **Credential rotation batch (2026-07-29) — rotate together, then fix the
-  platform leak:** (1) `RELAY_BROKER_API_KEY` (`br_…`) — leaked into the
+- **Credential rotation batch — DEFERRED by Will 2026-07-29** (revisit when
+  relay's secrets platform fix lands, or on any sign of misuse; the leaked
+  values remain live until then). Rotate together, then fix the platform
+  leak: (1) `RELAY_BROKER_API_KEY` (`br_…`) — leaked into the
   07-29 transcript via a raw `env` dump. (2) The chief workspace key
   (`rk_live_…`) and chief agent token (`at_live_…`) — both embedded in the
   broker/claude process argv (world-readable via `ps`) and printed in
