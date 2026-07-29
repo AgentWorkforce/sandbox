@@ -48,6 +48,7 @@ workstream.
   `competitor-deep-dive` skill, partnership scoring handed to cmo; never
   outreach, never executes third-party code locally), and **cpo** (Chief
   Product Officer, seated 2026-07-29 — product direction memos in
-  `direction/`, owns product side projects; project leads report to cpo,
-  first instrument: marquee). Chief dispatches to department leads; chief's
+  `direction/`, owns product side projects; project leads report to cpo:
+  **marquee** and **burn**, the latter also owning the software factory
+  `../factory` with burn as its proving ground). Chief dispatches to department leads; chief's
   own subagents cover only what has no department yet.

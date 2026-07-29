@@ -68,9 +68,10 @@
   target or delete when [relaycron-migration] starts.
 - **chief-app:** 41 uncommitted changes on main (headless-chief pivot).
   Decide commit / harvest / archive. Parked 2026-07-29; this repo supersedes it.
-- **burn macOS updater may be dead on arrival:** the in-app updater ships
-  against `macos-v*` release tags but no such tag exists as of 07-29. Verify
-  the release flow before the next menubar update.
+- **burn macOS updater dead on arrival → now the factory's first work unit**
+  (2026-07-29): the in-app updater (PR #495) ships against `macos-v*` tags
+  that don't exist. Owned by the burn project owner via [burn-factory];
+  parks at the publish gate pending cpo green-light.
 - **cloud PR #2857 (RelayAuth D1 dormant rebuild) may be stuck:** branch
   `agent/2857-relayauth-d1-rebuild-dormant` took 7 rapid "fix(relayauth)"
   commits from two bot identities (kjgbot, Miya) between 07-28 22:19 and
