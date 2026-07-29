@@ -1,0 +1,11 @@
+{
+  "name": "chief",
+  "private": true,
+  "scripts": {
+    "chief": "agent-relay node up; agent-relay node agent attach chief --mode drive",
+    "chief:view": "agent-relay node agent attach chief --mode view",
+    "up": "agent-relay node up",
+    "status": "agent-relay node status",
+    "digest:now": "launchctl kickstart -k gui/501/com.agentworkforce.chief.digest"
+  }
+}
