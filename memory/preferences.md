@@ -21,13 +21,20 @@ session; don't restate it. Chief-specific emphases:
   subagents: Opus for judgment work, sonnet for mechanical scaffolding.
   Every seat's harness/model is explicit in its teams.json — never left to
   the machine's default (an implicit default likely had every resident
-  burning the priciest model).
+  burning the priciest model). If the recon finds teams.json/relay cannot
+  pin a per-agent model, that gap gets a relay GitHub issue immediately
+  (Will's directive) — harness choice via `cli` exists; model pinning is
+  the open question.
 - **Brain grooming cadence:** every ~6h chief's notes (memory/, workstreams/
   — never journal/) get a curation pass: declarative present tense,
   meta-commentary stripped (git holds provenance), relative dates made
   absolute, resolved threads deleted, duplicates merged. Runs headless via
   `com.agentworkforce.chief.groom` (/groom skill); aborts if the tree is
   dirty so it never fights the resident.
+- **Peers talk to peers (Will, 2026-07-29):** product owners and leads DM
+  each other directly — the hierarchy is for briefs, gates, and
+  escalations, not a message-routing constraint. How much cross-talk vs
+  routing through the lead is each team lead's call for their own team.
 - **Found issues become GitHub issues (Will, 2026-07-29):** every defect
   found in passing gets filed on the owning repo — by the repo's product
   owner when one is seated (chief DMs them the finding), by a chief
