@@ -1,0 +1,12 @@
+{
+  "team": "chief",
+  "autoSpawn": false,
+  "agents": [
+    {
+      "name": "chief",
+      "cli": "claude",
+      "role": "chief of staff",
+      "task": "Read CLAUDE.md and follow the session-start ritual. Serve the principal: track workstreams, keep the journal, answer status and retro questions, delegate real work to repo agents."
+    }
+  ]
+}
