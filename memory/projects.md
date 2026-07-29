@@ -32,3 +32,12 @@ workstream.
   `cmo` (GTM workbench — metrics agent + strategy docs) points at it. cmo's
   old SST/AWS CRM was deleted 2026-07-20 as a duplicate of scout; recover
   from pre-reset git history if ever needed.
+- **Org hierarchy (confirmed 2026-07-29):** Will → chief → C-level department
+  agents, each with its own repo/broker; instruments live under departments.
+  Seated so far: **cmo** (GTM lead; scout is its instrument — both targeting
+  motions, OSS-dev engagement and affiliate/paid-promo targets on X/LinkedIn,
+  are scout campaigns, never rebuilt in cmo) and **coo** (business
+  operations — investor/accelerator applications first; mandate YC + a16z
+  Speedrun; renamed from cto 2026-07-29 because "cto implies technical").
+  Chief dispatches to department leads; chief's own subagents cover only
+  what has no department yet.

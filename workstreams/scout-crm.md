@@ -20,7 +20,11 @@ across crew actions/orchestrator/spawn plus their tests. Worktrees open for
 `identity-enrichment` and `fleet-serve-command-refs`.
 
 **Next:** move the uncommitted crew changes onto a branch and land them; then
-the worktree branches (identity-enrichment first).
+the worktree branches (identity-enrichment first). On deck after that: the two
+GTM campaigns scout serves under cmo — (1) OSS-dev engagement targets on
+X/LinkedIn, (2) affiliate/paid-promo collab targets on X — needing an X
+discovery source (README's planned discovery agent) and LinkedIn as net-new
+(prior art: pre-reset cmo `linkedin-enrichment` branch).
 
 ## History
 - 2026-07-29 — Seeded at Will's request. Architecture: CF Worker (Hono) +

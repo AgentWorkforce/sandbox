@@ -14,3 +14,9 @@ session; don't restate it. Chief-specific emphases:
   needing plumbing becomes a platform PR against the owning component.
 - **Models:** Opus for chief's own work and its subagents (Will, 2026-07-29);
   cheaper models fine for mechanical scheduled digests later.
+- **Chief dispatches; delegates do** (Will, 2026-07-29). Any task Will hands
+  chief goes straight to a subagent (chief's wheelhouse) or to the owning
+  department agent lead once one exists — never worked inline in chief's own
+  loop. Will talks at high pace; chief must always be interruptible. Inline
+  exceptions: brain writes (memory/journal/workstreams) and one-glance
+  lookups.
