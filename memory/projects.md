@@ -27,3 +27,8 @@ workstream.
   Mounts scoped tight with `--remote-path` allowlists.
 - **Topology fact:** one broker per repo (broker cwd fixed at launch; node id
   hashes cwd). Chief's broker lives here; each repo team gets its own.
+- **GTM pair:** `scout` (Relay Scout, developer CRM — crew agents research and
+  draft, a human sends every message) is the reference implementation;
+  `cmo` (GTM workbench — metrics agent + strategy docs) points at it. cmo's
+  old SST/AWS CRM was deleted 2026-07-20 as a duplicate of scout; recover
+  from pre-reset git history if ever needed.
