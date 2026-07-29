@@ -27,3 +27,7 @@ three AWS accounts still gate deploys.
   Stale-doc hazards to fix: infra/README.md:63-78 documents a VPC section
   linking a deleted file; docs/migration/phase5-decommission.md still opens
   "Status: plan-only. Do NOT execute" though its body records execution.
+- 2026-07-29 (digest) — Unrelated to teardown scope but same repo: RelayAuth
+  D1 dormant-rebuild safety gates (issue #2857, branch
+  `agent/2857-relayauth-d1-rebuild-dormant`) saw dense bot iteration
+  overnight, still unmerged — see [[open-threads]].

@@ -25,3 +25,7 @@ gates are not marked complete).
   small uncommitted fixes matching the unreleased changelog; relay-broker
   repo is a Feb-superseded husk with an abandoned telemetry diff (hardcoded
   PostHog key, reads legacy ~/.agent-relay/) — archive candidate.
+- 2026-07-29 (digest) — Telemetry identity-leak fix cluster (clear
+  inherited/cloud identity out of child env when telemetry is opted out)
+  still in flight on `claude/posthog-events-mapping-9gl0p7`; CLI version
+  bump + pinning test added this morning, not yet merged to main.

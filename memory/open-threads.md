@@ -17,3 +17,10 @@
 - **burn macOS updater may be dead on arrival:** the in-app updater ships
   against `macos-v*` release tags but no such tag exists as of 07-29. Verify
   the release flow before the next menubar update.
+- **cloud PR #2857 (RelayAuth D1 dormant rebuild) may be stuck:** branch
+  `agent/2857-relayauth-d1-rebuild-dormant` took 7 rapid "fix(relayauth)"
+  commits from two bot identities (kjgbot, Miya) between 07-28 22:19 and
+  07-29 03:15 — reads like a CI gate failing repeatedly, not steady
+  progress. Still unmerged as of the 07-29 digest. Check PR status/CI before
+  assuming it lands on its own; unrelated to [aws-teardown]'s scope despite
+  same repo.
