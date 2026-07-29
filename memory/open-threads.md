@@ -50,6 +50,15 @@
   the token in `cloud session --json` (or gate behind an explicit flag).
   File as a relay issue. This also subsumes the July-review `rk_live_`
   rotation item below; see [learnings] for the no-raw-env rule.
+- **Workspace-deletion cascade bug (2026-07-29, in cloud's queue):**
+  `deleteWorkspaceCascade` (workspace-deletion.ts:75) never deletes the
+  Relaycast side — every cloud-API deletion strands a live Relaycast
+  workspace + valid rk_live_ key with no registry row. Fix order matters:
+  Relaycast DELETE first (registry row is the key's only store). Cleanup
+  2026-07-29 deleted the 7 diagnostic workspaces both-sides; the cso
+  orphan below is the un-deletable example. Related CLI leak
+  (`workspace active` prints the key in error output) is in relay's
+  secrets-fix scope; chief-dev key exposure count grows.
 - **Orphaned auto-provisioned workspace `208248743547961344` (2026-07-29):**
   cso's first `agent-relay node up` silently created a fresh workspace
   instead of joining the active one — the officer came up unreachable until
