@@ -32,6 +32,14 @@
   the token in `cloud session --json` (or gate behind an explicit flag).
   File as a relay issue. This also subsumes the July-review `rk_live_`
   rotation item below; see [learnings] for the no-raw-env rule.
+- **Orphaned auto-provisioned workspace `208248743547961344` (2026-07-29):**
+  cso's first `agent-relay node up` silently created a fresh workspace
+  instead of joining the active one — the officer came up unreachable until
+  chief's `workspace-key.json` was seeded into cso's state dir and the node
+  rebooted. Cleanup: delete the orphan workspace (holds one stale cso
+  registration). Relay issue candidate: first boot in a new repo should
+  join the account's active workspace (or require an explicit choice),
+  never silently mint a new one.
 - **relayfile CLI gaps (senses-mount worker, 2026-07-29) — file as relayfile
   issues:** (1) `relayfile login --no-open` broken end-to-end — forwards
   `--no-open` to `agent-relay cloud login`, which doesn't have the option
