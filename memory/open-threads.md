@@ -74,15 +74,10 @@
   registration). Relay issue candidate: first boot in a new repo should
   join the account's active workspace (or require an explicit choice),
   never silently mint a new one.
-- **relayfile CLI gaps (senses-mount worker, 2026-07-29) — file as relayfile
-  issues:** (1) `relayfile login --no-open` broken end-to-end — forwards
-  `--no-open` to `agent-relay cloud login`, which doesn't have the option
-  (agent-relay 11.2.0); headless/CI login impossible. (2) Multi-subtree
-  mounts unreachable from the shipped CLI — `mount` takes a single
-  `--remote-path`, rejects `--local-layout`; the README's repeated-flag
-  syntax belongs to the unshipped `relayfile-mount` daemon binary. Expose
-  repeated `--remote-path` / `--local-layout=scoped` (or `--paths-file`)
-  through the CLI.
+- **relayfile CLI gaps — FILED** (2026-07-29): `login --no-open` broken →
+  relayfile#378; single `--remote-path` / no `--local-layout` →
+  relayfile#379. Watch for fixes; #379 unblocks multi-subtree senses
+  mounts without one-workspace-per-mount.
 
 - **relayfile Gate 3: DONE** (signed GREEN 2026-06-20, DO state byte-intact —
   `relayfile-cloud/docs/decisions/2026-06-20-gate3-sign.md`). `senses/` can
