@@ -2,8 +2,18 @@
 // Fleet liveness watchdog — alert-only pager for resident agents that go
 // alive-but-unresponsive (PTY up, broker healthy, messages never processed).
 //
-// Signals and trip conditions are documented in README.md next to this file.
-// Run with --json for machine-readable output, --quiet to suppress the table.
+// Tiered, so the common case costs nothing:
+//   T1  every run, zero tokens: does this resident have work addressed to it
+//       that it has not read, while its own relay activity has stopped?
+//   T2  only on a T1 trip: DM that one resident a liveness probe from the
+//       dedicated `watchdog` identity and wait for a bare ACK.
+//   T3  no ACK inside the response window: page chief with the evidence chain.
+//
+// Passive harness signals (transcript freshness, turn state, CPU) are gathered
+// for every resident but never trip on their own — they ride along in the alert
+// so a reader can tell "hung" from "mid-heavy-build and slow".
+//
+// Signals, trip conditions and false positives: see README.md.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -15,35 +25,49 @@ const HOME = os.homedir();
 // Overridable so the pipeline can be exercised against fixtures (see README).
 const LAUNCH_AGENTS = process.env.WATCHDOG_LAUNCH_AGENTS || path.join(HOME, 'Library/LaunchAgents');
 const LOG_FILE = process.env.WATCHDOG_LOG_FILE || path.join(HOME, 'Library/Logs/fleet-watchdog.log');
-const STATE_FILE = process.env.WATCHDOG_STATE_FILE || path.join(HOME, 'Library/Application Support/fleet-watchdog/state.json');
+const SUPPORT_DIR = process.env.WATCHDOG_SUPPORT_DIR || path.join(HOME, 'Library/Application Support/fleet-watchdog');
+const STATE_FILE = process.env.WATCHDOG_STATE_FILE || path.join(SUPPORT_DIR, 'state.json');
+const IDENTITY_FILE = process.env.WATCHDOG_IDENTITY_FILE || path.join(SUPPORT_DIR, 'identity.json');
 const CLAUDE_PROJECTS = process.env.WATCHDOG_CLAUDE_PROJECTS || path.join(HOME, '.claude/projects');
 const CODEX_SESSIONS = process.env.WATCHDOG_CODEX_SESSIONS || path.join(HOME, '.codex/sessions');
+
+const API = process.env.WATCHDOG_API_BASE || 'https://cast.agentrelay.com/v1';
+const UA = 'fleet-watchdog/1.0';
 
 const num = (name, dflt) => {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 };
 
-// Minutes an open turn may sit without transcript growth before it is a page.
+// Minutes a message may sit unread before it counts as stale work.
 const STALE_MIN = num('WATCHDOG_STALE_MINUTES', 15);
-// Grace after spawn: a booting agent has an open turn and little output yet.
+// Minutes a resident has to answer a T2 probe before it is paged.
+const RESPONSE_MIN = num('WATCHDOG_RESPONSE_MINUTES', 10);
+// Grace after spawn.
 const BOOT_GRACE_MIN = num('WATCHDOG_BOOT_GRACE_MINUTES', 10);
-// CPU seconds the process tree must burn between runs to count as "working".
+// Never probe more than this many residents in one sweep.
+const MAX_PINGS = num('WATCHDOG_MAX_PINGS_PER_SWEEP', 3);
+// Ignore inbound older than this; pre-restart backlog is not actionable.
+const LOOKBACK_HOURS = num('WATCHDOG_LOOKBACK_HOURS', 12);
+// Read-receipt checks per resident per sweep (newest first).
+const MAX_CANDIDATES = num('WATCHDOG_MAX_CANDIDATES', 5);
+// CPU seconds the process tree must burn between runs to count as working.
 const CPU_ACTIVE_SEC = num('WATCHDOG_CPU_ACTIVE_SECONDS', 5);
 // Re-page interval for a condition that is still true.
 const REALERT_MIN = num('WATCHDOG_REALERT_MINUTES', 60);
-// How far back to scan codex rollouts when resolving a session by cwd.
 const CODEX_LOOKBACK_DAYS = num('WATCHDOG_CODEX_LOOKBACK_DAYS', 3);
-// Slack between a delivery ack and the transcript write it should produce.
-// A consuming harness records the inbound message within a second or two.
-const ACK_TOLERANCE_SEC = num('WATCHDOG_ACK_TOLERANCE_SECONDS', 120);
 
 const CHIEF_REPO = process.env.WATCHDOG_CHIEF_REPO || path.join(HOME, 'Projects/AgentWorkforce/chief');
 const DM_TARGET = process.env.WATCHDOG_DM_TARGET || 'chief';
-const DRY_RUN = process.argv.includes('--dry-run');
+
+const DRY_RUN = process.argv.includes('--dry-run');   // evaluate + log, never send
+const NO_PING = process.argv.includes('--no-ping');   // T1 only, never probe
 const AS_JSON = process.argv.includes('--json');
 const QUIET = process.argv.includes('--quiet');
-const TEST_DM = process.argv.includes('--test-dm');
+
+const PING_TEXT = 'liveness check from the fleet watchdog. Reply with exactly: ACK '
+  + '— nothing else, no investigation, no tool calls, and do not change whatever you '
+  + 'were doing. This is an automated responsiveness probe.';
 
 const NOW = Date.now();
 
@@ -67,6 +91,10 @@ const mtime = (p) => {
 
 const minsSince = (ms) => (ms == null ? null : (NOW - ms) / 60000);
 const fmtMin = (m) => (m == null ? '—' : m < 1 ? '<1m' : `${Math.round(m)}m`);
+const parseTs = (s) => {
+  const t = Date.parse(s ?? '');
+  return Number.isFinite(t) ? t : null;
+};
 
 const pidAlive = (pid) => {
   if (!pid) return false;
@@ -78,7 +106,7 @@ const pidAlive = (pid) => {
   }
 };
 
-/** Read the trailing `bytes` of a file and return whole parsed JSONL records. */
+/** Read the trailing bytes of a file and return whole parsed JSONL records. */
 function tailRecords(file, bytes = 512 * 1024) {
   let fd;
   try {
@@ -108,6 +136,35 @@ function tailRecords(file, bytes = 512 * 1024) {
   }
 }
 
+/**
+ * Parse the first JSONL record of a file. Codex `session_meta` headers embed
+ * `base_instructions` and routinely run past 100KB, so grow the read until a
+ * newline shows up rather than assuming a small header.
+ */
+function readFirstRecord(file, cap = 4 * 1024 * 1024) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    let want = 256 * 1024;
+    while (want <= cap) {
+      const len = Math.min(want, size);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, 0);
+      const text = buf.toString('utf8');
+      const nl = text.indexOf('\n');
+      if (nl > -1) return JSON.parse(text.slice(0, nl));
+      if (len >= size) return JSON.parse(text); // single-line file
+      want *= 4;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
 // -------------------------------------------------------- resident discovery
 
 /** Residents are launchd jobs: com.agentworkforce.<repo>.node */
@@ -122,16 +179,14 @@ function discoverResidents() {
   for (const f of entries) {
     const m = /^com\.agentworkforce\.(.+)\.node\.plist$/.exec(f);
     if (!m) continue;
-    const full = path.join(LAUNCH_AGENTS, f);
     let plist;
     try {
-      plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', full], { encoding: 'utf8' }));
+      plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(LAUNCH_AGENTS, f)], { encoding: 'utf8' }));
     } catch {
       continue;
     }
-    const cwd = plist.WorkingDirectory;
-    if (!cwd) continue;
-    out.push({ slug: m[1], label: plist.Label || `com.agentworkforce.${m[1]}.node`, cwd });
+    if (!plist.WorkingDirectory) continue;
+    out.push({ slug: m[1], cwd: plist.WorkingDirectory });
   }
   return out.sort((a, b) => a.slug.localeCompare(b.slug));
 }
@@ -151,9 +206,8 @@ function processTable() {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 3) continue;
     const pid = Number(parts[0]);
-    const ppid = Number(parts[1]);
     if (!Number.isFinite(pid)) continue;
-    table.set(pid, { ppid, cpu: parseCpuTime(parts[2]) });
+    table.set(pid, { ppid: Number(parts[1]), cpu: parseCpuTime(parts[2]) });
   }
   return table;
 }
@@ -168,9 +222,8 @@ export function parseCpuTime(s) {
     days = Number(s.slice(0, dash)) || 0;
     rest = s.slice(dash + 1);
   }
-  const parts = rest.split(':').map(Number);
   let sec = 0;
-  for (const p of parts) sec = sec * 60 + (Number.isFinite(p) ? p : 0);
+  for (const p of rest.split(':').map(Number)) sec = sec * 60 + (Number.isFinite(p) ? p : 0);
   return days * 86400 + sec;
 }
 
@@ -201,8 +254,7 @@ const claudeSlug = (cwd) => cwd.replace(/[/.]/g, '-');
 /**
  * Resolve a claude resident's transcript. The session_id recorded at spawn is
  * authoritative; the newest-file fallback is a guess (it can land on an
- * abandoned session or a human's own session in the same repo) so callers
- * report which path was used.
+ * abandoned session or a human's own session in the same repo).
  */
 function resolveClaudeTranscript(cwd, sessionId) {
   const dir = path.join(CLAUDE_PROJECTS, claudeSlug(cwd));
@@ -229,46 +281,14 @@ function resolveClaudeTranscript(cwd, sessionId) {
   return ranked.length ? { file: ranked[0].p, how: 'newest-fallback' } : null;
 }
 
-/**
- * Parse the first JSONL record of a file. Codex `session_meta` headers embed
- * `base_instructions` and routinely run past 100KB, so grow the read until a
- * newline shows up rather than assuming a small header.
- */
-function readFirstRecord(file, cap = 4 * 1024 * 1024) {
-  let fd;
-  try {
-    fd = fs.openSync(file, 'r');
-    const size = fs.fstatSync(fd).size;
-    let want = 256 * 1024; // codex headers embed base_instructions
-    while (want <= cap) {
-      const len = Math.min(want, size);
-      const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, 0);
-      const text = buf.toString('utf8');
-      const nl = text.indexOf('\n');
-      if (nl > -1) return JSON.parse(text.slice(0, nl));
-      if (len >= size) return JSON.parse(text); // single-line file
-      want *= 4;
-    }
-    return null;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* ignore */ }
-  }
-}
-
 let codexIndex = null;
-/** Index recent codex rollouts by their session_meta cwd (survives compaction forks). */
 function codexRollouts() {
   if (codexIndex) return codexIndex;
   codexIndex = [];
-  const days = [];
   for (let i = 0; i < CODEX_LOOKBACK_DAYS; i++) {
     const d = new Date(NOW - i * 86400000);
-    days.push(path.join(CODEX_SESSIONS, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')));
-  }
-  for (const dir of days) {
+    const dir = path.join(CODEX_SESSIONS, String(d.getFullYear()),
+      String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
     let files;
     try {
       files = fs.readdirSync(dir);
@@ -278,15 +298,11 @@ function codexRollouts() {
     for (const f of files) {
       if (!f.startsWith('rollout-') || !f.endsWith('.jsonl')) continue;
       const p = path.join(dir, f);
-      const head = readFirstRecord(p);
-      const payload = head?.payload;
+      const payload = readFirstRecord(p)?.payload;
       if (!payload?.cwd) continue;
       codexIndex.push({
-        p,
-        cwd: payload.cwd,
-        id: payload.id || payload.session_id,
-        originator: payload.originator,
-        t: mtime(p) ?? 0,
+        p, cwd: payload.cwd, id: payload.id || payload.session_id,
+        originator: payload.originator, t: mtime(p) ?? 0,
       });
     }
   }
@@ -301,9 +317,7 @@ function codexRollouts() {
  */
 function resolveCodexTranscript(cwd, sessionId) {
   const all = codexRollouts();
-  const mine = all
-    .filter((r) => r.cwd === cwd && r.originator === 'agent-relay')
-    .sort((a, b) => b.t - a.t);
+  const mine = all.filter((r) => r.cwd === cwd && r.originator === 'agent-relay').sort((a, b) => b.t - a.t);
   if (mine.length) return { file: mine[0].p, how: 'cwd+originator' };
   if (sessionId) {
     const byId = all.find((r) => r.id === sessionId);
@@ -315,18 +329,16 @@ function resolveCodexTranscript(cwd, sessionId) {
 // -------------------------------------------------------- turn-state parsing
 
 /**
- * Decide whether the session's final turn completed.
- * Returns 'closed' (agent finished, legitimately idle), 'open' (a turn is
- * in flight), or 'unknown'.
+ * Whether the session's final turn completed. 'closed' means the agent
+ * finished and is legitimately idle; 'open' means a turn is in flight.
  */
 export function turnState(file, cli) {
   const recs = tailRecords(file);
   if (!recs.length) return { state: 'unknown', marker: null };
   const codex = /codex/.test(cli);
   for (let i = recs.length - 1; i >= 0; i--) {
-    const r = recs[i];
-    const verdict = codex ? codexMarker(r) : claudeMarker(r);
-    if (verdict) return { state: verdict.state, marker: verdict.marker };
+    const v = codex ? codexMarker(recs[i]) : claudeMarker(recs[i]);
+    if (v) return { state: v.state, marker: v.marker };
   }
   return { state: 'unknown', marker: null };
 }
@@ -334,25 +346,209 @@ export function turnState(file, cli) {
 export function codexMarker(r) {
   const t = r?.payload?.type;
   if (!t) return null;
-  // Turn boundaries emitted by the codex harness.
-  if (t === 'task_complete' || t === 'turn_aborted' || t === 'shutdown_complete') {
-    return { state: 'closed', marker: t };
-  }
+  if (t === 'task_complete' || t === 'turn_aborted' || t === 'shutdown_complete') return { state: 'closed', marker: t };
   if (t === 'user_message' || t === 'task_started') return { state: 'open', marker: t };
   if (t === 'message' && r?.payload?.role === 'user') return { state: 'open', marker: 'user_message' };
   return null;
 }
 
 export function claudeMarker(r) {
-  const type = r?.type;
-  if (type === 'assistant') {
+  if (r?.type === 'assistant') {
     const stop = r?.message?.stop_reason;
-    if (stop === 'end_turn' || stop === 'stop_sequence') return { state: 'closed', marker: `end_turn` };
+    if (stop === 'end_turn' || stop === 'stop_sequence') return { state: 'closed', marker: 'end_turn' };
     if (stop === 'tool_use') return { state: 'open', marker: 'tool_use' };
-    return null; // stop_reason null => streaming/partial, keep looking
+    return null; // streaming/partial — keep looking
   }
-  if (type === 'user') return { state: 'open', marker: 'user' };
-  return null; // system / attachment / summary / permission-mode are not boundaries
+  if (r?.type === 'user') return { state: 'open', marker: 'user' };
+  return null; // system / attachment / summary are not boundaries
+}
+
+// ------------------------------------------------------------- cloud client
+
+function loadWorkspaceKey(residents) {
+  for (const repo of [CHIEF_REPO, ...residents.map((r) => r.cwd)]) {
+    const j = readJson(path.join(repo, '.agentworkforce/relay/workspace-key.json'));
+    const key = j?.workspaceKey || j?.key;
+    if (typeof key === 'string' && key.startsWith('rk_live_')) return key;
+  }
+  return null;
+}
+
+function makeClient(token) {
+  return async function call(pathname, init = {}) {
+    const res = await fetch(API + pathname, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': UA,
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(init.headers || {}),
+      },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) {
+      // Never echo the response body: it can restate request context.
+      const err = new Error(`http_${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return (await res.json()).data;
+  };
+}
+
+// --------------------------------------------------------- tier 1: inbox scan
+
+/**
+ * Messages addressed to `agent` that it has not read. "Addressed to" means a DM
+ * conversation the agent participates in, authored by somebody else.
+ *
+ * Bounded on purpose: only messages inside the lookback window, newer than the
+ * current PTY session, and newer than the last id already adjudicated for this
+ * agent — otherwise a permanently-unread message would re-trip forever.
+ */
+async function unreadFor(ws, conversations, agent, { sessionStartMs, sinceId, cache }) {
+  const floor = Math.max(NOW - LOOKBACK_HOURS * 3600000, sessionStartMs ?? 0);
+  const mine = conversations.filter((c) => (c.participants || []).includes(agent));
+  const candidates = [];
+
+  for (const conv of mine) {
+    // Both participants of a 2-party DM are usually residents; fetch once.
+    if (!cache.has(conv.id)) {
+      cache.set(conv.id, ws(`/dm/conversations/${conv.id}/messages?limit=20`).catch(() => null));
+    }
+    const msgs = await cache.get(conv.id);
+    if (!Array.isArray(msgs)) continue;
+    for (const m of msgs) {
+      if (m.agent_name === agent) continue;            // authored by the resident
+      const at = parseTs(m.created_at);
+      if (at == null || at < floor) continue;
+      if (sinceId && String(m.id) <= String(sinceId)) continue;
+      candidates.push({ id: String(m.id), from: m.agent_name, at, conv: conv.id });
+    }
+  }
+
+  candidates.sort((a, b) => b.at - a.at);
+  const unread = [];
+  let newestId = null;
+  for (const c of candidates.slice(0, MAX_CANDIDATES)) {
+    if (!newestId || c.id > newestId) newestId = c.id;
+    if ((NOW - c.at) / 60000 < STALE_MIN) continue;    // too fresh to judge
+    let readers;
+    try {
+      readers = await ws(`/messages/${c.id}/readers`);
+    } catch {
+      continue;
+    }
+    if (!(Array.isArray(readers) && readers.some((r) => r.agent_name === agent))) unread.push(c);
+  }
+  return { unread, newestId };
+}
+
+// ------------------------------------------------------------ tier 2: probe
+
+async function sendProbe(agentClient, target) {
+  const data = await agentClient('/dm', {
+    method: 'POST',
+    body: JSON.stringify({ to: target, text: PING_TEXT }),
+  });
+  return {
+    conversationId: data.conversation_id,
+    messageId: String(data.message?.id ?? data.id),
+    pingedAt: NOW,
+  };
+}
+
+/** Did `target` reply in the watchdog's own DM thread after the probe? */
+async function probeAnswered(agentClient, ping, target) {
+  let msgs;
+  try {
+    msgs = await agentClient(`/dm/${ping.conversationId}/messages?limit=20`);
+  } catch {
+    return { answered: false, error: true };
+  }
+  if (!Array.isArray(msgs)) return { answered: false, error: true };
+  const reply = msgs.find((m) => m.agent_name === target && String(m.id) > String(ping.messageId));
+  return { answered: Boolean(reply), reply: reply?.text?.slice(0, 60) };
+}
+
+// ------------------------------------------------------------ classification
+
+/**
+ * Verdict for one resident, as a pure function of observed facts, so the whole
+ * ladder can be exercised without a live fleet (see test-watchdog.mjs).
+ *
+ *   alive          PTY pid responds to signal 0
+ *   startedMin     minutes since spawn
+ *   unread         stale unread messages addressed to this agent, newest first
+ *   lastSeenMs     workspace last_seen for this agent
+ *   ping           in-flight probe {pingedAt} or null
+ *   answered       the probe was answered (only meaningful with `ping`)
+ *   probeAgeMin    minutes since the probe was sent
+ *   pingBudget     probes still allowed this sweep
+ */
+export function classify(o) {
+  if (!o.alive) {
+    return { verdict: 'DEAD_PTY', page: true, tier: 0, detail: `pid ${o.pid} not running (state file still lists it)` };
+  }
+
+  // An outstanding probe outranks everything: it is the definitive test.
+  if (o.ping) {
+    if (o.answered) {
+      return { verdict: 'NEAR_MISS', page: false, tier: 2, detail: `answered the liveness probe after ${fmtMin(o.probeAgeMin)}; the unread inbox was a false alarm` };
+    }
+    if (o.probeAgeMin != null && o.probeAgeMin >= RESPONSE_MIN) {
+      return { verdict: 'UNRESPONSIVE', page: true, tier: 3, detail: `no reply to the liveness probe sent ${fmtMin(o.probeAgeMin)} ago` };
+    }
+    return { verdict: 'AWAITING_ACK', page: false, tier: 2, detail: `probe sent ${fmtMin(o.probeAgeMin)} ago, ${fmtMin(Math.max(RESPONSE_MIN - (o.probeAgeMin ?? 0), 0))} left to answer` };
+  }
+
+  if (!(o.unread || []).length) {
+    return { verdict: 'OK', page: false, tier: 1, detail: 'no unread work addressed to this resident' };
+  }
+
+  const newest = o.unread[0];
+  const gapMin = o.lastSeenMs != null ? (newest.at - o.lastSeenMs) / 60000 : Infinity;
+
+  // Unread work exists, but the agent has been active on relay since it landed
+  // — it is reading and acting, the receipt just did not stick.
+  if (gapMin < STALE_MIN) {
+    return {
+      verdict: 'OK_ACTIVE', page: false, tier: 1,
+      detail: `${o.unread.length} unread, but last_seen is within ${fmtMin(STALE_MIN)} of the newest (gap ${fmtMin(Math.max(gapMin, 0))})`,
+    };
+  }
+
+  if (o.startedMin != null && o.startedMin < BOOT_GRACE_MIN) {
+    return { verdict: 'BOOTING', page: false, tier: 1, detail: `spawned ${fmtMin(o.startedMin)} ago, within grace` };
+  }
+
+  if (o.pingBudget <= 0) {
+    return {
+      verdict: 'SUSPECT', page: false, tier: 1,
+      detail: `${o.unread.length} unread (newest ${fmtMin(minsSince(newest.at))}), last_seen ${fmtMin(minsSince(o.lastSeenMs))} — probe deferred, budget spent`,
+    };
+  }
+
+  return {
+    verdict: 'PROBE', page: false, tier: 1,
+    detail: `${o.unread.length} unread (newest ${fmtMin(minsSince(newest.at))} from ${newest.from}), `
+      + `last_seen ${fmtMin(minsSince(o.lastSeenMs))} — ${fmtMin(gapMin)} before that message arrived`,
+  };
+}
+
+// ---------------------------------------------------------- passive evidence
+
+/** Harness-side corroboration. Never trips; explains a trip. */
+function passiveEvidence(row) {
+  const bits = [];
+  if (row.staleMin != null) bits.push(`transcript ${fmtMin(row.staleMin)} old`);
+  if (row.turn) bits.push(`last turn ${row.turn}${row.marker ? ` (${row.marker})` : ''}`);
+  bits.push(row.cpuDelta != null ? `CPU +${row.cpuDelta.toFixed(0)}s since last sweep` : 'no prior CPU sample');
+  if (row.cpuDelta != null && row.cpuDelta >= CPU_ACTIVE_SEC) bits.push('actively burning CPU — may be mid-build rather than hung');
+  if (row.resolvedBy === 'newest-fallback') bits.push('transcript inferred, not session-id matched');
+  if (row.brokerState) bits.push(`broker says ${row.brokerState}`);
+  if (row.pendingMessages) bits.push(`${row.pendingMessages} pending in broker`);
+  return bits.join('; ');
 }
 
 // ------------------------------------------------------------- broker status
@@ -360,261 +556,17 @@ export function claudeMarker(r) {
 async function brokerStatus(repoCwd) {
   const conn = readJson(path.join(repoCwd, '.agentworkforce/relay/connection.json'));
   if (!conn?.port || !conn?.api_key) return { ok: false, reason: 'no-connection-file' };
-  if (conn.pid && !pidAlive(conn.pid)) return { ok: false, reason: 'broker-pid-dead', conn };
+  if (conn.pid && !pidAlive(conn.pid)) return { ok: false, reason: 'broker-pid-dead' };
   try {
     const res = await fetch(`http://127.0.0.1:${conn.port}/api/status`, {
       headers: { 'X-API-Key': conn.api_key },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return { ok: false, reason: `status-http-${res.status}`, conn };
-    return { ok: true, data: await res.json(), conn };
+    if (!res.ok) return { ok: false, reason: `status-http-${res.status}` };
+    return { ok: true, data: await res.json() };
   } catch (e) {
-    return { ok: false, reason: `status-unreachable:${e.name}`, conn };
+    return { ok: false, reason: `status-unreachable:${e.name}` };
   }
-}
-
-/**
- * Latest `delivery_read_ack:<agent>:<event_id>` timestamp per agent, from the
- * broker's persisted dedup cache. This is the "work arrived" clock: the broker
- * saw the injected text echo back on the PTY (or gave up waiting after 5s).
- * It says the message reached the terminal, NOT that the model consumed it.
- */
-function lastAckByAgent(relayDir) {
-  const out = {};
-  let file;
-  try {
-    const f = fs.readdirSync(relayDir).find((x) => /^dedup-.+\.json$/.test(x));
-    if (f) file = path.join(relayDir, f);
-  } catch {
-    return out;
-  }
-  const entries = file ? readJson(file) : null;
-  if (!Array.isArray(entries)) return out;
-  for (const e of entries) {
-    const key = e?.key;
-    if (typeof key !== 'string' || !key.startsWith('delivery_read_ack:')) continue;
-    const agent = key.split(':')[1];
-    const t = Number(e.inserted_at_ms);
-    if (!agent || !Number.isFinite(t)) continue;
-    if (!out[agent] || t > out[agent]) out[agent] = t;
-  }
-  return out;
-}
-
-/** Oldest in-flight delivery age (minutes) for a given worker. */
-function oldestPendingMin(status, agentName) {
-  const list = status?.pending_deliveries;
-  if (!Array.isArray(list)) return null;
-  let oldest = null;
-  for (const d of list) {
-    if (d?.worker_name !== agentName) continue;
-    const age = Number(d.age_ms);
-    if (!Number.isFinite(age)) continue;
-    const m = age / 60000;
-    if (oldest == null || m > oldest) oldest = m;
-  }
-  return oldest;
-}
-
-// ------------------------------------------------------------ classification
-
-/**
- * The entire trip decision, as a pure function of observed facts, so it can be
- * exercised without a live fleet (see test-watchdog.mjs).
- *
- * Inputs (all nullable unless noted):
- *   alive              boolean — PTY pid responds to signal 0
- *   pid                number  — for the DEAD_PTY message
- *   isCodex            boolean
- *   startedMin         minutes since the agent was spawned
- *   queuedMin          age of the oldest delivery the broker has not had acked
- *   hasTranscript      boolean
- *   staleMin           minutes since the transcript last grew
- *   turn               'open' | 'closed' | 'unknown'
- *   marker             the record type that decided `turn`
- *   ackMin             minutes since the last delivery ack for this agent
- *   ackMinusTranscript ms by which the last ack post-dates the transcript
- *   cpuDelta           CPU seconds burned by the process tree since last run
- *   inferred           boolean — transcript was guessed, not session-id matched
- */
-export function classify(o) {
-  const note = o.inferred ? ' [transcript inferred, not session-id matched]' : '';
-
-  if (!o.alive) {
-    return { verdict: 'DEAD_PTY', page: true, detail: `pid ${o.pid} not running (state file still lists it)` };
-  }
-
-  // Work the broker could not even get acked into the terminal.
-  if (o.queuedMin != null && o.queuedMin > STALE_MIN) {
-    return {
-      verdict: 'QUEUED_STUCK',
-      page: true,
-      detail: `delivery unacked for ${fmtMin(o.queuedMin)} (broker never confirmed injection)`,
-    };
-  }
-
-  if (!o.hasTranscript) {
-    return {
-      verdict: 'NO_TRANSCRIPT',
-      page: false,
-      detail: `no ${o.isCodex ? 'codex rollout' : 'claude transcript'} resolved for this cwd`,
-    };
-  }
-
-  // Acked into the terminal, but the session never wrote a record afterwards:
-  // the harness never consumed it. PTY idle-sleeping, broker reporting green.
-  const unconsumed = o.ackMinusTranscript != null && o.ackMinusTranscript > ACK_TOLERANCE_SEC * 1000;
-  if (unconsumed && o.ackMin != null && o.ackMin > STALE_MIN) {
-    return {
-      verdict: 'HUNG_UNCONSUMED',
-      page: true,
-      detail: `message delivered ${fmtMin(o.ackMin)} ago but session has written nothing since `
-        + `(transcript ${fmtMin(o.staleMin)} old, ${Math.round(o.ackMinusTranscript / 60000)}m older than the delivery)${note}`,
-    };
-  }
-
-  if (o.turn === 'closed') {
-    return { verdict: 'IDLE_OK', page: false, detail: `turn complete (${o.marker}), quiet ${fmtMin(o.staleMin)}` };
-  }
-  if (o.startedMin != null && o.startedMin < BOOT_GRACE_MIN) {
-    return { verdict: 'BOOTING', page: false, detail: `spawned ${fmtMin(o.startedMin)} ago, within grace` };
-  }
-  if (o.staleMin != null && o.staleMin < STALE_MIN) {
-    return { verdict: 'ACTIVE', page: false, detail: `turn in flight (${o.marker}), last output ${fmtMin(o.staleMin)} ago` };
-  }
-  // A long build or tool call produces no transcript records but does burn CPU.
-  if (o.cpuDelta != null && o.cpuDelta >= CPU_ACTIVE_SEC) {
-    return {
-      verdict: 'WORKING_LONG',
-      page: false,
-      detail: `open turn stale ${fmtMin(o.staleMin)} but burned ${o.cpuDelta.toFixed(0)}s CPU since last check`,
-    };
-  }
-  if (o.turn === 'unknown') {
-    return {
-      verdict: 'UNREADABLE',
-      page: false,
-      detail: `no turn boundary found in transcript tail, quiet ${fmtMin(o.staleMin)}`,
-    };
-  }
-  return {
-    verdict: 'HUNG',
-    page: true,
-    detail: `open turn (${o.marker}) with no output for ${fmtMin(o.staleMin)}`
-      + (o.cpuDelta != null ? `, CPU +${o.cpuDelta.toFixed(0)}s` : ', no prior CPU sample')
-      + (o.queuedMin != null ? `, oldest queued delivery ${fmtMin(o.queuedMin)}` : '')
-      + note,
-  };
-}
-
-// -------------------------------------------------------------- evaluation
-
-async function evaluateResident(res, psTable, prevState) {
-  const relayDir = path.join(res.cwd, '.agentworkforce/relay');
-  const rows = [];
-
-  let stateFile = null;
-  try {
-    const f = fs.readdirSync(relayDir).find((x) => /^state-.+\.json$/.test(x));
-    if (f) stateFile = path.join(relayDir, f);
-  } catch {
-    /* no relay dir */
-  }
-
-  const status = await brokerStatus(res.cwd);
-  const agents = stateFile ? readJson(stateFile)?.agents ?? {} : {};
-  const acks = lastAckByAgent(relayDir);
-
-  // A resident whose broker is gone cannot be reached at all, and none of the
-  // per-agent signals can be trusted. That is the headline for the whole repo.
-  if (!status.ok) {
-    rows.push({
-      repo: res.slug,
-      agent: Object.keys(agents)[0] ?? '(none)',
-      cli: '—',
-      key: `${res.slug}/broker`,
-      verdict: 'BROKER_DOWN',
-      detail: `broker unreachable (${status.reason}); ${Object.keys(agents).length} agent(s) in state file`,
-      page: true,
-    });
-    return rows;
-  }
-
-  if (!stateFile || Object.keys(agents).length === 0) {
-    rows.push({
-      repo: res.slug, agent: '(none)', cli: '—', key: `${res.slug}/none`,
-      verdict: 'NO_AGENTS', detail: 'broker up, no agents in state file', page: false,
-    });
-    return rows;
-  }
-
-  for (const [name, a] of Object.entries(agents)) {
-    const cli = a?.spec?.cli || 'unknown';
-    const pid = a?.pid;
-    const sessionId = a?.spec?.session_id;
-    const startedMin = a?.started_at ? minsSince(a.started_at * 1000) : null;
-    const key = `${res.slug}/${name}`;
-
-    const isCodex = /codex/.test(cli);
-    const row = { repo: res.slug, agent: name, cli, pid, key };
-    const alive = pidAlive(pid);
-
-    // CPU burned since the previous run — separates a real hang from a long
-    // build/tool call that legitimately produces no transcript output.
-    const cpu = alive ? subtreeCpu(pid, psTable) : null;
-    const prev = prevState.cpu?.[key];
-    row.cpu = cpu;
-    row.cpuDelta = cpu != null && prev?.cpu != null && prev.pid === pid ? cpu - prev.cpu : null;
-
-    const resolved = alive
-      ? (isCodex ? resolveCodexTranscript(res.cwd, sessionId) : resolveClaudeTranscript(res.cwd, sessionId))
-      : null;
-    row.transcript = resolved?.file ?? null;
-    row.resolvedBy = resolved?.how ?? null;
-
-    row.queuedMin = status.ok ? oldestPendingMin(status.data, name) : null;
-    const brokerAgent = status.ok
-      ? (status.data?.agents || []).find((x) => x?.name === name || x?.worker_name === name)
-      : null;
-    row.brokerState = brokerAgent?.current_state ?? null;
-    row.pendingMessages = brokerAgent?.pending_messages ?? null;
-
-    const tmtime = row.transcript ? mtime(row.transcript) : null;
-    row.staleMin = minsSince(tmtime);
-    if (row.transcript) {
-      const { state, marker } = turnState(row.transcript, cli);
-      row.turn = state;
-      row.marker = marker;
-    }
-
-    // "Work arrived" clock. The broker's dedup cache expires entries after 5
-    // minutes, so carry forward the newest ack we have ever seen for this pid.
-    const prevAck = prevState.acks?.[key];
-    let ackMs = acks[name] ?? null;
-    if (prevAck?.pid === pid && prevAck.ackMs && (!ackMs || prevAck.ackMs > ackMs)) ackMs = prevAck.ackMs;
-    row.ackMs = ackMs;
-    row.ackMin = minsSince(ackMs);
-
-    Object.assign(row, classify({
-      alive,
-      pid,
-      isCodex,
-      startedMin,
-      queuedMin: row.queuedMin,
-      hasTranscript: Boolean(row.transcript),
-      staleMin: row.staleMin,
-      turn: row.turn,
-      marker: row.marker,
-      ackMin: row.ackMin,
-      ackMinusTranscript: ackMs != null && tmtime != null ? ackMs - tmtime : null,
-      cpuDelta: row.cpuDelta,
-      inferred: row.resolvedBy === 'newest-fallback',
-    }));
-
-    rows.push(row);
-  }
-
-  return rows;
 }
 
 // ------------------------------------------------------------------ alerting
@@ -624,13 +576,11 @@ const LOG_MAX_BYTES = 2 * 1024 * 1024;
 function appendLog(line) {
   try {
     fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
-    // Bounded log: a sweep line every 10 minutes accumulates indefinitely.
     if ((fs.statSync(LOG_FILE).size ?? 0) > LOG_MAX_BYTES) {
-      const keep = fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-5000).join('\n');
-      fs.writeFileSync(LOG_FILE, keep);
+      fs.writeFileSync(LOG_FILE, fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-5000).join('\n'));
     }
   } catch {
-    /* first write, or unreadable — fall through to append */
+    /* first write — fall through */
   }
   try {
     fs.appendFileSync(LOG_FILE, line + '\n');
@@ -639,10 +589,15 @@ function appendLog(line) {
   }
 }
 
-/** DM via a local broker HTTP API. Prefers chief's broker, falls back to any live one. */
-async function sendDm(text, residents) {
-  const candidates = [CHIEF_REPO, ...residents.map((r) => r.cwd).filter((c) => c !== CHIEF_REPO)];
-  for (const repo of candidates) {
+/** Page chief. Prefers the watchdog identity; falls back to a local broker. */
+async function pageChief(text, agentClient, residents) {
+  if (agentClient) {
+    try {
+      await agentClient('/dm', { method: 'POST', body: JSON.stringify({ to: DM_TARGET, text }) });
+      return { ok: true, via: 'watchdog-identity' };
+    } catch { /* fall through to a local broker */ }
+  }
+  for (const repo of [CHIEF_REPO, ...residents.map((r) => r.cwd)]) {
     const conn = readJson(path.join(repo, '.agentworkforce/relay/connection.json'));
     if (!conn?.port || !conn?.api_key) continue;
     try {
@@ -652,12 +607,8 @@ async function sendDm(text, residents) {
         body: JSON.stringify({ to: DM_TARGET, message: text }),
         signal: AbortSignal.timeout(15000),
       });
-      if (res.ok) return { ok: true, via: path.basename(repo) };
-      // Do not surface the body: it echoes request context.
-      if (res.status === 401) continue;
-    } catch {
-      continue;
-    }
+      if (res.ok) return { ok: true, via: `broker:${path.basename(repo)}` };
+    } catch { /* try next */ }
   }
   return { ok: false };
 }
@@ -666,115 +617,244 @@ async function sendDm(text, residents) {
 
 async function main() {
   const residents = discoverResidents();
-  const prevState = readJson(STATE_FILE) || {};
+  const prev = readJson(STATE_FILE) || {};
   const psTable = processTable();
 
-  const rows = [];
-  for (const r of residents) {
-    rows.push(...(await evaluateResident(r, psTable, prevState)));
+  const identity = readJson(IDENTITY_FILE);
+  const agentClient = identity?.token ? makeClient(identity.token) : null;
+  const wsKey = loadWorkspaceKey(residents);
+  const ws = wsKey ? makeClient(wsKey) : null;
+
+  // Cloud state: workspace roster (last_seen) + every DM conversation.
+  const lastSeen = {};
+  let conversations = [];
+  let cloudError = null;
+  if (ws) {
+    try {
+      for (const a of await ws('/agents')) lastSeen[a.name] = parseTs(a.last_seen);
+      conversations = await ws('/dm/conversations/all?limit=200');
+    } catch (e) {
+      cloudError = e.message;
+    }
+  } else {
+    cloudError = 'no-workspace-key';
   }
 
-  // Decide which pages actually fire, honouring re-alert backoff.
-  const prevAlerts = prevState.alerts || {};
+  const rows = [];
+  let pingBudget = NO_PING || DRY_RUN ? 0 : MAX_PINGS;
+  const nextPings = {};
+  const nextAdjudicated = { ...(prev.adjudicated || {}) };
+  const convCache = new Map();
+
+  for (const res of residents) {
+    const relayDir = path.join(res.cwd, '.agentworkforce/relay');
+    let stateFile = null;
+    try {
+      const f = fs.readdirSync(relayDir).find((x) => /^state-.+\.json$/.test(x));
+      if (f) stateFile = path.join(relayDir, f);
+    } catch { /* no relay dir */ }
+
+    const status = await brokerStatus(res.cwd);
+    const agents = stateFile ? readJson(stateFile)?.agents ?? {} : {};
+
+    if (!status.ok) {
+      rows.push({
+        repo: res.slug, agent: Object.keys(agents)[0] ?? '(none)', key: `${res.slug}/broker`,
+        verdict: 'BROKER_DOWN', page: true, tier: 0,
+        detail: `broker unreachable (${status.reason}); ${Object.keys(agents).length} agent(s) in state file`,
+      });
+      continue;
+    }
+    if (Object.keys(agents).length === 0) {
+      rows.push({ repo: res.slug, agent: '(none)', key: `${res.slug}/none`, verdict: 'NO_AGENTS', page: false, tier: 1, detail: 'broker up, no agents in state file' });
+      continue;
+    }
+
+    for (const [name, a] of Object.entries(agents)) {
+      const cli = a?.spec?.cli || 'unknown';
+      const pid = a?.pid;
+      const key = `${res.slug}/${name}`;
+      const startedMs = a?.started_at ? a.started_at * 1000 : null;
+      const row = { repo: res.slug, agent: name, cli, pid, key };
+      const alive = pidAlive(pid);
+
+      // Passive corroboration — gathered always, trips never.
+      const cpu = alive ? subtreeCpu(pid, psTable) : null;
+      const prevCpu = prev.cpu?.[key];
+      row.cpu = cpu;
+      row.cpuDelta = cpu != null && prevCpu?.cpu != null && prevCpu.pid === pid ? cpu - prevCpu.cpu : null;
+
+      const resolved = alive
+        ? (/codex/.test(cli) ? resolveCodexTranscript(res.cwd, a?.spec?.session_id) : resolveClaudeTranscript(res.cwd, a?.spec?.session_id))
+        : null;
+      row.transcript = resolved?.file ?? null;
+      row.resolvedBy = resolved?.how ?? null;
+      row.staleMin = row.transcript ? minsSince(mtime(row.transcript)) : null;
+      if (row.transcript) {
+        const { state, marker } = turnState(row.transcript, cli);
+        row.turn = state;
+        row.marker = marker;
+      }
+      const brokerAgent = (status.data?.agents || []).find((x) => x?.name === name || x?.worker_name === name);
+      row.brokerState = brokerAgent?.current_state ?? null;
+      row.pendingMessages = brokerAgent?.pending_messages ?? null;
+
+      // Tier 1 — unread work addressed to this resident.
+      row.lastSeenMs = lastSeen[name] ?? null;
+      row.lastSeenMin = minsSince(row.lastSeenMs);
+      let unread = [];
+      if (ws && !cloudError && alive) {
+        try {
+          unread = (await unreadFor(ws, conversations, name, {
+            sessionStartMs: startedMs,
+            sinceId: prev.adjudicated?.[key],
+            cache: convCache,
+          })).unread;
+        } catch { /* degrade to passive-only */ }
+      }
+      row.unread = unread;
+
+      // Tier 2 — an outstanding probe decides the verdict.
+      const ping = prev.pings?.[key] || null;
+      let answered = false;
+      if (ping && agentClient) {
+        const r = await probeAnswered(agentClient, ping, name);
+        answered = r.answered;
+        row.reply = r.reply;
+      }
+
+      Object.assign(row, classify({
+        alive, pid,
+        startedMin: startedMs ? minsSince(startedMs) : null,
+        unread,
+        lastSeenMs: row.lastSeenMs,
+        ping,
+        answered,
+        probeAgeMin: ping ? minsSince(ping.pingedAt) : null,
+        pingBudget,
+      }));
+      row.evidence = passiveEvidence(row);
+
+      if (row.verdict === 'PROBE') {
+        if (agentClient) {
+          try {
+            nextPings[key] = await sendProbe(agentClient, name);
+            pingBudget -= 1;
+            appendLog(JSON.stringify({
+              ts: new Date(NOW).toISOString(), event: 'probe', repo: res.slug, agent: name,
+              unread_ids: unread.map((u) => u.id),
+              unread_newest_min: Math.round(minsSince(unread[0].at)),
+              last_seen_min: row.lastSeenMin == null ? null : Math.round(row.lastSeenMin),
+              evidence: row.evidence,
+            }));
+          } catch (e) {
+            row.verdict = 'PROBE_FAILED';
+            row.detail = `could not send liveness probe (${e.message})`;
+          }
+        } else {
+          row.verdict = 'SUSPECT';
+          row.detail += ' — no watchdog identity registered, cannot probe';
+        }
+      } else if (ping && row.verdict === 'AWAITING_ACK') {
+        nextPings[key] = ping;                       // still in flight
+      } else if (ping) {
+        // Resolved either way: stop reconsidering the messages that caused it.
+        if (unread[0]?.id) nextAdjudicated[key] = unread[0].id;
+        if (row.verdict === 'NEAR_MISS') {
+          appendLog(JSON.stringify({
+            ts: new Date(NOW).toISOString(), event: 'near-miss', repo: res.slug, agent: name,
+            probe_age_min: Math.round(row.probeAgeMin ?? 0), reply: row.reply ?? null,
+          }));
+        }
+      }
+
+      rows.push(row);
+    }
+  }
+
+  // Pages, honouring re-alert backoff.
+  const prevAlerts = prev.alerts || {};
   const nextAlerts = {};
   const firing = [];
   for (const row of rows) {
     if (!row.page) continue;
-    const key = row.key || `${row.repo}/${row.agent}`;
-    const prev = prevAlerts[key];
-    const changed = !prev || prev.verdict !== row.verdict;
-    const aged = prev && NOW - (prev.lastAlerted || 0) > REALERT_MIN * 60000;
+    const before = prevAlerts[row.key];
+    const changed = !before || before.verdict !== row.verdict;
+    const aged = before && NOW - (before.lastAlerted || 0) > REALERT_MIN * 60000;
     if (changed || aged) {
       firing.push(row);
-      nextAlerts[key] = { verdict: row.verdict, firstSeen: changed ? NOW : prev.firstSeen, lastAlerted: NOW };
+      nextAlerts[row.key] = { verdict: row.verdict, firstSeen: changed ? NOW : before.firstSeen, lastAlerted: NOW };
     } else {
-      nextAlerts[key] = prev;
+      nextAlerts[row.key] = before;
     }
   }
 
   const stamp = new Date(NOW).toISOString();
-  const summary = rows.reduce((acc, r) => {
-    acc[r.verdict] = (acc[r.verdict] || 0) + 1;
-    return acc;
-  }, {});
-
+  const summary = rows.reduce((acc, r) => ((acc[r.verdict] = (acc[r.verdict] || 0) + 1), acc), {});
   appendLog(JSON.stringify({
-    ts: stamp,
-    event: 'sweep',
-    residents: residents.length,
-    agents: rows.length,
-    summary,
+    ts: stamp, event: 'sweep', residents: residents.length, agents: rows.length,
+    summary, cloud: cloudError ? `error:${cloudError}` : 'ok',
   }));
 
   for (const row of firing) {
     appendLog(JSON.stringify({
-      ts: stamp,
-      event: 'trip',
-      verdict: row.verdict,
-      repo: row.repo,
-      agent: row.agent,
-      cli: row.cli,
-      pid: row.pid,
-      stale_min: row.staleMin == null ? null : Math.round(row.staleMin),
-      last_msg_min: row.ackMin == null ? null : Math.round(row.ackMin),
-      queued_min: row.queuedMin == null ? null : Math.round(row.queuedMin),
-      turn: row.turn ?? null,
-      marker: row.marker ?? null,
-      cpu_delta_sec: row.cpuDelta == null ? null : Math.round(row.cpuDelta),
-      detail: row.detail,
+      ts: stamp, event: 'trip', tier: row.tier, verdict: row.verdict, repo: row.repo, agent: row.agent,
+      detail: row.detail, evidence: row.evidence ?? null,
+      unread_ids: (row.unread || []).map((u) => u.id),
+      last_seen_min: row.lastSeenMin == null ? null : Math.round(row.lastSeenMin),
     }));
   }
 
-  let dmResult = null;
+  let dm = null;
   if (firing.length && !DRY_RUN) {
-    const lines = firing.map((r) => `- *${r.repo}/${r.agent}* (${r.cli}) — ${r.verdict}: ${r.detail}`);
     const text = [
-      `[watchdog] ${firing.length} resident${firing.length > 1 ? 's' : ''} unresponsive`,
-      ...lines,
+      `[watchdog] ${firing.length} resident${firing.length > 1 ? 's' : ''} need attention`,
+      ...firing.map((r) => {
+        const lines = [`• ${r.repo}/${r.agent} — ${r.verdict}: ${r.detail}`];
+        if (r.evidence) lines.push(`    evidence: ${r.evidence}`);
+        if ((r.unread || []).length) {
+          lines.push(`    unread: ${r.unread.map((u) => `${u.id} from ${u.from} ${fmtMin(minsSince(u.at))} ago`).join('; ')}`);
+        }
+        if (r.lastSeenMin != null) lines.push(`    last_seen: ${fmtMin(r.lastSeenMin)} ago`);
+        lines.push('    recommend kickstart');
+        return lines.join('\n');
+      }),
       '',
-      `Alert-only; no kickstart was attempted. Log: ${LOG_FILE}`,
+      `Alert-only — nothing was restarted. Log: ${LOG_FILE}`,
     ].join('\n');
-    dmResult = await sendDm(text, residents);
-    appendLog(JSON.stringify({ ts: stamp, event: 'dm', ok: dmResult.ok, via: dmResult.via ?? null, count: firing.length }));
+    dm = await pageChief(text, agentClient, residents);
+    appendLog(JSON.stringify({ ts: stamp, event: 'page', ok: dm.ok, via: dm.via ?? null, count: firing.length }));
   }
 
-  if (TEST_DM) {
-    const r = await sendDm(`[watchdog-test] fleet liveness watchdog online — ${residents.length} residents, ${rows.length} agents evaluated, ${rows.filter((x) => x.page).length} tripping. This is a one-off test message.`, residents);
-    appendLog(JSON.stringify({ ts: stamp, event: 'test-dm', ok: r.ok, via: r.via ?? null }));
-    process.stderr.write(`test DM: ${r.ok ? `sent via ${r.via} broker` : 'FAILED'}\n`);
-  }
-
-  // Persist CPU samples, delivery-ack clocks, and alert bookkeeping.
+  // Persist for the next sweep.
   const cpu = {};
-  const acks = {};
-  for (const row of rows) {
-    if (!row.key) continue;
-    if (row.cpu != null) cpu[row.key] = { pid: row.pid, cpu: row.cpu };
-    if (row.ackMs != null) acks[row.key] = { pid: row.pid, ackMs: row.ackMs };
-  }
+  for (const row of rows) if (row.key && row.cpu != null) cpu[row.key] = { pid: row.pid, cpu: row.cpu };
   try {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify({ ts: NOW, cpu, acks, alerts: nextAlerts }, null, 2));
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      ts: NOW, cpu, pings: nextPings, adjudicated: nextAdjudicated, alerts: nextAlerts,
+    }, null, 2), { mode: 0o600 });
   } catch (e) {
     process.stderr.write(`watchdog: cannot write state: ${e.message}\n`);
   }
 
   if (AS_JSON) {
-    process.stdout.write(JSON.stringify({ ts: stamp, rows, firing: firing.map((f) => f.key), summary }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ ts: stamp, cloud: cloudError ?? 'ok', rows, summary }, null, 2) + '\n');
   } else if (!QUIET) {
     const w = (s, n) => String(s ?? '—').padEnd(n).slice(0, n);
-    process.stdout.write(`fleet-watchdog ${stamp}  stale>${STALE_MIN}m  ${residents.length} residents / ${rows.length} agents\n`);
-    process.stdout.write(`${w('REPO', 18)} ${w('AGENT', 20)} ${w('CLI', 8)} ${w('VERDICT', 16)} ${w('QUIET', 7)} ${w('LASTMSG', 8)} DETAIL\n`);
+    process.stdout.write(`fleet-watchdog ${stamp}  stale>${STALE_MIN}m  probe-window ${RESPONSE_MIN}m  `
+      + `${residents.length} residents / ${rows.length} agents  cloud=${cloudError ?? 'ok'}\n`);
+    process.stdout.write(`${w('REPO', 17)} ${w('AGENT', 20)} ${w('T', 2)} ${w('VERDICT', 14)} ${w('UNRD', 5)} ${w('LASTSEEN', 9)} DETAIL\n`);
     for (const r of rows) {
-      const flag = r.page ? '!' : ' ';
-      process.stdout.write(`${flag}${w(r.repo, 17)} ${w(r.agent, 20)} ${w((r.cli || '').split(' ')[0], 8)} ${w(r.verdict, 16)} ${w(fmtMin(r.staleMin), 7)} ${w(fmtMin(r.ackMin), 8)} ${r.detail}\n`);
+      process.stdout.write(`${r.page ? '!' : ' '}${w(r.repo, 16)} ${w(r.agent, 20)} ${w(r.tier, 2)} ${w(r.verdict, 14)} `
+        + `${w((r.unread || []).length || '·', 5)} ${w(fmtMin(r.lastSeenMin), 9)} ${r.detail}\n`);
     }
     process.stdout.write(`\n${Object.entries(summary).map(([k, v]) => `${k}=${v}`).join('  ')}\n`);
-    if (firing.length) process.stdout.write(`PAGED: ${firing.map((f) => f.key).join(', ')}${dmResult ? ` (dm ${dmResult.ok ? 'sent' : 'FAILED'})` : ''}\n`);
+    if (firing.length) process.stdout.write(`PAGED: ${firing.map((f) => f.key).join(', ')}${dm ? ` (dm ${dm.ok ? `sent via ${dm.via}` : 'FAILED'})` : ''}\n`);
   }
 }
 
-// Only sweep when executed directly; importing this file (tests, tooling) is side-effect free.
+// Only sweep when executed directly; importing this file is side-effect free.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => {
     appendLog(JSON.stringify({ ts: new Date().toISOString(), event: 'error', error: e.message }));
