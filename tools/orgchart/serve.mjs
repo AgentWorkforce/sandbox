@@ -105,6 +105,7 @@ async function loadProjects() {
       updated: meta.updated ?? '',
       repos: meta.repos ?? [],
       title: extractTitle(body),
+      card: meta.card ? stripQuotes(meta.card) : '',
       tldr: (meta.tldr ? stripQuotes(meta.tldr) : '') || firstSentence(goal),
       goal,
       now: extractField(body, 'Now'),

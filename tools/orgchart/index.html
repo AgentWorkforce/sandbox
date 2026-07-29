@@ -428,7 +428,7 @@ function miniCard(p) {
   head.className = 'project-mini-head';
   const title = document.createElement('div');
   title.className = 'project-mini-title';
-  title.textContent = shortTitle(fullTitle);
+  title.textContent = p.card || shortTitle(fullTitle);
   title.title = fullTitle;
   head.append(title, chip(p.status));
 
