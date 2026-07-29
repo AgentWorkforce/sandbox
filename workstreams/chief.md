@@ -15,9 +15,12 @@ persona, memory, journal backfilled Dec 2025–Jul 2026, workstreams,
 /retro /status /digest). Broker is up in this repo and chief runs as a
 resident relay agent — registered, posting to #general, DM-able.
 
-**Next:** the two remaining Phase 2 legs — `senses/` mount of
-GitHub/Slack/Notion from hosted relayfile (Gate 3 is done), and a scheduled
-daily /digest (launchd until relaycron has a message transport).
+**Next:** finish Phase 2 — (1) `senses/` mount of the GitHub org tree from
+hosted relayfile (Gate 3 done; blocked on Will's OAuth, see below);
+(2) scheduled daily /digest: an interim launchd job already exists
+(`com.agentworkforce.chief.digest`, 17:30 daily, headless sonnet) — replace
+it with the relaycron message transport once that lands (decision 07-29:
+dogfood relaycron; the launchd job is the bridge, not the destination).
 
 **Senses leg is blocked on Will** (senses-mount worker report, 07-29): no
 Relayfile-backed workspace exists — chief-dev is messaging-only. Unblock is a
