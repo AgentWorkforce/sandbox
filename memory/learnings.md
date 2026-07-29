@@ -29,22 +29,22 @@ Distilled 2026-07-29 from six months of session history
   twice. Fakes locally; real runtimes in CI/sandboxes only.
 - **Secrets never enter prompts or tracked files.** Live keys in prompt history
   forced rotations. Env vars only; any pasted secret gets flagged for rotation.
-  Corollary (2026-07-29, learned the hard way): **never dump raw `env`** — a
-  length-based redaction filter missed `RELAY_BROKER_API_KEY` (`br_` + 32 chars
-  = 35, under the cutoff) and leaked it into a transcript. Grep for the specific
-  variables you need, or filter by key name, never by value length.
+  Never dump raw `env` — a length-based redaction filter missed
+  `RELAY_BROKER_API_KEY` (`br_` + 32 chars = 35, under the cutoff) and leaked
+  it into a transcript. Grep for the specific variables you need, or filter by
+  key name, never by value length.
 - **Start chief's node from launchd, never from a Claude Code session.** Claude
   Code stamps `CLAUDE_CODE_CHILD_SESSION=1` into every Bash-spawned subprocess;
   `agent-relay node up` passes its env through the broker into chief's PTY, so
   chief sees the marker and silently stops saving transcripts. The plist
-  (`com.agentworkforce.chief.node`) has a clean env and the warning never
-  appears on that path. `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` overrides the
-  symptom; the fix is the launch path. Note the job exits 1 if a manually
-  started broker already holds the project — `agent-relay down` first, then
-  `launchctl kickstart -k gui/$UID/com.agentworkforce.chief.node`.
-  Refinements (2026-07-29 restart): any clean-env path works — `npm run
-  chief` from Will's own terminal is fine; the hazard is specifically
-  Claude-Code-spawned envs. And the marker **cannot be checked from inside a
-  session** (`printenv CLAUDE_CODE_CHILD_SESSION` in the Bash tool always
-  shows `1` — Claude Code stamps every Bash subprocess); verify persistence
-  by watching the session's `.jsonl` under `~/.claude/projects/...` grow.
+  (`com.agentworkforce.chief.node`) has a clean env, so the symptom never
+  appears on that path — any clean-env launch works (e.g. `npm run chief`
+  from Will's own terminal); the hazard is specifically Claude-Code-spawned
+  envs. `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` overrides the symptom, but
+  the launch path is the real fix. The job exits 1 if a manually started
+  broker already holds the project — `agent-relay down` first, then
+  `launchctl kickstart -k gui/$UID/com.agentworkforce.chief.node`. The marker
+  cannot be checked from inside a session (`printenv
+  CLAUDE_CODE_CHILD_SESSION` in the Bash tool always shows `1`, since Claude
+  Code stamps every subprocess) — verify persistence by watching the
+  session's `.jsonl` under `~/.claude/projects/...` grow.

@@ -9,8 +9,8 @@ workstream.
   changes acceptable when stated.
 - **chief (this repo)** restarts the chief-of-staff effort app-less. chief-app
   proved the persona and brain conventions but drifted into building Mac/iOS
-  clients; parked deliberately 2026-07-29. Brain = markdown in git; mechanics
-  belong in platform components, never here.
+  clients; parked deliberately. Brain = markdown in git; mechanics belong in
+  platform components, never here.
 - **Platform primitives chief depends on** (each is a PR against the owning
   repo, not tubing in this one):
   1. **wake-on-delivery** (relay/relaycast) — spawn a registered-but-offline
@@ -23,12 +23,11 @@ workstream.
   3. **relaycron message transport** — "at 9am, DM chief" as a schedule target;
      composes with wake-on-delivery to make any agent proactive.
 - **relayfile is senses, not brain — and senses belong to the consuming
-  department** (generalized 2026-07-29 when cso claimed #research-market):
-  each department repo mounts its own domain data under its own `senses/`
-  via its own relayfile workspace (which is also the workaround for the
-  one-mount-per-workspace limit). Chief's slot stays reserved for
-  cross-repo digest senses (GitHub org tree). Conclusions stay in local
-  markdown; mounts scoped tight with `--remote-path`.
+  department:** each department repo mounts its own domain data under its
+  own `senses/` via its own relayfile workspace (which is also the
+  workaround for the one-mount-per-workspace limit). Chief's slot stays
+  reserved for cross-repo digest senses (GitHub org tree). Conclusions stay
+  in local markdown; mounts scoped tight with `--remote-path`.
 - **Topology fact:** one broker per repo (broker cwd fixed at launch; node id
   hashes cwd). Chief's broker lives here; each repo team gets its own.
 - **GTM pair:** `scout` (Relay Scout, developer CRM — crew agents research and
@@ -36,19 +35,19 @@ workstream.
   `cmo` (GTM workbench — metrics agent + strategy docs) points at it. cmo's
   old SST/AWS CRM was deleted 2026-07-20 as a duplicate of scout; recover
   from pre-reset git history if ever needed.
-- **Org hierarchy (confirmed 2026-07-29):** Will → chief → C-level department
-  agents, each with its own repo/broker; instruments live under departments.
-  Seated so far: **cmo** (GTM lead; scout is its instrument — both targeting
-  motions, OSS-dev engagement and affiliate/paid-promo targets on X/LinkedIn,
-  are scout campaigns, never rebuilt in cmo) and **coo** (business
-  operations — investor/accelerator applications first; mandate YC + a16z
-  Speedrun; renamed from cto 2026-07-29 because "cto implies technical"),
-  **cso** (Chief Strategy Officer, seated 2026-07-29 — market research &
-  competitive intel: watchlist dossiers, competitor deep-dives via the
-  `competitor-deep-dive` skill, partnership scoring handed to cmo; never
-  outreach, never executes third-party code locally), and **cpo** (Chief
-  Product Officer, seated 2026-07-29 — product direction memos in
-  `direction/`, owns product side projects; project leads report to cpo:
-  **marquee** and **burn**, the latter also owning the software factory
-  `../factory` with burn as its proving ground). Chief dispatches to department leads; chief's
-  own subagents cover only what has no department yet.
+- **Org hierarchy:** Will → chief → C-level department agents, each with its
+  own repo/broker; instruments live under departments. Seated so far:
+  **cmo** (GTM lead; scout is its instrument — both targeting motions,
+  OSS-dev engagement and affiliate/paid-promo targets on X/LinkedIn, are
+  scout campaigns, never rebuilt in cmo), **coo** (business operations —
+  investor/accelerator applications first; mandate YC + a16z Speedrun; named
+  coo rather than cto since "cto implies technical"), **cso** (Chief
+  Strategy Officer — market research & competitive intel: watchlist
+  dossiers, competitor deep-dives via the `competitor-deep-dive` skill,
+  partnership scoring handed to cmo; never outreach, never executes
+  third-party code locally), and **cpo** (Chief Product Officer — product
+  direction memos in `direction/`, owns product side projects; project leads
+  report to cpo: **marquee** and **burn**, the latter also owning the
+  software factory `../factory` with burn as its proving ground). Chief
+  dispatches to department leads; chief's own subagents cover only what has
+  no department yet.
