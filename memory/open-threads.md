@@ -1,5 +1,16 @@
 # Open threads
 
+- **Principal senses: email + Granola (Will, 2026-07-29)** — chief gets
+  read-only access to Will's email and Granola (meeting recordings/recaps +
+  self-notes). Email path: relayfile Gmail provider (confirmed in catalog)
+  → after provisioning heals, `relayfile integration connect gmail` OAuth →
+  scoped mount in a second chief relayfile workspace (first slot = GitHub
+  tree). Granola: investigation subagent running — prior art is the
+  `agents/granola` gallery persona (reacts to new-recording events); options
+  report pending. Privacy rule: raw email/meeting content never enters
+  git-tracked files — gitignored senses/ projections only, conclusions only
+  in the brain.
+
 - **cso watchlist is empty (2026-07-29); seed corpus = #research-market** —
   mounts into **cso's own** `senses/` (own relayfile workspace; senses
   belong to the consuming department, which also keeps chief's one-mount

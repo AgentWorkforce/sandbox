@@ -1,6 +1,6 @@
 ---
-status: active
-owner: marquee
+status: parked
+owner: cpo
 updated: 2026-07-29
 repos: [marquee]
 ---
@@ -20,13 +20,13 @@ Feasibility spike dispatched: verify libghostty's current embedding story
 from primary sources, fallback table if immature, pane-rendering choice,
 v1 build plan → docs/architecture.md.
 
-**Next:** existential question open (Will, 2026-07-29, after stating the
-chief-app cockpit vision): "maybe marquee is useless… a lighter-weight
-version of it?" On cpo's desk: kill / merge (marquee's file-described
-live-pane protocol becomes chief-app's tile + side-pane primitive; the 4x4
-grid is 16 marquee tiles) / keep both — chief's read is merge. The spike
-completes as briefed regardless: libghostty-embedding feasibility is
-decision input for both products. Then cpo's memo recommends; Will decides.
+**Next:** DEPRIORITIZED by Will 2026-07-29 (chief-app cockpit supersedes;
+"maybe marquee is useless… a lighter-weight version of it"). Policy: the
+in-flight spike completes (ghostty-embedding answer feeds chief-app's
+grid), architecture.md lands via cpo, then the project parks and the
+resident stands down. cpo's direction memo may recommend harvesting the
+file-described live-pane protocol into chief-app as its tile/side-pane
+primitive (chief's read: merge).
 
 ## History
 - 2026-07-29 — Commissioned by Will (terminal + live markdown sidecar,
