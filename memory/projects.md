@@ -22,9 +22,13 @@ workstream.
      exposed as MCP tools yet. `teams.json` needs a description/skills field.
   3. **relaycron message transport** — "at 9am, DM chief" as a schedule target;
      composes with wake-on-delivery to make any agent proactive.
-- **relayfile is chief's senses, not its brain**: GitHub PRs, Slack, Notion
-  projected as files under `senses/`; conclusions stay in local markdown.
-  Mounts scoped tight with `--remote-path` allowlists.
+- **relayfile is senses, not brain — and senses belong to the consuming
+  department** (generalized 2026-07-29 when cso claimed #research-market):
+  each department repo mounts its own domain data under its own `senses/`
+  via its own relayfile workspace (which is also the workaround for the
+  one-mount-per-workspace limit). Chief's slot stays reserved for
+  cross-repo digest senses (GitHub org tree). Conclusions stay in local
+  markdown; mounts scoped tight with `--remote-path`.
 - **Topology fact:** one broker per repo (broker cwd fixed at launch; node id
   hashes cwd). Chief's broker lives here; each repo team gets its own.
 - **GTM pair:** `scout` (Relay Scout, developer CRM — crew agents research and

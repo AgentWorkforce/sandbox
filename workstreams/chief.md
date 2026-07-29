@@ -23,15 +23,13 @@ daily /digest (launchd until relaycron has a message transport).
 Relayfile-backed workspace exists — chief-dev is messaging-only. Unblock is a
 ~3-min browser task: `relayfile login --provision-messaging-only`, then
 `relayfile integration connect github|slack|notion`. Worker standing by to
-mount and verify. Scoping decision (chief, 07-29, revised same day): the
-shipped CLI takes a single `--remote-path`, so mount one tight subtree — and
-the first subtree is now the **#research-market Slack channel** (Will: years
-of shared products/links, the cso watchlist seed corpus), not the GitHub
-tree. Worker resolves the exact `/slack/...` path. The multi-allowlist brief
-becomes a relayfile CLI issue (expose repeated `--remote-path` /
-`--local-layout`). Once mounted: sweep channel history → dedupe links →
-batch-DM targets to cso for dossiers; ongoing intake = mount + scheduled
-sweep once relaycron transport lands.
+mount and verify. Scoping (chief, 07-29, settled after two revisions):
+senses belong to the consuming department, one relayfile workspace each
+(also the workaround for the one-mount-per-workspace limit). **Chief's
+mount = the GitHub org tree** (`/github/repos/AgentWorkforce`) for digest
+senses. **#research-market went to cso** — see [cso-research]. The
+multi-allowlist brief becomes a relayfile CLI issue (expose repeated
+`--remote-path` / `--local-layout`).
 
 ## History
 - 2026-07-29 — Chief came online as a durable relay agent for the first time:

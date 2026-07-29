@@ -15,10 +15,15 @@ chief's DM 15:49Z from its own node, correct mandate, ritual from files).
 Boots via launchd (`com.agentworkforce.cso.node`) with its own git author
 identity. Watchlist is empty.
 
-**Next:** first targets from Will — DM links to cso as they surface. Then the
-first deep-dive proves the loop end-to-end (dossier → `competitor-deep-dive`
-→ issues filed). Scheduled re-checks ride relaycron once its message
-transport lands.
+**Next:** seed the watchlist from **#research-market** (Slack) — the corpus
+Will and Khaliq have shared into "forever". Design: cso owns this sense —
+its own relayfile workspace, `cso/senses/` mount of the channel, cso sweeps
+history → dedupes links → dossiers; chief is not in the data path. Blocked
+on Will's browser provisioning (`relayfile login` + `connect slack`); exact
+workspace mechanics resolved by the senses worker at mount time. Interim:
+DM fresh finds to cso directly. Then the first deep-dive proves the loop
+(dossier → `competitor-deep-dive` → issues filed). Scheduled re-checks ride
+relaycron once its message transport lands.
 
 ## History
 - 2026-07-29 — Seated by Will ("make a CSO repo and officer"). Charter
