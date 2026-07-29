@@ -11,6 +11,10 @@
   used one of them); the "agents" metric definition (active vs created in
   window); money in bank + monthly spend (runway).
 
+- **Rotate `RELAY_BROKER_API_KEY`** (`br_…`) — leaked unredacted into the
+  2026-07-29 transcript when chief dumped raw `env` while diagnosing the
+  child-session marker. Rotate and confirm; see [learnings] for the rule.
+
 - **relayfile Gate 3: DONE** (signed GREEN 2026-06-20, DO state byte-intact —
   `relayfile-cloud/docs/decisions/2026-06-20-gate3-sign.md`). `senses/` can
   mount hosted `file.agentrelay.com`. Open tails: `api.relayfile.dev` compat
