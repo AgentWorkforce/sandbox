@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Org chart server: serves the tree, reports per-repo broker health, and opens
-// a terminal attached to an agent. Localhost only, no dependencies.
+// Org chart server: serves the tree, reports per-repo broker health, opens
+// a terminal attached to an agent, and renders live workstream status.
+// Localhost only, no dependencies.
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,10 @@ import { dirname, join } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1';
 const PORT = 4780;
+
+// Read-only: this server never writes outside its own directory.
+const WORKSTREAMS_DIR = join(HERE, '..', '..', 'workstreams');
+const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };
 
 // Terminal.app inherits a minimal env, so the attach command carries its own
 // PATH — the agent-relay shim is a node script and needs node beside it.
@@ -25,6 +30,77 @@ const NOT_ATTACHABLE = {
 
 async function loadOrg() {
   return JSON.parse(await readFile(join(HERE, 'org.json'), 'utf8'));
+}
+
+// Splits a workstream file into its frontmatter (status/owner/updated/repos)
+// and body. Frontmatter is flat `key: value`; repos is a bracketed list.
+function parseFrontmatter(raw) {
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: raw };
+  const meta = {};
+  for (const line of match[1].split('\n')) {
+    const i = line.indexOf(':');
+    if (i === -1) continue;
+    const key = line.slice(0, i).trim();
+    let value = line.slice(i + 1).trim();
+    if (key === 'repos') {
+      value = value.replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    meta[key] = value;
+  }
+  return { meta, body: match[2] };
+}
+
+function extractTitle(body) {
+  return body.match(/^#\s+(.+)$/m)?.[1].trim() ?? '';
+}
+
+// Strips **bold**/*italic* emphasis markers, keeping the underlying text.
+function stripEmphasis(text) {
+  return text.replace(/\*\*(.+?)\*\*/gs, '$1').replace(/\*(.+?)\*/gs, '$1');
+}
+
+function clean(text, cap = 400) {
+  const collapsed = stripEmphasis(text).replace(/\s+/g, ' ').trim();
+  return collapsed.length > cap ? `${collapsed.slice(0, cap).trim()}…` : collapsed;
+}
+
+// A field runs from its `**Label:**` marker to the next section label
+// (Goal/Now/Next), the next heading, or end of body — whichever comes
+// first. Bounded to the known labels rather than any bold-prefixed line:
+// hard-wrapped prose routinely starts a line mid-bold-span (e.g. a bold PR
+// title wraps onto its own line), which a generic "**-prefixed line" rule
+// would mistake for a new block and truncate real content on.
+const FIELD_LABELS = ['Goal', 'Now', 'Next'];
+function extractField(body, label) {
+  const others = FIELD_LABELS.filter((l) => l !== label).join('|');
+  const re = new RegExp(`\\*\\*${label}:\\*\\*\\s*([\\s\\S]*?)(?=\\n\\*\\*(?:${others}):\\*\\*|\\n#{1,6}\\s|$)`);
+  const value = body.match(re)?.[1];
+  return value ? clean(value) : '';
+}
+
+async function loadProjects() {
+  const files = (await readdir(WORKSTREAMS_DIR)).filter((f) => f.endsWith('.md')).sort();
+  const projects = await Promise.all(files.map(async (file) => {
+    const raw = await readFile(join(WORKSTREAMS_DIR, file), 'utf8');
+    const { meta, body } = parseFrontmatter(raw);
+    return {
+      file,
+      status: meta.status ?? '',
+      owner: meta.owner ?? '',
+      updated: meta.updated ?? '',
+      repos: meta.repos ?? [],
+      title: extractTitle(body),
+      goal: extractField(body, 'Goal'),
+      now: extractField(body, 'Now'),
+      next: extractField(body, 'Next'),
+    };
+  }));
+  projects.sort((a, b) => {
+    const order = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+    return order !== 0 ? order : a.file.localeCompare(b.file);
+  });
+  return projects;
 }
 
 // Reads only the port. The api_key in this file never leaves the process.
@@ -139,6 +215,10 @@ const server = createServer(async (req, res) => {
       const repos = [...new Set(org.agents.map((a) => a.repo))];
       const results = await Promise.all(repos.map(repoStatus));
       return send(res, 200, Object.fromEntries(repos.map((r, i) => [r, results[i]])));
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/projects') {
+      return send(res, 200, await loadProjects());
     }
 
     if (req.method === 'POST' && url.pathname === '/api/attach') {

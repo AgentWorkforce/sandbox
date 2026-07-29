@@ -18,6 +18,7 @@
     --up: #22c55e;
     --down: #9ca3af;
     --hold: #f59e0b;
+    --bad: #dc2626;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -29,6 +30,7 @@
       --edge: #3a404b;
       --accent: #7aa2f7;
       --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+      --bad: #f87171;
     }
   }
 
@@ -109,6 +111,48 @@
   button.view:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button.view:disabled { opacity: .35; cursor: not-allowed; }
 
+  .tabs { display: flex; gap: 6px; margin: 18px 0 0; }
+  button.tab {
+    font: inherit; font-size: 13px; font-weight: 560;
+    padding: 6px 14px; border-radius: 7px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    cursor: pointer;
+  }
+  button.tab:hover { color: var(--ink); }
+  button.tab.active {
+    color: var(--ink); border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  .projects { display: flex; flex-direction: column; gap: 12px; }
+  .project-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+  }
+  .project-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .project-title { font-weight: 620; font-size: 14.5px; letter-spacing: -.005em; }
+  .project-meta { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+
+  .chip {
+    flex: none;
+    font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em;
+    padding: 2px 9px; border-radius: 999px;
+    background: color-mix(in srgb, var(--down) 16%, transparent);
+    color: var(--down);
+    border: 1px solid color-mix(in srgb, var(--down) 38%, transparent);
+  }
+  .chip.active { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); }
+  .chip.blocked { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .chip.parked { background: color-mix(in srgb, var(--hold) 16%, transparent); color: var(--hold); border-color: color-mix(in srgb, var(--hold) 40%, transparent); }
+  .chip.done { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); }
+
+  .field { margin-top: 8px; }
+  .field-label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-bottom: 2px; }
+  .field-value { font-size: 13.5px; line-height: 1.5; }
+
   footer { margin-top: 36px; color: var(--muted); font-size: 12.5px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
 
@@ -131,17 +175,28 @@
   <header>
     <h1>Agent org chart</h1>
     <p class="sub">Live node health across the workforce. Click <strong>View</strong> to open a terminal attached to an agent.</p>
+    <nav class="tabs">
+      <button class="tab active" id="tabOrg" type="button">Org</button>
+      <button class="tab" id="tabProjects" type="button">Projects</button>
+    </nav>
+  </header>
+
+  <section id="orgView">
     <ul class="legend">
       <li><span class="dot up"></span> node up</li>
       <li><span class="dot"></span> node down</li>
       <li><span class="dot hold"></span> parked / pending spawn</li>
       <li><span class="dot none"></span> unseated</li>
     </ul>
-  </header>
 
-  <ul class="tree" id="tree"></ul>
+    <ul class="tree" id="tree"></ul>
 
-  <footer>View mode is read-only; <code>Ctrl+]</code> detaches.</footer>
+    <footer>View mode is read-only; <code>Ctrl+]</code> detaches.</footer>
+  </section>
+
+  <section id="projectsView" hidden>
+    <div class="projects" id="projects"></div>
+  </section>
 </main>
 <div id="toast" role="status" aria-live="polite"></div>
 
@@ -290,11 +345,74 @@ async function poll() {
   } catch { /* keep the last known state on a transient failure */ }
 }
 
+const STATUS_LABELS = new Set(['active', 'blocked', 'parked', 'done']);
+
+function chip(status) {
+  const el = document.createElement('span');
+  el.className = 'chip ' + (STATUS_LABELS.has(status) ? status : '');
+  el.textContent = status || 'unknown';
+  return el;
+}
+
+function field(label, value) {
+  const row = document.createElement('div');
+  row.className = 'field';
+  const l = document.createElement('div');
+  l.className = 'field-label';
+  l.textContent = label;
+  const v = document.createElement('div');
+  v.className = 'field-value';
+  v.textContent = value || '—';
+  row.append(l, v);
+  return row;
+}
+
+function projectCard(p) {
+  const el = document.createElement('div');
+  el.className = 'project-card';
+
+  const head = document.createElement('div');
+  head.className = 'project-head';
+  const title = document.createElement('div');
+  title.className = 'project-title';
+  title.textContent = p.title || p.file;
+  head.append(title, chip(p.status));
+
+  const meta = document.createElement('div');
+  meta.className = 'project-meta';
+  meta.textContent = [p.owner, p.updated, p.repos?.join(', ')].filter(Boolean).join(' · ');
+
+  el.append(head, meta, field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
+  return el;
+}
+
+async function loadProjects() {
+  try {
+    const projects = await (await fetch('/api/projects')).json();
+    const list = document.getElementById('projects');
+    list.replaceChildren(...projects.map(projectCard));
+  } catch { /* keep the last known state on a transient failure */ }
+}
+
+function showTab(tab) {
+  const isOrg = tab === 'org';
+  document.getElementById('tabOrg').classList.toggle('active', isOrg);
+  document.getElementById('tabProjects').classList.toggle('active', !isOrg);
+  document.getElementById('orgView').hidden = !isOrg;
+  document.getElementById('projectsView').hidden = isOrg;
+  if (!isOrg) loadProjects();
+}
+
+document.getElementById('tabOrg').addEventListener('click', () => showTab('org'));
+document.getElementById('tabProjects').addEventListener('click', () => showTab('projects'));
+
 (async () => {
   org = await (await fetch('/org.json')).json();
   render();
   await poll();
   setInterval(poll, 10000);
+  await loadProjects();
+  setInterval(loadProjects, 60000);
 })();
 </script>
 </body>
