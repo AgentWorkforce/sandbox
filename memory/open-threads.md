@@ -1,11 +1,9 @@
 # Open threads
 
-- **New department wanted (Will, 2026-07-29): market research / competitive
-  intel lead** — evaluate + keep tabs on interesting/competitor products Will
-  finds, cross-promo/partnership scouting, harvest ideas into our repos. Name
-  pending (leaning cso; "CRO" collides with revenue). Charter guard: outreach
-  stays in scout/cmo. Instruments that already exist: `competitor-deep-dive`
-  skill, hn-monitor, x-reply-radar.
+- **cso watchlist is empty (2026-07-29)** — the department is seated and the
+  officer online; it needs its first targets. Will finds candidate products
+  constantly: the habit to build is DM the link to cso (or to chief, who
+  forwards) the moment one surfaces.
 
 - **YC F26 decision due by 08-28** — applications submitted ~07-26 (YC on
   time, a16z Speedrun off-cycle for SR008). Watch for responses; see
