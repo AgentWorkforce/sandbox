@@ -133,3 +133,10 @@
   relayfile#378; single `--remote-path` / no `--local-layout` →
   relayfile#379. Watch for fixes; #379 unblocks multi-subtree senses mounts
   without one-workspace-per-mount.
+
+- **Khaliq's team joining the workspace (2026-07-30):** runbook ready at
+  `docs/onboarding-khaliq.md` (commands live-verified, sharp edges
+  #1378/#1386/#1388/#1393 documented — the #1393 `workspace switch` step
+  is load-bearing). Will's part: send Khaliq the file + workspace key via
+  a private channel; tell chief when his first seat boots so it joins the
+  chart + watchdog. First two-human workspace when it lands.
