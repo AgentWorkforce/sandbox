@@ -26,8 +26,7 @@ state: M0–M2 shipped; ~41 uncommitted changes on main (the headless pivot).
 **Next:** owner's bootstrap triage — inventory the 41 changes, recommend
 commit-to-branch / harvest / discard → DONE to cpo, which decides
 disposition and (with its marquee-vs-chief-app direction memo) the build
-plan. This resolves the former open-thread "chief-app: decide commit /
-harvest / archive".
+plan.
 
 ## History
 - 2026-07-29 — History-rewrite scare closed out: no action needed — no

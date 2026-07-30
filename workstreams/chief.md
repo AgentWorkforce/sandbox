@@ -21,16 +21,16 @@ resident relay agent — registered, posting to #general, DM-able.
 hosted relayfile (Gate 3 done; blocked on Will's OAuth, see below);
 (2) scheduled daily /digest: an interim launchd job already exists
 (`com.agentworkforce.chief.digest`, 17:30 daily, headless sonnet) — replace
-it with the relaycron message transport once that lands (decision 07-29:
-dogfood relaycron; the launchd job is the bridge, not the destination).
+it with the relaycron message transport once that lands (dogfood relaycron;
+the launchd job is the bridge, not the destination).
 
-**Senses leg is blocked on Will** (senses-mount worker report, 07-29): no
-Relayfile-backed workspace exists — chief-dev is messaging-only. Unblock is a
-~3-min browser task: `relayfile login --provision-messaging-only`, then
-`relayfile integration connect github|slack|notion`. Worker standing by to
-mount and verify. Scoping: senses belong to the consuming department,
-one relayfile workspace each
-(also the workaround for the one-mount-per-workspace limit). **Chief's
+**Senses leg is blocked on Will:** no Relayfile-backed workspace exists —
+chief-dev is messaging-only. Unblock is a ~3-min browser task: `relayfile
+login --provision-messaging-only`, then
+`relayfile integration connect github|slack|notion`. A worker stands by to
+mount and verify once unblocked. Scoping: senses belong to the consuming
+department, one relayfile workspace each (also the workaround for the
+one-mount-per-workspace limit). **Chief's
 mount = the GitHub org tree** (`/github/repos/AgentWorkforce`) for digest
 senses. **#research-market went to cso** — see [cso-research]. The
 multi-allowlist brief becomes a relayfile CLI issue (expose repeated

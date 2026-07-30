@@ -22,8 +22,7 @@ Feasibility spike dispatched: verify libghostty's current embedding story
 from primary sources, fallback table if immature, pane-rendering choice,
 v1 build plan → docs/architecture.md.
 
-**Next:** DEPRIORITIZED by Will (chief-app cockpit supersedes;
-"maybe marquee is useless… a lighter-weight version of it"). Policy: the
+**Next:** DEPRIORITIZED by Will — chief-app's cockpit supersedes it. Policy: the
 in-flight spike completes (ghostty-embedding answer feeds chief-app's
 grid), architecture.md lands via cpo, then the project parks and the
 resident stands down. cpo's direction memo may recommend harvesting the

@@ -1,64 +1,50 @@
 # Open threads
 
-- **Fleet liveness watchdog is live — v1 alert-only, tiered passive-first.**
-  T1 (every 10 min, zero-token): trips only when a resident has unread-stale
-  messages addressed to it AND lastSeen predates them (idle + empty inbox
-  never trips). T2: targeted ping-ACK to the suspect only. T3: alerts chief
-  with the evidence chain (kickstart still manual). Built after two resident
-  sessions went alive-but-unresponsive with green broker health and zero
-  pending deliveries (cmo ignored an urgent brief ~50 min; relay sat on
-  three unread orders ~75 min) — both were idle-sleeping, not spinning;
-  delivery had simply stopped waking the session. Durable fix candidate
-  filed with relay: broker-native session/responsiveness heartbeat surfaced
-  in `node agent list` + health, and "delivered but never processed" as a
-  first-class state in the wake-on-delivery design.
+- **Fleet liveness watchdog runs tiered and alert-only (v1).** T1 (every
+  10 min, zero-token): trips only when a resident has unread-stale messages
+  addressed to it AND lastSeen predates them (idle + empty inbox never
+  trips). T2: targeted ping-ACK to the suspect only. T3: alerts chief with
+  the evidence chain (kickstart still manual). Guards against residents
+  going alive-but-unresponsive with green broker health and zero pending
+  deliveries — delivery simply stops waking the session. Durable fix
+  (broker-native session/responsiveness heartbeat in `node agent list` +
+  health, and "delivered but never processed" as a first-class
+  wake-on-delivery state) is filed with relay, not yet built.
 
-- **SEV-1: broker restarts can come up deaf-but-green — the watchdog's
-  first catch.** 3 of 7 nodes restarting in one wave (burn, cloud, cpo) lost
-  hosted→broker inbound delivery entirely — messages visible in Relaycast,
-  0 pending at the broker, green health, idle PTYs, 2–4h deaf until the
-  watchdog's T3 sweep paged chief. Suspect: hosted delivery session/cursor
-  never re-binds to the restarted broker (relaycast delivery/cursor
-  territory); broker health claiming a live link it lacks is a second
-  defect. Sharpened 2026-07-30: **kickstarts do NOT durably cure it** (burn deaf
-  again immediately post-recovery; relay refroze after its 22:02Z restart
-  — restart roulette, some nodes rebind, some never do), and the likely
-  truth is **alive-but-deaf**, not frozen: reactive sessions with dead
-  inbound just idle forever. **Pull works while push is dead** — the
-  operational workaround is drive-attach nudges instructing sessions to
-  check_inbox and adopt a 15-min pull cadence. Filed: **relay#1386** + **#1387**
-  (session-liveness). **Confirmed 2026-07-30 by the nudge experiment:
-  alive-but-deaf is proven** — burn and cpo were healthy sessions on dead
-  push links; SDK-injected pull nudges restored both instantly (burn
-  drained + ACK'd; cpo draining 25 deep, oldest-first). Both now run
-  15-min pull cadences (session-scoped — lost on respawn until the
-  platform fix). **Standing rules: restart verification includes an
-  inbound-delivery proof (test DM → readers non-empty or
-  backlog-referencing outbound), and until the platform fix, revived
-  sessions run a pull cadence.**
+- **Broker restarts can leave nodes alive-but-deaf, not frozen.** Hosted→
+  broker inbound delivery can die on restart while everything looks healthy
+  — messages visible in Relaycast, 0 pending at the broker, green health,
+  idle PTYs; the session is alive but never gets woken. Kickstarts do not
+  durably cure it — a node can refreeze immediately after recovery; some
+  nodes rebind on restart, some never do. Suspected cause: hosted delivery's
+  session/cursor doesn't re-bind to the restarted broker (relaycast
+  delivery/cursor territory); broker health falsely reporting a live link is
+  a second defect. **Pull works while push is dead** — the confirmed
+  workaround is drive-attach nudges instructing sessions to check_inbox and
+  a 15-min pull cadence (session-scoped — lost on respawn until the
+  platform fix lands). Filed: **relay#1386** + **#1387** (session-liveness).
+  **Standing rules: restart verification requires an inbound-delivery proof
+  (test DM → non-empty readers or backlog-referencing outbound), and
+  revived sessions run a pull cadence until the platform fix.**
 
-- **relayauth D1 is at capacity — live prod condition.** Rolling brownout,
-  hard-stuck: the protected 14–90-day audit band grows monotonically, so GC
-  structurally cannot win (policy problem, not throughput). Ownership:
-  **Khaliq owns the durable fix** (the #2857 dormant-rebuild branch + #2847);
-  cloud stood down from implementing archive-to-R2 and now does
-  post-analysis on #2857 for Khaliq, assessing whether the dormant rebuild
-  solves the capacity math. relayauth#70 (merged, 6c339af) types the
-  capacity error but is inert in prod until cloud's D1 adapter translates it
-  into the exported `StorageCapacityExhaustedError` (small required cloud
-  PR, rides the same release+pin train). Cloud queue PRs
-  #2864/#2865/#2869 are green-lit on green CI. Emergency bounded sweep is
-  pre-authorized contingent on CF creds (GC-mode check first; comment
+- **relayauth D1 is at capacity — live prod condition, structurally
+  unwinnable by GC alone.** The protected 14–90-day audit band grows
+  monotonically, so garbage collection can't keep pace (a policy problem,
+  not a throughput one). **Khaliq owns the durable fix** (the #2857
+  dormant-rebuild branch + #2847); cloud stood down from implementing its
+  own archive-to-R2 and does post-analysis on #2857 for Khaliq instead.
+  relayauth#70 (merged) types the capacity error but stays inert in prod
+  until cloud's D1 adapter exports `StorageCapacityExhaustedError` (a small
+  cloud PR riding the same release train). Cloud's queued PRs
+  (#2864/#2865/#2869) are green-lit on green CI. An emergency bounded sweep
+  is pre-authorized contingent on CF creds (GC-mode check first; comment
   intent on #2857 before executing). **Blocker on Will: all Cloudflare
-  creds on this machine are dead** (env + .env tokens rejected, wrangler
-  OAuth invalid) — `wrangler login` re-auth needed for telemetry +
-  mitigation; PostHog MCP OAuth optional second. Will's relayfile retries
-  flap on the 5-min GC windows until mitigated. Branch
-  `agent/2857-relayauth-d1-rebuild-dormant` took 7 rapid "fix(relayauth)"
-  commits from two bot identities (kjgbot, Miya) over one overnight window —
-  reads like a CI gate failing repeatedly rather than steady progress; check
-  PR/CI status before assuming it lands on its own. See [learnings] for the
-  capacity rule.
+  creds on this machine are dead** — `wrangler login` needs re-auth for
+  telemetry and mitigation (PostHog MCP OAuth is a secondary, optional
+  fix). Until mitigated, Will's relayfile retries flap on the 5-min GC
+  windows. Branch `agent/2857-relayauth-d1-rebuild-dormant` gets frequent
+  bot commits (kjgbot, Miya) — check PR/CI status rather than assuming it's
+  converging on its own. See [learnings] for the capacity rule.
 
 - **Principal senses: email + Granola.** Chief gets read-only access to
   Will's email and Granola (meeting recaps + self-notes). Email path:
