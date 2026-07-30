@@ -53,6 +53,8 @@ workstream.
   non-OSS-core side projects — notesnumber (inside `../ladd`) and
   hoopsheet (`~/Projects/hoopsheet`, outside the AgentWorkforce tree).
   File-ownership partition in the cpo repo: `direction/` = cpo alone;
-  `ecosystem/` and `experiments/` = each head alone). Chief dispatches to
-  department leads; chief's own subagents cover only what has no
-  department yet.
+  `ecosystem/` and `experiments/` = each head alone. The **relay core
+  product seat is "Relay Product Owner" under head-of-ecosystem** (Will,
+  2026-07-29 — moved from chief-direct; cloud remains chief-direct
+  through the teardown). Chief dispatches to department leads; chief's
+  own subagents cover only what has no department yet.
