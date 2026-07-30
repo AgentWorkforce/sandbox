@@ -81,6 +81,13 @@
       "status": "resident"
     },
     {
+      "name": "relayfile",
+      "title": "Relayfile (senses layer)",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/relayfile",
+      "status": "resident"
+    },
+    {
       "name": "relaycron-cloud",
       "title": "relaycron-cloud (migration)",
       "reportsTo": "head-of-ecosystem",
