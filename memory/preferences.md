@@ -60,6 +60,21 @@ session; don't restate it. Chief-specific emphases:
   renders the queue with approve/reject that relay back to chief as DMs;
   chief executes verdicts and marks items cleared. Chat summaries point
   at the queue — they are never the only copy.
+- **No production access for agents (Will, 2026-07-30):** no agent or
+  agent-held credential touches production directly — no wrangler auth,
+  no prod DB queries, no live-infra mutation from sessions. Everything
+  reaches production via reviewed PRs deploying through CI, or via a
+  human (Will/Khaliq) executing a prepared runbook. Read-only prod
+  telemetry access is case-by-case via Will.
+- **Two-plus reviews before main (Will, 2026-07-30):** nothing merges to
+  any repo's main without at least two recorded reviews — the author's
+  own adversarial pass doesn't count; one may be a review bot
+  (CodeRabbit), at least one must be an agent other than the author,
+  documented on the PR. Gates stack on top, they don't substitute.
+  Structural gap: agents share one gh identity, so GitHub-enforced
+  required-reviews can't distinguish them — process-enforced until
+  distinct reviewer identities exist (kjgbot/Miya precedent in cloud;
+  follow-up with Will).
 - **Relay keys are low-sensitivity by design (Will, 2026-07-30):**
   workspace keys/agent tokens exposed in transcripts are not incidents —
   "fairly benign; we'll spin up new workspaces every once in a while."
