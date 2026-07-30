@@ -23,9 +23,21 @@
   workaround is drive-attach nudges instructing sessions to check_inbox and
   a 15-min pull cadence (session-scoped — lost on respawn until the
   platform fix lands). Filed: **relay#1386** + **#1387** (session-liveness).
-  **Standing rules: restart verification requires an inbound-delivery proof
-  (test DM → non-empty readers or backlog-referencing outbound), and
-  revived sessions run a pull cadence until the platform fix.**
+  **ROOT-CAUSED 2026-07-30 — deterministic repro (36/36), four composing
+  defects, posted on #1386:** dead sockets never superseded (NodeDO); the
+  new broker's one-shot node.register swallows a 409
+  provider_instance_conflict (35s liveness window = the restart
+  roulette); **permanent agent-row poisoning** (provider_name='default' —
+  why kickstarts never cured burn; prod may hold poisoned rows needing a
+  DATA repair, not just code); hosted cursor negotiation silently
+  unimplemented. Owner: Relay Product Owner, RFC-first, after the release
+  package. The repro also found **--workspace-key not honored** (cloud
+  session follow-user scope silently re-homes brokers to prod) — filed
+  separately as a prod-safety bug.
+  **Standing rules: restart verification requires an inbound-delivery
+  proof (test DM → non-empty readers or backlog-referencing outbound);
+  the 15-min pull cadences are RETIRED (token furnace) — watchdog-
+  triggered nudges are the workaround until the fix.**
 
 - **relayauth D1 is at capacity — live prod condition, structurally
   unwinnable by GC alone.** The protected 14–90-day audit band grows
