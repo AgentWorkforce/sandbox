@@ -1,23 +1,133 @@
 {
-  "principal": {"name": "Will"},
+  "principal": {
+    "name": "Will"
+  },
   "agents": [
-    {"name":"chief","title":"Chief of Staff","reportsTo":"Will","repo":"/Users/will/Projects/AgentWorkforce/chief","status":"resident"},
-    {"name":"cmo","title":"CMO — GTM dept","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cmo","status":"resident"},
-    {"name":"scout","title":"Relay Scout (CRM)","reportsTo":"cmo","repo":"/Users/will/Projects/AgentWorkforce/scout","status":"resident"},
-    {"name":"agentrelay-com","title":"agentrelay.com + content pipeline","reportsTo":"cmo","repo":"/Users/will/Projects/AgentWorkforce/agentrelay.com","status":"resident"},
-    {"name":"coo","title":"COO — biz ops","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/coo","status":"unseated"},
-    {"name":"cso","title":"CSO — research & competitive intel","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cso","status":"resident"},
-    {"name":"cpo","title":"CPO — product","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cpo","status":"resident"},
-    {"name":"head-of-ecosystem","title":"Head of AR Ecosystem","reportsTo":"cpo","repo":"/Users/will/Projects/AgentWorkforce/cpo","status":"resident"},
-    {"name":"head-of-experiments","title":"Head of Experiments","reportsTo":"cpo","repo":"/Users/will/Projects/AgentWorkforce/cpo","status":"resident"},
-    {"name":"chief-app","title":"chief-app (org cockpit)","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/chief-app","status":"resident"},
-    {"name":"burn","title":"burn + software factory","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/burn","status":"resident"},
-    {"name":"relaycron-cloud","title":"relaycron-cloud (migration)","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/relaycron-cloud","status":"resident"},
-    {"name":"mobile","title":"Agent Relay Mobile","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/mobile","status":"resident"},
-    {"name":"marquee","title":"marquee (parked)","reportsTo":"head-of-ecosystem","repo":"/Users/will/Projects/AgentWorkforce/marquee","status":"parked"},
-    {"name":"notesnumber","title":"notesnumber (in ladd)","reportsTo":"head-of-experiments","repo":"/Users/will/Projects/AgentWorkforce/ladd","status":"unseated"},
-    {"name":"hoopsheet","title":"hoopsheet","reportsTo":"head-of-experiments","repo":"/Users/will/Projects/hoopsheet","status":"unseated"},
-    {"name":"relay","title":"relay (core product)","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/relay","status":"resident"},
-    {"name":"cloud","title":"cloud (teardown)","reportsTo":"chief","repo":"/Users/will/Projects/AgentWorkforce/cloud","status":"resident"}
+    {
+      "name": "chief",
+      "title": "Chief of Staff",
+      "reportsTo": "Will",
+      "repo": "/Users/will/Projects/AgentWorkforce/chief",
+      "status": "resident"
+    },
+    {
+      "name": "cmo",
+      "title": "CMO \u2014 GTM dept",
+      "reportsTo": "chief",
+      "repo": "/Users/will/Projects/AgentWorkforce/cmo",
+      "status": "resident"
+    },
+    {
+      "name": "scout",
+      "title": "Relay Scout (CRM)",
+      "reportsTo": "cmo",
+      "repo": "/Users/will/Projects/AgentWorkforce/scout",
+      "status": "resident"
+    },
+    {
+      "name": "agentrelay-com",
+      "title": "agentrelay.com + content pipeline",
+      "reportsTo": "cmo",
+      "repo": "/Users/will/Projects/AgentWorkforce/agentrelay.com",
+      "status": "resident"
+    },
+    {
+      "name": "coo",
+      "title": "COO \u2014 biz ops",
+      "reportsTo": "chief",
+      "repo": "/Users/will/Projects/AgentWorkforce/coo",
+      "status": "unseated"
+    },
+    {
+      "name": "cso",
+      "title": "CSO \u2014 research & competitive intel",
+      "reportsTo": "chief",
+      "repo": "/Users/will/Projects/AgentWorkforce/cso",
+      "status": "resident"
+    },
+    {
+      "name": "cpo",
+      "title": "CPO \u2014 product",
+      "reportsTo": "chief",
+      "repo": "/Users/will/Projects/AgentWorkforce/cpo",
+      "status": "resident"
+    },
+    {
+      "name": "head-of-ecosystem",
+      "title": "Head of AR Ecosystem",
+      "reportsTo": "cpo",
+      "repo": "/Users/will/Projects/AgentWorkforce/cpo",
+      "status": "resident"
+    },
+    {
+      "name": "head-of-experiments",
+      "title": "Head of Experiments",
+      "reportsTo": "cpo",
+      "repo": "/Users/will/Projects/AgentWorkforce/cpo",
+      "status": "resident"
+    },
+    {
+      "name": "chief-app",
+      "title": "chief-app (org cockpit)",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/chief-app",
+      "status": "resident"
+    },
+    {
+      "name": "burn",
+      "title": "burn + software factory",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/burn",
+      "status": "resident"
+    },
+    {
+      "name": "relaycron-cloud",
+      "title": "relaycron-cloud (migration)",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/relaycron-cloud",
+      "status": "resident"
+    },
+    {
+      "name": "mobile",
+      "title": "Agent Relay Mobile",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/mobile",
+      "status": "resident"
+    },
+    {
+      "name": "marquee",
+      "title": "marquee (parked)",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/marquee",
+      "status": "parked"
+    },
+    {
+      "name": "notesnumber",
+      "title": "notesnumber (in ladd)",
+      "reportsTo": "head-of-experiments",
+      "repo": "/Users/will/Projects/AgentWorkforce/ladd",
+      "status": "unseated"
+    },
+    {
+      "name": "hoopsheet",
+      "title": "hoopsheet",
+      "reportsTo": "head-of-experiments",
+      "repo": "/Users/will/Projects/hoopsheet",
+      "status": "unseated"
+    },
+    {
+      "name": "relay",
+      "title": "Relay Product Owner",
+      "reportsTo": "head-of-ecosystem",
+      "repo": "/Users/will/Projects/AgentWorkforce/relay",
+      "status": "resident"
+    },
+    {
+      "name": "cloud",
+      "title": "cloud (teardown)",
+      "reportsTo": "chief",
+      "repo": "/Users/will/Projects/AgentWorkforce/cloud",
+      "status": "resident"
+    }
   ]
 }
