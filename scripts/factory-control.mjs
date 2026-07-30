@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   activeWorkspace,
   cloudRequest,
@@ -510,6 +512,94 @@ async function promoteExistingIssue(issueKey, repoNames, recipe) {
   }, null, 2));
 }
 
+async function createFactoryTaskFromSpec(specPath) {
+  const spec = JSON.parse(readFileSync(resolve(specPath), "utf8"));
+  if (!spec?.idempotencyKey || !spec?.title || !spec?.description) {
+    throw new Error(
+      "Factory task spec requires idempotencyKey, title, and description",
+    );
+  }
+  if (!Array.isArray(spec.repos) || spec.repos.length === 0) {
+    throw new Error("Factory task spec requires at least one repository label");
+  }
+  const recipe = spec.recipe ?? config.work.factory.defaultRecipe;
+  if (!["single", "workflow", "team"].includes(recipe)) {
+    throw new Error(`Unsupported Factory recipe ${recipe}`);
+  }
+
+  const { team, state, readinessLabel, deployment } = await bootstrap();
+  const routeLabels = [];
+  for (const repoName of spec.repos) {
+    const label = await findLabel([repoName]);
+    if (!label?.id) {
+      throw new Error(`Linear repository label ${repoName} was not found`);
+    }
+    routeLabels.push(label);
+  }
+  const recipeLabelName = config.work.factory.recipeLabels[recipe];
+  const recipeLabel = recipeLabelName
+    ? await findLabel([recipeLabelName])
+    : null;
+  if (recipeLabelName && !recipeLabel?.id) {
+    throw new Error(`Linear recipe label ${recipeLabelName} was not found`);
+  }
+
+  const title = spec.title.toLowerCase().startsWith(
+    config.work.factory.titlePrefix.toLowerCase(),
+  )
+    ? spec.title
+    : `${config.work.factory.titlePrefix} ${spec.title}`;
+  const existingIssues = await readRemoteJson("/linear/issues/_index.json");
+  const existing = existingIssues.find((issue) => issue.title === title);
+  if (existing) {
+    console.log(JSON.stringify({
+      created: false,
+      reason: "already_exists",
+      issue: existing,
+    }, null, 2));
+    return;
+  }
+
+  const draftPath =
+    `/linear/issues/factory-create-${aliasSlug(spec.idempotencyKey)}.json`;
+  const existingReceipt = createReceipt(
+    await readRemoteJson(draftPath, { allowNotFound: true }),
+  );
+  if (existingReceipt) {
+    console.log(JSON.stringify({
+      created: false,
+      reason: "receipt_exists",
+      issue: existingReceipt,
+    }, null, 2));
+    return;
+  }
+
+  await writeCreateDraft(draftPath, {
+    teamId: team.id,
+    title,
+    description: spec.description,
+    priority: spec.priority ?? 2,
+    stateId: state.id,
+    labelIds: [
+      readinessLabel.id,
+      ...routeLabels.map((label) => label.id),
+      ...(recipeLabel ? [recipeLabel.id] : []),
+    ],
+  });
+  const receipt = await waitForCreateReceipt(draftPath);
+  console.log(JSON.stringify({
+    created: true,
+    issue: receipt,
+    repos: spec.repos,
+    recipe,
+    deployment: {
+      agentId: deployment.agentId,
+      name: deployment.deployedName,
+    },
+    mergePolicy: config.work.factory.mergePolicy,
+  }, null, 2));
+}
+
 try {
   if (command === "bootstrap") {
     await bootstrap();
@@ -534,11 +624,20 @@ try {
       throw new Error(`Unsupported Factory recipe ${recipe}`);
     }
     await promoteExistingIssue(issueKey, repoNames, recipe);
+  } else if (command === "create-task") {
+    const specPath = process.argv[3];
+    if (!specPath) {
+      throw new Error(
+        "Usage: node scripts/factory-control.mjs create-task <task-spec.json>",
+      );
+    }
+    await createFactoryTaskFromSpec(specPath);
   } else {
     throw new Error(
       "Usage: node scripts/factory-control.mjs " +
       "bootstrap|status|dispatch-workspace-task|" +
-      "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]",
+      "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]|" +
+      "create-task <task-spec.json>",
     );
   }
 } catch (error) {

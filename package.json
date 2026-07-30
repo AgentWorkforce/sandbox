@@ -10,6 +10,7 @@
     "factory:status": "node scripts/factory-control.mjs status",
     "factory:first-task": "node scripts/factory-control.mjs dispatch-workspace-task",
     "factory:promote": "node scripts/factory-control.mjs promote-issue",
+    "factory:create": "node scripts/factory-control.mjs create-task",
     "senses": "node scripts/chief-senses.mjs run",
     "senses:probe": "node scripts/chief-senses.mjs probe",
     "senses:once": "node scripts/chief-senses.mjs once",

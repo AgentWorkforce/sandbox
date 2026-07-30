@@ -89,11 +89,13 @@ Relayfile writeback path used by Chief:
 ```bash
 npm run factory:promote -- AR-445 relay single
 npm run factory:promote -- AR-449 cloud,relay team
+npm run factory:create -- factory-tasks/cloud-2872-workflow-schedule-lifecycle.json
 ```
 
 The command adds missing readiness, route, and recipe labels, prefixes the
 title, moves the issue to `Ready for Agent`, waits for the provider-backed
-mount to converge, and is idempotent on rerun.
+mount to converge, and is idempotent on rerun. Declarative task specs use the
+same checks and make cross-repository team work auditable before dispatch.
 
 ## Layout
 
