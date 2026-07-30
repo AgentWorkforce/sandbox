@@ -140,19 +140,45 @@
     vertical-align: middle;
   }
 
-  .projects-toolbar { display: flex; justify-content: flex-end; margin: 0 0 10px; }
-  .sort-toggle {
+  .projects-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 8px 12px; margin: 0 0 14px;
+  }
+  .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .search-box { position: relative; display: flex; align-items: center; }
+  .search-box input {
+    font: inherit; font-size: 13px;
+    padding: 6px 26px 6px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    width: 200px;
+  }
+  .search-box input:focus { outline: none; border-color: var(--accent); }
+  .search-clear {
+    position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+    font: inherit; font-size: 15px; line-height: 1; padding: 3px 6px;
+    border: none; background: transparent; color: var(--muted); cursor: pointer; border-radius: 5px;
+  }
+  .search-clear:hover { color: var(--ink); }
+
+  .show-finished-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .show-finished-toggle input { cursor: pointer; }
+
+  .sort-toggle, .view-toggle {
     display: inline-flex; border: 1px solid var(--line); border-radius: 7px;
     overflow: hidden;
   }
-  button.sort-btn {
+  button.sort-btn, button.view-btn {
     font: inherit; font-size: 12px; font-weight: 560;
     padding: 5px 12px; border: none; background: transparent; color: var(--muted);
     cursor: pointer;
   }
-  button.sort-btn + button.sort-btn { border-left: 1px solid var(--line); }
-  button.sort-btn:hover { color: var(--ink); }
-  button.sort-btn.active {
+  button.sort-btn + button.sort-btn, button.view-btn + button.view-btn { border-left: 1px solid var(--line); }
+  button.sort-btn:hover, button.view-btn:hover { color: var(--ink); }
+  button.sort-btn.active, button.view-btn.active {
     color: var(--ink); background: color-mix(in srgb, var(--accent) 14%, transparent);
   }
 
@@ -176,6 +202,7 @@
     border-color: var(--accent);
     outline: none;
   }
+  .project-card-mini.done { opacity: .55; }
   .project-mini-head {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-bottom: 6px;
@@ -200,6 +227,32 @@
     margin-top: 5px; font-size: 11px; color: var(--muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+
+  .table-scroll { overflow-x: auto; }
+  .projects-table {
+    width: 100%; border-collapse: collapse; min-width: 640px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    box-shadow: var(--shadow); font-size: 12.5px;
+  }
+  .projects-table th, .projects-table td {
+    padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  .projects-table th {
+    font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em;
+    color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .projects-table th:hover { color: var(--ink); }
+  .projects-table th .sort-arrow { color: var(--accent); margin-left: 3px; }
+  .projects-table tbody tr { cursor: pointer; }
+  .projects-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .projects-table tbody tr:last-child td { border-bottom: none; }
+  .projects-table tr.done-row { opacity: .55; }
+  .projects-table td.col-label { font-weight: 600; white-space: nowrap; }
+  .projects-table td.col-tldr {
+    max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .projects-table .table-empty td { color: var(--muted); text-align: center; padding: 18px 12px; }
 
   .back-link {
     display: inline-flex; align-items: center; gap: 4px;
@@ -350,12 +403,30 @@
 
   <section id="projectsView" hidden>
     <div class="projects-toolbar" id="projectsToolbar">
-      <div class="sort-toggle" role="group" aria-label="Sort projects">
-        <button class="sort-btn active" id="sortActivity" type="button">Activity</button>
-        <button class="sort-btn" id="sortAZ" type="button">A–Z</button>
+      <div class="toolbar-left">
+        <div class="search-box">
+          <input type="text" id="projectSearch" placeholder="Search projects…" autocomplete="off" spellcheck="false">
+          <button type="button" id="projectSearchClear" class="search-clear" hidden aria-label="Clear search">×</button>
+        </div>
+        <label class="show-finished-toggle">
+          <input type="checkbox" id="showFinished"> Show finished
+        </label>
+      </div>
+      <div class="toolbar-right">
+        <div class="sort-toggle" id="cardSortToggle" role="group" aria-label="Sort projects">
+          <button class="sort-btn active" id="sortActivity" type="button">Activity</button>
+          <button class="sort-btn" id="sortAZ" type="button">A–Z</button>
+        </div>
+        <div class="view-toggle" role="group" aria-label="Projects view">
+          <button class="view-btn active" id="viewCards" type="button">Cards</button>
+          <button class="view-btn" id="viewTable" type="button">Table</button>
+        </div>
       </div>
     </div>
     <div class="projects-grid" id="projects"></div>
+    <div class="table-scroll" id="projectsTableWrap" hidden>
+      <table class="projects-table" id="projectsTable"></table>
+    </div>
   </section>
 
   <section id="reviewView" hidden>
@@ -650,7 +721,7 @@ function cardLabel(p) {
 
 function miniCard(p) {
   const el = document.createElement('div');
-  el.className = 'project-card-mini';
+  el.className = p.status === 'done' ? 'project-card-mini done' : 'project-card-mini';
   el.tabIndex = 0;
   el.setAttribute('role', 'button');
   const fullTitle = p.title || p.file;
@@ -763,6 +834,45 @@ const SORT_MODES = new Set(['activity', 'az']);
 let projectSort = localStorage.getItem(SORT_STORAGE_KEY);
 if (!SORT_MODES.has(projectSort)) projectSort = 'activity';
 
+// Cards vs Table, persisted across sessions. Independent of projectSort,
+// which only governs the Cards grid — the Table has its own per-column sort.
+const VIEW_STORAGE_KEY = 'orgchart.projectView';
+const VIEW_MODES = new Set(['cards', 'table']);
+let projectView = localStorage.getItem(VIEW_STORAGE_KEY);
+if (!VIEW_MODES.has(projectView)) projectView = 'cards';
+
+// "Show finished" checkbox, persisted across sessions. Default unchecked:
+// done projects (e.g. a wound-down donor project) stay out of the way until
+// asked for.
+const SHOW_FINISHED_KEY = 'orgchart.showFinished';
+let showFinished = localStorage.getItem(SHOW_FINISHED_KEY) === 'true';
+
+// Live text filter, not persisted — a search is a one-off narrowing of the
+// current session, not a standing preference.
+let projectSearchQuery = '';
+
+function projectSearchText(p) {
+  return [
+    cardLabel(p),
+    p.title,
+    p.tldr,
+    p.owner,
+    ...(p.agents ?? []).map((a) => a.name),
+    ...(p.repos ?? []),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+// Shared by both views: hides done projects unless revealed, then narrows by
+// the search query. Always returns a fresh array so callers can sort in
+// place without mutating projectsCache.
+function filteredProjects() {
+  let list = [...projectsCache];
+  if (!showFinished) list = list.filter((p) => p.status !== 'done');
+  const query = projectSearchQuery.trim().toLowerCase();
+  if (query) list = list.filter((p) => projectSearchText(p).includes(query));
+  return list;
+}
+
 // Most recent of the workstream's latest commit and its latest journal-style
 // update; -Infinity for projects with neither, so they sink to the bottom.
 function activityEpoch(p) {
@@ -789,7 +899,7 @@ function updatedStamp(p) {
 }
 
 function sortedProjects() {
-  const list = [...projectsCache];
+  const list = filteredProjects();
   if (projectSort === 'az') {
     list.sort((a, b) => cardLabel(a).localeCompare(cardLabel(b)));
   } else {
@@ -811,22 +921,181 @@ function setProjectSort(mode) {
   renderProjects();
 }
 
+function updateViewButtons() {
+  document.getElementById('viewCards').classList.toggle('active', projectView === 'cards');
+  document.getElementById('viewTable').classList.toggle('active', projectView === 'table');
+}
+
+function setProjectView(mode) {
+  if (mode === projectView) return;
+  projectView = mode;
+  localStorage.setItem(VIEW_STORAGE_KEY, mode);
+  updateViewButtons();
+  renderProjects();
+}
+
+// Table columns: key -> { label, type, get }. `type` drives the comparator
+// (string columns sort lexicographically, number columns numerically) and
+// the default direction on first click of a column (numbers start high-to-
+// low — most recent / most active first — strings start A–Z).
+const TABLE_COLUMNS = {
+  label: { label: 'Label', type: 'string', get: (p) => cardLabel(p) },
+  status: { label: 'Status', type: 'string', get: (p) => p.status || '' },
+  updated: { label: 'Updated', type: 'number', get: (p) => activityEpoch(p) },
+  commits24h: { label: '24h Commits', type: 'number', get: (p) => p.commits24h ?? 0 },
+  owner: { label: 'Owner', type: 'string', get: (p) => p.owner || '' },
+  agents: { label: 'Agents', type: 'string', get: (p) => (p.agents ?? []).map((a) => a.name).join(', ') },
+  tldr: { label: 'Tldr', type: 'string', get: (p) => p.tldr || '' },
+};
+
+// Table sort state — independent of projectSort (the Cards Activity/A-Z
+// toggle). Not persisted: a fresh Table view starts on the same default
+// every time, same as it always has for Cards' initial 'activity' mode.
+let tableSort = { key: 'updated', dir: 'desc' };
+
+function setTableSort(key) {
+  if (tableSort.key === key) {
+    tableSort.dir = tableSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    tableSort.key = key;
+    tableSort.dir = TABLE_COLUMNS[key].type === 'number' ? 'desc' : 'asc';
+  }
+  renderProjectsTable();
+}
+
+function sortForTable(list) {
+  const col = TABLE_COLUMNS[tableSort.key];
+  const dir = tableSort.dir === 'asc' ? 1 : -1;
+  return [...list].sort((a, b) => {
+    const av = col.get(a);
+    const bv = col.get(b);
+    if (col.type === 'number') return (av - bv) * dir;
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+}
+
+// Mirrors updatedAgoText's underlying value (activityEpoch) but as a bare
+// "3h ago" cell rather than the card stamp's "updated 3h ago" phrasing.
+function agoCell(p) {
+  const epoch = activityEpoch(p);
+  return Number.isFinite(epoch) ? `${humanizeAgo(epoch)} ago` : '—';
+}
+
+function tableHeaderRow() {
+  const tr = document.createElement('tr');
+  for (const [key, col] of Object.entries(TABLE_COLUMNS)) {
+    const th = document.createElement('th');
+    th.tabIndex = 0;
+    th.dataset.key = key;
+    if (key === 'commits24h') th.title = 'Commits in the last 24h';
+    const label = document.createElement('span');
+    label.textContent = col.label;
+    th.append(label);
+    if (tableSort.key === key) {
+      const arrow = document.createElement('span');
+      arrow.className = 'sort-arrow';
+      arrow.textContent = tableSort.dir === 'asc' ? '▲' : '▼';
+      th.append(arrow);
+    }
+    const activate = () => setTableSort(key);
+    th.addEventListener('click', activate);
+    th.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+    });
+    tr.append(th);
+  }
+  return tr;
+}
+
+function tableRow(p) {
+  const tr = document.createElement('tr');
+  tr.tabIndex = 0;
+  if (p.status === 'done') tr.classList.add('done-row');
+
+  const tdLabel = document.createElement('td');
+  tdLabel.className = 'col-label';
+  tdLabel.textContent = cardLabel(p);
+  tdLabel.title = p.title || p.file;
+
+  const tdStatus = document.createElement('td');
+  tdStatus.append(chip(p.status));
+
+  const tdUpdated = document.createElement('td');
+  tdUpdated.textContent = agoCell(p);
+
+  const tdCommits = document.createElement('td');
+  tdCommits.textContent = String(p.commits24h ?? 0);
+
+  const tdOwner = document.createElement('td');
+  tdOwner.textContent = p.owner || '—';
+
+  const tdAgents = document.createElement('td');
+  tdAgents.textContent = p.agents?.length ? p.agents.map((a) => a.name).join(', ') : '—';
+
+  const tdTldr = document.createElement('td');
+  tdTldr.className = 'col-tldr';
+  tdTldr.textContent = p.tldr || '—';
+  tdTldr.title = p.tldr || '';
+
+  tr.append(tdLabel, tdStatus, tdUpdated, tdCommits, tdOwner, tdAgents, tdTldr);
+  const open = () => selectProject(p.file);
+  tr.addEventListener('click', open);
+  tr.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); open(); }
+  });
+  return tr;
+}
+
+function renderProjectsTable() {
+  const table = document.getElementById('projectsTable');
+  const thead = document.createElement('thead');
+  thead.append(tableHeaderRow());
+
+  const tbody = document.createElement('tbody');
+  const rows = sortForTable(filteredProjects());
+  if (rows.length) {
+    for (const p of rows) tbody.append(tableRow(p));
+  } else {
+    const tr = document.createElement('tr');
+    tr.className = 'table-empty';
+    const td = document.createElement('td');
+    td.colSpan = Object.keys(TABLE_COLUMNS).length;
+    td.textContent = 'No projects match.';
+    tr.append(td);
+    tbody.append(tr);
+  }
+  table.replaceChildren(thead, tbody);
+}
+
 function renderProjects() {
-  const list = document.getElementById('projects');
+  const grid = document.getElementById('projects');
+  const tableWrap = document.getElementById('projectsTableWrap');
   const toolbar = document.getElementById('projectsToolbar');
+  const cardSortToggle = document.getElementById('cardSortToggle');
   if (selectedProject && !projectsCache.some((p) => p.file === selectedProject)) {
     selectedProject = null; // the selected project vanished from disk
   }
   if (selectedProject) {
     toolbar.hidden = true;
+    tableWrap.hidden = true;
+    grid.hidden = false;
     const p = projectsCache.find((x) => x.file === selectedProject);
-    list.className = 'projects-detail';
-    list.replaceChildren(detailCard(p));
+    grid.className = 'projects-detail';
+    grid.replaceChildren(detailCard(p));
     return;
   }
   toolbar.hidden = false;
-  list.className = 'projects-grid';
-  list.replaceChildren(...sortedProjects().map(miniCard));
+  cardSortToggle.hidden = projectView !== 'cards';
+  if (projectView === 'table') {
+    grid.hidden = true;
+    tableWrap.hidden = false;
+    renderProjectsTable();
+  } else {
+    tableWrap.hidden = true;
+    grid.hidden = false;
+    grid.className = 'projects-grid';
+    grid.replaceChildren(...sortedProjects().map(miniCard));
+  }
 }
 
 function selectProject(file) {
@@ -972,6 +1241,38 @@ document.getElementById('tabReview').addEventListener('click', () => showTab('re
 document.getElementById('sortActivity').addEventListener('click', () => setProjectSort('activity'));
 document.getElementById('sortAZ').addEventListener('click', () => setProjectSort('az'));
 updateSortButtons();
+
+document.getElementById('viewCards').addEventListener('click', () => setProjectView('cards'));
+document.getElementById('viewTable').addEventListener('click', () => setProjectView('table'));
+updateViewButtons();
+
+const showFinishedBox = document.getElementById('showFinished');
+showFinishedBox.checked = showFinished;
+showFinishedBox.addEventListener('change', () => {
+  showFinished = showFinishedBox.checked;
+  localStorage.setItem(SHOW_FINISHED_KEY, String(showFinished));
+  renderProjects();
+});
+
+const projectSearchInput = document.getElementById('projectSearch');
+const projectSearchClear = document.getElementById('projectSearchClear');
+
+function clearProjectSearch() {
+  projectSearchQuery = '';
+  projectSearchInput.value = '';
+  projectSearchClear.hidden = true;
+  renderProjects();
+}
+
+projectSearchInput.addEventListener('input', (e) => {
+  projectSearchQuery = e.target.value;
+  projectSearchClear.hidden = !projectSearchQuery;
+  renderProjects();
+});
+projectSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); clearProjectSearch(); }
+});
+projectSearchClear.addEventListener('click', () => { clearProjectSearch(); projectSearchInput.focus(); });
 
 (async () => {
   org = await (await fetch('/org.json')).json();
