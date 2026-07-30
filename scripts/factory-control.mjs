@@ -14,10 +14,21 @@ import {
 
 const command = process.argv[2] ?? "status";
 const config = loadConfig();
-const workspace = activeWorkspace(config, { switchIfNeeded: true });
-const mount = await resolveFactoryMount();
-const relayfileBase = mount.relayfileBaseUrl.replace(/\/+$/u, "");
-const relayfileWorkspace = workspace.relayfileWorkspaceId;
+// Resolved by `connect()` inside the try below, not at module load: a failure
+// to reach the workspace or mint a mount session is an operational error that
+// belongs in the same friendly handler as everything else, not an unhandled
+// rejection printed as a Node stack trace.
+let workspace;
+let mount;
+let relayfileBase;
+let relayfileWorkspace;
+
+async function connect() {
+  workspace = activeWorkspace(config, { switchIfNeeded: true });
+  mount = await resolveFactoryMount();
+  relayfileBase = mount.relayfileBaseUrl.replace(/\/+$/u, "");
+  relayfileWorkspace = workspace.relayfileWorkspaceId;
+}
 
 async function resolveFactoryMount() {
   const cachePath = resolve(
@@ -663,14 +674,116 @@ async function createFactoryTaskFromSpec(specPath) {
   }, null, 2));
 }
 
-try {
-  if (command === "bootstrap") {
-    await bootstrap();
-  } else if (command === "status") {
-    await status();
-  } else if (command === "dispatch-workspace-task") {
-    await createWorkspaceConvergenceTask();
-  } else if (command === "promote-issue") {
+async function readCommentBody(source) {
+  if (source === "-") {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  return readFileSync(resolve(source), "utf8");
+}
+
+/**
+ * Ask the mount which field carries a comment's text. The adapter advertises a
+ * create example per writable resource; reading it beats hard-coding a guess
+ * that silently posts an empty comment if the contract ever moves.
+ */
+async function resolveCommentBodyField(issueId) {
+  const candidates = [
+    `/discovery/linear/issues/${issueId}/comments/.create.example.json`,
+    `discovery/linear/issues/${issueId}/comments/.create.example.json`,
+  ];
+  for (const path of candidates) {
+    const example = await readRemoteJson(path, { allowNotFound: true });
+    const record = example?.payload ?? example;
+    if (!record || typeof record !== "object") continue;
+    const field = ["body", "content", "bodyData"].find((name) =>
+      Object.hasOwn(record, name)
+    );
+    if (field) return field;
+  }
+  // The documented default. A wrong guess here fails loudly at the provider
+  // rather than posting a blank comment.
+  return "body";
+}
+
+async function commentOnIssue(issueKey, body, idempotencyKey) {
+  const value = await readRemoteJson(
+    `/linear/issues/by-id/${issueKey}.json`,
+    { allowNotFound: true },
+  );
+  const issue = value?.payload ?? value;
+  if (!issue?.id) {
+    throw new Error(`Linear issue ${issueKey} was not found`);
+  }
+
+  // Default the idempotency key to the body's digest so a retried checkpoint
+  // reuses its draft instead of double-posting.
+  const key = aliasSlug(
+    idempotencyKey ?? createHash("sha256").update(body).digest("hex").slice(0, 16),
+  );
+  const draftPath = `/linear/issues/${issue.id}/comments/chief-comment-${key}.json`;
+
+  const existingReceipt = createReceipt(
+    await readRemoteJson(draftPath, { allowNotFound: true }),
+  );
+  if (existingReceipt) {
+    console.log(JSON.stringify({
+      posted: false,
+      reason: "receipt_exists",
+      issue: { key: issue.identifier ?? issueKey, url: issue.url },
+      comment: existingReceipt,
+    }, null, 2));
+    return;
+  }
+
+  const bodyField = await resolveCommentBodyField(issue.id);
+  await writeCreateDraft(draftPath, { [bodyField]: body });
+  const receipt = await waitForCreateReceipt(draftPath);
+  console.log(JSON.stringify({
+    posted: true,
+    issue: {
+      id: issue.id,
+      key: issue.identifier ?? issueKey,
+      title: issue.title,
+      url: issue.url,
+    },
+    comment: receipt,
+    idempotencyKey: key,
+  }, null, 2));
+}
+
+const COMMANDS = new Set([
+  "bootstrap",
+  "status",
+  "dispatch-workspace-task",
+  "promote-issue",
+  "create-task",
+  "comment",
+]);
+
+const USAGE =
+  "Usage: node scripts/factory-control.mjs " +
+  "bootstrap|status|dispatch-workspace-task|" +
+  "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]|" +
+  "create-task <task-spec.json>|" +
+  "comment <LINEAR-KEY> <body-file|-> [idempotency-key]";
+
+/**
+ * Validate argv and return the work to run. Parsing before connecting means a
+ * usage mistake reports the usage, not whatever the workspace round-trip
+ * happened to fail with.
+ */
+async function planCommand() {
+  if (!COMMANDS.has(command)) {
+    throw new Error(USAGE);
+  }
+  if (command === "bootstrap") return () => bootstrap();
+  if (command === "status") return () => status();
+  if (command === "dispatch-workspace-task") {
+    return () => createWorkspaceConvergenceTask();
+  }
+  if (command === "promote-issue") {
     const issueKey = process.argv[3];
     const repoNames = (process.argv[4] ?? "")
       .split(",")
@@ -686,23 +799,47 @@ try {
     if (recipe && !["single", "workflow", "team"].includes(recipe)) {
       throw new Error(`Unsupported Factory recipe ${recipe}`);
     }
-    await promoteExistingIssue(issueKey, repoNames, recipe);
-  } else if (command === "create-task") {
+    return () => promoteExistingIssue(issueKey, repoNames, recipe);
+  }
+  if (command === "create-task") {
     const specPath = process.argv[3];
     if (!specPath) {
       throw new Error(
         "Usage: node scripts/factory-control.mjs create-task <task-spec.json>",
       );
     }
-    await createFactoryTaskFromSpec(specPath);
-  } else {
+    return () => createFactoryTaskFromSpec(specPath);
+  }
+  const issueKey = process.argv[3];
+  const bodySource = process.argv[4];
+  const idempotencyKey = process.argv[5];
+  if (!issueKey || !bodySource) {
     throw new Error(
-      "Usage: node scripts/factory-control.mjs " +
-      "bootstrap|status|dispatch-workspace-task|" +
-      "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]|" +
-      "create-task <task-spec.json>",
+      "Usage: node scripts/factory-control.mjs comment " +
+      "<LINEAR-KEY> <body-file|-> [idempotency-key]",
     );
   }
+  // Read the body now: an unreadable file or an empty checkpoint should fail
+  // before anything is posted, not after the workspace round-trip.
+  const body = (await readCommentBody(bodySource)).trim();
+  if (!body) {
+    throw new Error(`Refusing to post an empty comment from ${bodySource}`);
+  }
+  return () => commentOnIssue(issueKey, body, idempotencyKey);
+}
+
+try {
+  const run = await planCommand();
+  try {
+    await connect();
+  } catch (error) {
+    throw new Error(
+      `Cannot reach the Agent Relay workspace: ${error.message}. ` +
+      "Senses and Linear writeback are unavailable until this recovers; " +
+      "check `npm run doctor`.",
+    );
+  }
+  await run();
 } catch (error) {
   console.error(`Factory control stopped: ${error.message}`);
   process.exitCode = 1;
