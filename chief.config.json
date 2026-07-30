@@ -1,0 +1,50 @@
+{
+  "$schema": "./schemas/chief-config.schema.json",
+  "principal": {
+    "name": "Khaliq Gant",
+    "handle": "khaliqgant",
+    "timezone": "Europe/Oslo"
+  },
+  "agent": {
+    "name": "khaliq-chief",
+    "displayName": "Chief"
+  },
+  "brainRoot": "principals/khaliq",
+  "workspace": {
+    "name": "default",
+    "requireUnifiedDataPlaneId": true
+  },
+  "senses": {
+    "localDir": "senses",
+    "remotePaths": [
+      "/linear",
+      "/github",
+      "/digests"
+    ],
+    "scopes": [
+      "relayfile:fs:read:/linear/**",
+      "relayfile:fs:write:/linear/**",
+      "relayfile:fs:read:/github/**",
+      "relayfile:fs:read:/digests/**"
+    ],
+    "refreshBeforeSeconds": 600
+  },
+  "work": {
+    "humanSystem": "linear",
+    "agentSystem": "github",
+    "factory": {
+      "execution": "cloud",
+      "teamKey": "AR",
+      "titlePrefix": "[factory]",
+      "readinessState": "Ready for Agent",
+      "readinessLabel": "factory-ready",
+      "defaultRecipe": "single",
+      "recipeLabels": {
+        "single": "agent:single",
+        "workflow": "agent:workflow",
+        "team": "agent:team"
+      },
+      "mergePolicy": "never"
+    }
+  }
+}

@@ -1,12 +1,12 @@
 {
-  "team": "chief",
+  "team": "khaliq-chief",
   "autoSpawn": true,
   "agents": [
     {
-      "name": "chief",
+      "name": "khaliq-chief",
       "cli": "claude",
       "role": "chief of staff",
-      "task": "Read CLAUDE.md and follow the session-start ritual (memory/, workstreams/, two most recent journal dailies). You are the resident Chief: stay online, answer DMs (status, retros, delegation), keep the brain current, and never self-remove. When the principal attaches in drive mode, let them lead; queued messages flush when they detach."
+      "task": "Read chief.config.json and CLAUDE.md. Resolve brainRoot from the config, then follow the session-start ritual there (memory/, workstreams/, and the two newest journal dailies). You are the resident Chief for the configured principal: stay online, answer DMs, keep the active brain current, and never self-remove. Linear is the human command plane, GitHub is the agent execution plane, and Cloud Factory is the bridge. Never merge without the principal's explicit approval."
     }
   ]
 }
