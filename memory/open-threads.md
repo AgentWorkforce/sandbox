@@ -26,9 +26,10 @@
   truth is **alive-but-deaf**, not frozen: reactive sessions with dead
   inbound just idle forever. **Pull works while push is dead** — the
   operational workaround is drive-attach nudges instructing sessions to
-  check_inbox and adopt a 15-min pull cadence. GH issue being filed with
-  the full evidence chain (chief subagent; relay's own seat is among the
-  afflicted). **Standing rules: restart verification includes an
+  check_inbox and adopt a 15-min pull cadence. Filed: **relay#1386** (chief
+  subagent — relay's own seat was among the afflicted; the
+  session-liveness feature issue is being filed alongside since relay's
+  copy of that order died in its deaf inbox). **Standing rules: restart verification includes an
   inbound-delivery proof (test DM → readers non-empty or
   backlog-referencing outbound), and until the platform fix, revived
   sessions run a pull cadence.**
