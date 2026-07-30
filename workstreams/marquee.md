@@ -1,6 +1,6 @@
 ---
 status: done
-tldr: "Parked donor project; its spike and live-pane protocol feed the chief-app cockpit."
+tldr: "Deprioritized in favor of chief-app; the in-flight spike finishes, then it parks and its live-pane protocol feeds the cockpit."
 card: "Live-Pane Terminal"
 owner: cpo
 updated: 2026-07-29

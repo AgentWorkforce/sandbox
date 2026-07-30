@@ -3,7 +3,7 @@ status: active
 tldr: "The chief-of-staff brain is live and resident with the org built out under it; its senses (GitHub, email) wait on provisioning fixes."
 card: "Chief of Staff"
 owner: chief
-updated: 2026-07-29
+updated: 2026-07-30
 repos: [chief]
 ---
 # Chief — the chief-of-staff agent

@@ -90,25 +90,22 @@
   metric definition (active vs. created in window); money in bank + monthly
   spend (runway).
 
-- **Credential rotation batch — deferred by Will** (revisit when relay's
-  secrets platform fix lands, or on any sign of misuse; the leaked values
-  remain live until then). Rotate together, then fix the platform leak: (1)
-  `RELAY_BROKER_API_KEY` (`br_…`) — leaked into a transcript via a raw `env`
-  dump. (2) The chief workspace key (`rk_live_…`) and chief agent token
-  (`at_live_…`) — both embedded in the broker/claude process argv
-  (world-readable via `ps`) and printed in plaintext by `agent-relay node
-  up` into `~/Library/Logs/chief-node.log`; both landed in a
-  restart-verification transcript. (3) The cloud access token (`cld_at_…`) —
-  `agent-relay cloud session --json` prints it in plaintext; it landed in
-  the senses-mount worker's transcript (rotate: `agent-relay cloud login
-  --force`). Rotating alone is insufficient — the next boot re-leaks the new
-  values. **Platform fix needed in relay:** pass workspace key/agent token
-  via env or file instead of `--mcp-config` argv, redact key values from
-  node/broker logs, and redact the token in `cloud session --json` (or gate
-  behind an explicit flag). File as a relay issue. The July usage review's
-  PostHog/Cloudflare/Neon credential findings and its `rk_live_` rotation
-  recommendation fold into this same batch — verify all of it together when
-  rotating. See [learnings] for the no-raw-env rule.
+- **Credential exposure — split disposition under the updated key policy.**
+  The chief workspace key (`rk_live_…`) and agent token (`at_live_…`) —
+  exposed via broker/claude process argv, `agent-relay node up` plaintext
+  into `~/Library/Logs/chief-node.log`, and transcripts — are **not an
+  incident** under current policy (see [preferences]): periodic workspace
+  refresh applies, not emergency rotation. Still open, as genuinely
+  privileged secrets: (1) `RELAY_BROKER_API_KEY` (`br_…`) — leaked into a
+  transcript via a raw `env` dump, not yet rotated. (2) The cloud access
+  token (`cld_at_…`) — `agent-relay cloud session --json` prints it in
+  plaintext (landed in the senses-mount worker's transcript); rotate via
+  `agent-relay cloud login --force`. Rotating alone is insufficient while
+  `cloud session --json` keeps printing it — the next session re-leaks it.
+  **Platform fix still needed in relay:** redact `RELAY_BROKER_API_KEY` from
+  any log/dump path, and redact the token in `cloud session --json` (or
+  gate behind an explicit flag). File as a relay issue. See [learnings] for
+  the no-raw-env rule.
 
 - **Workspace-deletion cascade bug — in cloud's queue.**
   `deleteWorkspaceCascade` (workspace-deletion.ts:75) never deletes the
