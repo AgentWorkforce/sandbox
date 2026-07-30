@@ -43,3 +43,12 @@
   and/or raise the connect timeout. Secondary: `.claude/settings.json` allows
   `mcp__relaycast__*`, not `mcp__agent-relay__*` — confirm which server name is
   canonical.
+- **AR-448's Linear checkpoint is unwritten.** Relay PR #1402 is open
+  (2026-07-31) but the "PR opened" checkpoint never reached AR-448, because
+  Relayfile provider writeback returns `500 mount_session_failed` when minting
+  a senses session — the same RelayAuth capacity problem already blocking
+  fresh scoped credentials. Two things are needed: RelayAuth recovery, and a
+  `comment` command in `scripts/factory-control.mjs`, which today can create
+  issues and labels but has no path for commenting on an existing issue.
+  Trigger: once writeback is healthy, post the checkpoint and move AR-448 out
+  of `Ready for Agent`.
