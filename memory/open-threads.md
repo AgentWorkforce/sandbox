@@ -20,10 +20,18 @@
   watchdog's T3 sweep paged chief. Suspect: hosted delivery session/cursor
   never re-binds to the restarted broker (relaycast delivery/cursor
   territory); broker health claiming a live link it lacks is a second
-  defect. Filed via relay's issue batch. **Standing rule: every restart's
-  verification includes an inbound-delivery proof** (test DM → non-empty
-  read), not just health checks. Cloud's own unprocessed D1 decisions/orders
-  re-deliver via its recovery, independent of this gap.
+  defect. Sharpened 2026-07-30: **kickstarts do NOT durably cure it** (burn deaf
+  again immediately post-recovery; relay refroze after its 22:02Z restart
+  — restart roulette, some nodes rebind, some never do), and the likely
+  truth is **alive-but-deaf**, not frozen: reactive sessions with dead
+  inbound just idle forever. **Pull works while push is dead** — the
+  operational workaround is drive-attach nudges instructing sessions to
+  check_inbox and adopt a 15-min pull cadence. GH issue being filed with
+  the full evidence chain (chief subagent; relay's own seat is among the
+  afflicted). **Standing rules: restart verification includes an
+  inbound-delivery proof (test DM → readers non-empty or
+  backlog-referencing outbound), and until the platform fix, revived
+  sessions run a pull cadence.**
 
 - **relayauth D1 is at capacity — live prod condition.** Rolling brownout,
   hard-stuck: the protected 14–90-day audit band grows monotonically, so GC
