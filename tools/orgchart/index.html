@@ -323,7 +323,6 @@
   footer { margin-top: 36px; color: var(--muted); font-size: 12.5px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
 
-  #reviewView { display: block; }
   .review-card {
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
     box-shadow: var(--shadow); padding: 16px 18px; margin: 0 0 14px;
@@ -932,6 +931,7 @@ function setProjectView(mode) {
   localStorage.setItem(VIEW_STORAGE_KEY, mode);
   updateViewButtons();
   renderProjects();
+  replaceHash(buildProjectsHash());
 }
 
 // Table columns: key -> { label, type, get }. `type` drives the comparator
@@ -1101,6 +1101,7 @@ function renderProjects() {
 function selectProject(file) {
   selectedProject = file;
   renderProjects();
+  navigate(buildProjectsHash());
 }
 
 async function loadProjects() {
@@ -1224,7 +1225,13 @@ async function loadReview() {
   } catch { /* keep the last known state on a transient failure */ }
 }
 
+// The active tab, tracked outside the DOM classes so the router can read it
+// back (e.g. to know which hash to normalize to) without re-deriving it from
+// classList.
+let currentTab = 'org';
+
 function showTab(tab) {
+  currentTab = tab;
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
   document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
   document.getElementById('tabReview').classList.toggle('active', tab === 'review');
@@ -1235,9 +1242,9 @@ function showTab(tab) {
   if (tab === 'review') loadReview();
 }
 
-document.getElementById('tabOrg').addEventListener('click', () => showTab('org'));
-document.getElementById('tabProjects').addEventListener('click', () => showTab('projects'));
-document.getElementById('tabReview').addEventListener('click', () => showTab('review'));
+document.getElementById('tabOrg').addEventListener('click', () => navigate('/org'));
+document.getElementById('tabProjects').addEventListener('click', () => navigate(buildProjectsHash()));
+document.getElementById('tabReview').addEventListener('click', () => navigate('/review'));
 document.getElementById('sortActivity').addEventListener('click', () => setProjectSort('activity'));
 document.getElementById('sortAZ').addEventListener('click', () => setProjectSort('az'));
 updateSortButtons();
@@ -1262,27 +1269,105 @@ function clearProjectSearch() {
   projectSearchInput.value = '';
   projectSearchClear.hidden = true;
   renderProjects();
+  replaceHash(buildProjectsHash());
 }
 
 projectSearchInput.addEventListener('input', (e) => {
   projectSearchQuery = e.target.value;
   projectSearchClear.hidden = !projectSearchQuery;
   renderProjects();
+  replaceHash(buildProjectsHash());
 });
 projectSearchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.preventDefault(); clearProjectSearch(); }
 });
 projectSearchClear.addEventListener('click', () => { clearProjectSearch(); projectSearchInput.focus(); });
 
+// ------------------------------------------------------------------- routing
+// Hash shape: #/org · #/review · #/projects[?view=table&q=burn] ·
+// #/projects/<workstream-file>[?view=...&q=...]. The hash is the source of
+// truth for tab/detail/view/search state, so every state is linkable and
+// back/forward move through it via the native history stack. localStorage
+// still supplies the default when a param is absent from the hash (e.g. a
+// bare #/projects link honors whatever view the visitor last used).
+function parseHash() {
+  const raw = location.hash.slice(1); // drop leading '#'
+  const [path, qs] = raw.split('?');
+  const segments = path.split('/').filter(Boolean);
+  return { segments, params: new URLSearchParams(qs || '') };
+}
+
+// The canonical hash for the Projects tab given current in-memory state —
+// used both to build a target when navigating there and to normalize the
+// address bar after any state change.
+function buildProjectsHash() {
+  const params = new URLSearchParams();
+  if (projectView !== 'cards') params.set('view', projectView);
+  if (projectSearchQuery) params.set('q', projectSearchQuery);
+  const qs = params.toString();
+  const base = selectedProject ? `/projects/${encodeURIComponent(selectedProject)}` : '/projects';
+  return qs ? `${base}?${qs}` : base;
+}
+
+function canonicalHash() {
+  if (currentTab === 'review') return '/review';
+  if (currentTab === 'projects') return buildProjectsHash();
+  return '/org';
+}
+
+// Pushes a new history entry — for real navigations (tab switches, opening
+// or closing a project's detail view) that back/forward should step through.
+function navigate(path) {
+  if (location.hash.slice(1) === path) { applyRoute(); return; } // unchanged: hashchange won't fire, so re-apply directly
+  location.hash = path;
+}
+
+// Rewrites the current entry in place — for incidental state changes within
+// a tab (typing a search, flipping Cards/Table) that shouldn't spam back
+// with one entry per keystroke, while still keeping the URL shareable.
+function replaceHash(path) {
+  if (location.hash.slice(1) === path) return;
+  history.replaceState(null, '', `#${path}`);
+}
+
+// Reads the current hash and drives the UI to match it. Runs on first load
+// and on every 'hashchange' (browser back/forward, or an edited address bar).
+function applyRoute() {
+  const { segments, params } = parseHash();
+  const [section, sub] = segments;
+  if (section === 'review') {
+    selectedProject = null;
+    showTab('review');
+  } else if (section === 'projects') {
+    const view = params.get('view');
+    if (VIEW_MODES.has(view)) projectView = view;
+    projectSearchQuery = params.get('q') || '';
+    projectSearchInput.value = projectSearchQuery;
+    projectSearchClear.hidden = !projectSearchQuery;
+    updateViewButtons();
+    selectedProject = sub ? decodeURIComponent(sub) : null;
+    showTab('projects');
+  } else {
+    selectedProject = null;
+    showTab('org');
+  }
+  replaceHash(canonicalHash());
+}
+
 (async () => {
   org = await (await fetch('/org.json')).json();
   render();
   await poll();
   setInterval(poll, 10000);
+  // Prime Projects and Review regardless of which tab the hash lands on —
+  // the Review badge in the header is always live, and a warm Projects cache
+  // means switching tabs later shows data instantly instead of a blank flash.
   await loadProjects();
   setInterval(loadProjects, 60000);
   await loadReview();
   setInterval(loadReview, 60000);
+  window.addEventListener('hashchange', applyRoute);
+  applyRoute(); // honors the hash (or falls back to /org) on first load
 })();
 </script>
 </body>
