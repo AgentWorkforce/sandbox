@@ -4,6 +4,7 @@
   "scripts": {
     "chief": "sh scripts/chief.sh",
     "chief:view": "sh scripts/chief.sh view",
+    "chief:brain": "sh scripts/chief.sh brain",
     "up": "agent-relay node up",
     "status": "agent-relay node status",
     "digest:now": "launchctl kickstart -k gui/501/com.agentworkforce.chief.digest",

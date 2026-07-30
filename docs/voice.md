@@ -34,6 +34,9 @@ messages become one coherent packet, for coherence, not delay.
 
 ## Mechanics (v1)
 
+- `npm run chief` lands Will on the voice (drive mode); `npm run
+  chief:brain` (`chief.sh brain`) reaches the brain directly — the raw-brain
+  escape hatch.
 - `voice` is a roster agent on chief's node (Sonnet), spawned per-agent
   so the brain's session is never restarted for it.
 - Voice ⇄ brain over relay DMs on the same node.

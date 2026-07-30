@@ -1,8 +1,17 @@
 #!/bin/sh
-# Attach to the resident Chief. Broker starts via launchd (clean env — see
-# memory/learnings.md on CLAUDE_CODE_CHILD_SESSION leaking into chief's PTY).
+# Attach to chief's voice (Will's entry point). Pass "brain" as the first arg
+# to reach the resident Chief directly instead. Broker starts via launchd
+# (clean env — see memory/learnings.md on CLAUDE_CODE_CHILD_SESSION leaking
+# into chief's PTY).
 cd "$(dirname "$0")/.." || exit 1
-MODE="${1:-drive}"
+
+if [ "$1" = "brain" ]; then
+  TARGET=chief
+  MODE="${2:-drive}"
+else
+  TARGET=voice
+  MODE="${1:-drive}"
+fi
 
 if ! agent-relay node status 2>/dev/null | grep -q RUNNING; then
   echo "broker not running — starting via launchd…"
@@ -15,19 +24,33 @@ if ! agent-relay node status 2>/dev/null | grep -q RUNNING; then
   done
 fi
 
-has_chief() { agent-relay node agent list 2>/dev/null | grep -q '"name": *"chief"'; }
+has_agent() { agent-relay node agent list 2>/dev/null | grep -q "\"name\": *\"$1\""; }
 
-if ! has_chief; then
-  echo "chief not spawned — spawning…"
-  agent-relay node agent spawn claude --name chief --model opus \
-    --task "$(node -p 'require("./teams.json").agents[0].task')" || exit 1
+spawn_agent() {
+  case "$1" in
+    chief)
+      agent-relay node agent spawn claude --name chief --model opus \
+        --task "$(node -p 'require("./teams.json").agents.find(a => a.name === "chief").task')"
+      ;;
+    voice)
+      agent-relay node agent spawn claude --name voice --model sonnet \
+        --task "$(node -p 'require("./teams.json").agents.find(a => a.name === "voice").task')"
+      ;;
+  esac
+}
+
+if ! has_agent "$TARGET"; then
+  echo "$TARGET not spawned — spawning…"
+  spawn_agent "$TARGET" || exit 1
 fi
 
+# autoSpawn (teams.json) normally brings both agents up on node start; this
+# loop tolerates the case where attach races ahead of that.
 i=0
-until has_chief; do
+until has_agent "$TARGET"; do
   i=$((i + 1))
-  [ "$i" -ge 60 ] && { echo "chief did not register — check: agent-relay node agent list"; exit 1; }
+  [ "$i" -ge 60 ] && { echo "$TARGET did not register — check: agent-relay node agent list"; exit 1; }
   sleep 1
 done
 
-exec agent-relay node agent attach chief --mode "$MODE"
+exec agent-relay node agent attach "$TARGET" --mode "$MODE"
