@@ -113,3 +113,17 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   → unsigned Mac build → launch; 89/89 tests + launch verified. Honest
   limitation: sign-in fails closed (device-session provisioning not yet
   composed) — no live chat with chief yet; UI/shape review only.
+
+## RQ-10: Distinct GitHub identities for agent reviewers (decision, non-urgent)
+- status: pending
+- date: 2026-07-30
+- from: chief (follow-up to the two-reviews law)
+- ask: your 2+-review rule can't be mechanically enforced while every
+  agent acts as willwashburn on GitHub — approvals from the author's own
+  identity don't count, and branch protection can't distinguish agents.
+  Approve creating distinct machine/bot accounts for reviewer agents
+  (kjgbot/Miya precedent already exists in cloud), or accept
+  process-enforcement indefinitely.
+- recommendation: 2-3 bot accounts (reviewer pool) + branch protection
+  requiring 2 approvals on main across the org's repos; also advances
+  the mergedBy-attribution problem (relay#1388 family).
