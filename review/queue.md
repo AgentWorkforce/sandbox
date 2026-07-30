@@ -85,7 +85,10 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   question (OpenAI store deletion request) comes as a follow-up decision.
 
 ## RQ-7: Codex allowance — top up or re-tier (decision)
-- status: pending
+- status: cleared(answered) 2026-07-30 — Will reset the codex usage;
+  tiering stands as-is. Relay's seat stays on its claude revival until
+  the next natural respawn (roster remains codex). Burn tasked with the
+  spend forensics.
 - date: 2026-07-30
 - from: chief (Will observed the spend; multiple codex seats frozen)
 - ask: the codex allowance is ~exhausted (overnight autonomous work +
