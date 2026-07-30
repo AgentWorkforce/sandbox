@@ -61,3 +61,12 @@ Distilled from six months of session history
   day (2026-07-30) a "while you're in the file" addition arrived after the
   worker finished and silently missed the build. Queue follow-ups as fresh
   tasks after DONE; verify the live artifact for each addition separately.
+- **Context re-read is the dominant token cost, not work and not
+  heartbeats.** The 2026-07-30 codex exhaustion: 382:1
+  context-to-output over ~3B tokens; six ~17h seats carrying ~500k
+  context per request = 84% of spend; the suspected pull-cadence furnace
+  was only 4.1%. Sessions are disposable BY DESIGN (resumable-from-files)
+  — recycle at assignment boundaries, cap lifetime ~4h, never hold
+  worker seats open. Also: verify spend hypotheses with burn before
+  legislating around them — the first policy response (cadence
+  retirement) aimed at 4% of the problem.
