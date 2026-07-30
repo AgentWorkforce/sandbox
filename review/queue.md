@@ -60,7 +60,12 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - on-done: answers land in coo's interview-prep file, not chief's brain.
 
 ## RQ-6: URGENT — rotate leaked credentials (decision reversal)
-- status: pending
+- status: cleared(answered) 2026-07-30 — Will: "I'm generally not worried
+  about exposing the relay keys. They are fairly benign. We'll spin up new
+  workspaces every once in a while and it'll be fine." No rotation;
+  periodic workspace refresh is the standing policy. Secrets-hygiene
+  engineering (relay#1379/#1380) continues as product quality, not
+  incident response.
 - date: 2026-07-30
 - from: relayfile + head-of-ecosystem + cpo (security escalations, overnight)
 - ask: the deferred rotation batch is no longer deferrable — overnight,
