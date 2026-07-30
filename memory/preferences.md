@@ -43,6 +43,14 @@ session; don't restate it. Chief-specific emphases:
   owner when one is seated (chief DMs them the finding), by a chief
   subagent when no owner exists. Open-threads holds the pointer, never the
   only copy.
+- **Only humans cut releases (Will, 2026-07-30):** no agent publishes to
+  any registry or release channel (npm, crates.io, PyPI, GitHub
+  releases/tags, TestFlight/App Store) — with or without green-lights.
+  The org's deliverable is a **release package**: semver proposal with
+  release-train policy reasoning, coherent changelog, verification
+  evidence, and the exact manual-dispatch steps. Chief validates the
+  package, queues it as an RQ item, and Will executes the cut. Deploys
+  remain at existing chief/department gates unless Will extends this.
 - **The review queue is the principal's inbox (Will, 2026-07-30):**
   anything needing Will's decision, input, or hands lands as an entry in
   `review/queue.md` — only after the full chain has processed it, with
