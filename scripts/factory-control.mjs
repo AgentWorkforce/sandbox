@@ -9,14 +9,47 @@ import {
   cloudSession,
   loadConfig,
   mintSensesSession,
+  REPO_ROOT,
 } from "./lib/chief-runtime.mjs";
 
 const command = process.argv[2] ?? "status";
 const config = loadConfig();
 const workspace = activeWorkspace(config, { switchIfNeeded: true });
-const mount = await mintSensesSession(config, workspace);
+const mount = await resolveFactoryMount();
 const relayfileBase = mount.relayfileBaseUrl.replace(/\/+$/u, "");
 const relayfileWorkspace = workspace.relayfileWorkspaceId;
+
+async function resolveFactoryMount() {
+  const cachePath = resolve(
+    REPO_ROOT,
+    ".agentworkforce/relayfile/chief-mount.json",
+  );
+  let cached;
+  try {
+    cached = JSON.parse(readFileSync(cachePath, "utf8"));
+  } catch {
+    cached = null;
+  }
+  const requiredScopes = config.senses.scopes;
+  const expiresAt = Date.parse(cached?.relayfileTokenExpiresAt ?? "");
+  const usable =
+    typeof cached?.relayfileToken === "string" &&
+    cached.relayfileToken.length > 0 &&
+    typeof cached.relayfileUrl === "string" &&
+    cached.relayfileUrl.length > 0 &&
+    cached.relayfileWorkspaceId === workspace.relayfileWorkspaceId &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > Date.now() + 60_000 &&
+    Array.isArray(cached.scopes) &&
+    requiredScopes.every((scope) => cached.scopes.includes(scope));
+  if (usable) {
+    return {
+      relayfileToken: cached.relayfileToken,
+      relayfileBaseUrl: cached.relayfileUrl,
+    };
+  }
+  return mintSensesSession(config, workspace);
+}
 
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
@@ -224,6 +257,48 @@ async function findLabel(names) {
   return null;
 }
 
+const RECIPE_LABEL_DEFINITIONS = {
+  single: {
+    description: "Factory recipe: one implementation agent with verification.",
+    color: "#26B5CE",
+  },
+  workflow: {
+    description: "Factory recipe: staged implementation and review workflow.",
+    color: "#F2C94C",
+  },
+  team: {
+    description: "Factory recipe: coordinated specialist agent team.",
+    color: "#BB87FC",
+  },
+};
+
+async function ensureRecipeLabel(team, recipe) {
+  const name = config.work.factory.recipeLabels[recipe];
+  if (!name) return null;
+  const existing = await findLabel([name]);
+  if (existing?.id) return existing;
+
+  const definition = RECIPE_LABEL_DEFINITIONS[recipe];
+  const draftPath = `/linear/labels/factory-create-${aliasSlug(name)}.json`;
+  let receipt = createReceipt(
+    await readRemoteJson(draftPath, { allowNotFound: true }),
+  );
+  if (!receipt) {
+    await writeCreateDraft(draftPath, {
+      name,
+      description: definition?.description,
+      color: definition?.color,
+      teamId: team.id,
+    });
+    receipt = await waitForCreateReceipt(draftPath);
+  }
+  const id = receipt.id ?? receipt.externalId;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(`Linear created ${name} but returned no label id`);
+  }
+  return { id, name };
+}
+
 async function resolveReadyState() {
   const states = await readRemoteJson("/linear/states/_index.json");
   const state = states.find(
@@ -415,7 +490,7 @@ async function waitForIssuePromotion(
 }
 
 async function promoteExistingIssue(issueKey, repoNames, recipe) {
-  const { state, readinessLabel } = await bootstrap();
+  const { team, state, readinessLabel } = await bootstrap();
   const value = await readRemoteJson(
     `/linear/issues/by-id/${issueKey}.json`,
     { allowNotFound: true },
@@ -434,13 +509,7 @@ async function promoteExistingIssue(issueKey, repoNames, recipe) {
     routeLabels.push(label);
   }
   const recipeName = recipe ?? config.work.factory.defaultRecipe;
-  const recipeLabelName = config.work.factory.recipeLabels[recipeName];
-  const recipeLabel = recipeLabelName
-    ? await findLabel([recipeLabelName])
-    : null;
-  if (recipeLabelName && !recipeLabel?.id) {
-    throw new Error(`Linear recipe label ${recipeLabelName} was not found`);
-  }
+  const recipeLabel = await ensureRecipeLabel(team, recipeName);
 
   const currentLabels = (issue.labels ?? []).map((label) =>
     typeof label === "string" ? { name: label } : label
@@ -536,13 +605,7 @@ async function createFactoryTaskFromSpec(specPath) {
     }
     routeLabels.push(label);
   }
-  const recipeLabelName = config.work.factory.recipeLabels[recipe];
-  const recipeLabel = recipeLabelName
-    ? await findLabel([recipeLabelName])
-    : null;
-  if (recipeLabelName && !recipeLabel?.id) {
-    throw new Error(`Linear recipe label ${recipeLabelName} was not found`);
-  }
+  const recipeLabel = await ensureRecipeLabel(team, recipe);
 
   const title = spec.title.toLowerCase().startsWith(
     config.work.factory.titlePrefix.toLowerCase(),
