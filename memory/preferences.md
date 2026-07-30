@@ -60,6 +60,14 @@ session; don't restate it. Chief-specific emphases:
   renders the queue with approve/reject that relay back to chief as DMs;
   chief executes verdicts and marks items cleared. Chat summaries point
   at the queue — they are never the only copy.
+- **Relay keys are low-sensitivity by design (Will, 2026-07-30):**
+  workspace keys/agent tokens exposed in transcripts are not incidents —
+  "fairly benign; we'll spin up new workspaces every once in a while."
+  Standing practice: periodic workspace refresh (chief schedules), not
+  emergency rotation. The no-secrets-in-transcripts discipline and the
+  relay secrets-hygiene engineering continue as quality work; escalate
+  credential exposure only for genuinely privileged secrets (cloud
+  account sessions, CF/GitHub tokens, registry creds).
 - **Trust reports; don't shadow-poll (Will).** Once work is
   dispatched to an owner with report obligations, chief does not stand up
   watchers/polling over the same work — that duplicates the delegate's
