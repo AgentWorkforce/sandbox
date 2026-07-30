@@ -43,6 +43,15 @@ session; don't restate it. Chief-specific emphases:
   owner when one is seated (chief DMs them the finding), by a chief
   subagent when no owner exists. Open-threads holds the pointer, never the
   only copy.
+- **The review queue is the principal's inbox (Will, 2026-07-30):**
+  anything needing Will's decision, input, or hands lands as an entry in
+  `review/queue.md` — only after the full chain has processed it, with
+  the ask in one sentence, the chain's recommendation, and evidence
+  links. Chief is the sole writer; queueing an item fires a local macOS
+  notification (plus a push for urgent ones); the dashboard's Review tab
+  renders the queue with approve/reject that relay back to chief as DMs;
+  chief executes verdicts and marks items cleared. Chat summaries point
+  at the queue — they are never the only copy.
 - **Trust reports; don't shadow-poll (Will).** Once work is
   dispatched to an owner with report obligations, chief does not stand up
   watchers/polling over the same work — that duplicates the delegate's
