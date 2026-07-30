@@ -7,7 +7,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1';
@@ -182,18 +182,36 @@ async function projectPulse(repos) {
   };
 }
 
-async function loadProjects() {
+// An agent belongs to a project if its repo's basename matches one of the
+// workstream's `repos:` entries (plain string match — "agentrelay.com"'s dot
+// is just part of the basename, nothing to special-case) or its name is the
+// workstream's owner. Dedupe: an agent can match both rules for one project.
+function matchAgents(repos, owner, agents) {
+  const repoSet = new Set(repos);
+  const seen = new Set();
+  const matches = [];
+  for (const agent of agents) {
+    if (!repoSet.has(basename(agent.repo)) && agent.name !== owner) continue;
+    if (seen.has(agent.name)) continue;
+    seen.add(agent.name);
+    matches.push({ name: agent.name, title: agent.title, status: agent.status });
+  }
+  return matches;
+}
+
+async function loadProjects(agents) {
   const files = (await readdir(WORKSTREAMS_DIR)).filter((f) => f.endsWith('.md')).sort();
   const projects = await Promise.all(files.map(async (file) => {
     const raw = await readFile(join(WORKSTREAMS_DIR, file), 'utf8');
     const { meta, body } = parseFrontmatter(raw);
     const goal = extractField(body, 'Goal');
     const repos = meta.repos ?? [];
+    const owner = meta.owner ?? '';
     const pulse = await projectPulse(repos);
     return {
       file,
       status: meta.status ?? '',
-      owner: meta.owner ?? '',
+      owner,
       updated: meta.updated ?? '',
       repos,
       title: extractTitle(body),
@@ -206,6 +224,7 @@ async function loadProjects() {
       commits24h: pulse.commits24h,
       latestCommit: pulse.latestCommit,
       recentCommits: pulse.recentCommits,
+      agents: matchAgents(repos, owner, agents),
     };
   }));
   projects.sort((a, b) => {
@@ -334,7 +353,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
-      return send(res, 200, await loadProjects());
+      const org = await loadOrg();
+      return send(res, 200, await loadProjects(org.agents));
     }
 
     if (req.method === 'POST' && url.pathname === '/api/attach') {

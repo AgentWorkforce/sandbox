@@ -164,6 +164,11 @@
   .project-pulse.quiet { color: var(--muted); }
   .project-pulse .pulse-up { color: var(--up); }
 
+  .project-agents-hint {
+    margin-top: 5px; font-size: 11px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
   .back-link {
     display: inline-flex; align-items: center; gap: 4px;
     font: inherit; font-size: 12.5px; font-weight: 550;
@@ -196,6 +201,9 @@
   .chip.blocked { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
   .chip.parked { background: color-mix(in srgb, var(--hold) 16%, transparent); color: var(--hold); border-color: color-mix(in srgb, var(--hold) 40%, transparent); }
   .chip.done { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); }
+
+  .project-agents { margin-top: 2px; }
+  .project-agents .card.agent-row { margin: 5px 0; box-shadow: none; }
 
   .field { margin-top: 8px; }
   .field-label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-bottom: 2px; }
@@ -289,9 +297,9 @@ function metaText(agent) {
   return s.agentCount === 1 ? '1 agent' : `${s.agentCount} agents`;
 }
 
-function card(agent) {
+function card(agent, extraClass) {
   const el = document.createElement('div');
-  el.className = 'card';
+  el.className = extraClass ? `card ${extraClass}` : 'card';
 
   const dot = document.createElement('span');
   dot.className = 'dot ' + dotClass(agent);
@@ -369,12 +377,17 @@ function render() {
   tree.append(root);
 }
 
+// querySelectorAll, not querySelector: an agent can appear both in the Org
+// tree and in a project's Agents section at once, and both copies need to
+// stay in sync with live status.
 function refreshDots() {
   for (const agent of org.agents) {
-    const dot = document.querySelector(`[data-dot-for="${agent.name}"]`);
-    if (dot) dot.className = 'dot ' + dotClass(agent);
-    const meta = document.querySelector(`[data-meta-for="${agent.name}"]`);
-    if (meta) meta.textContent = metaText(agent);
+    document.querySelectorAll(`[data-dot-for="${agent.name}"]`).forEach((dot) => {
+      dot.className = 'dot ' + dotClass(agent);
+    });
+    document.querySelectorAll(`[data-meta-for="${agent.name}"]`).forEach((meta) => {
+      meta.textContent = metaText(agent);
+    });
   }
 }
 
@@ -449,6 +462,45 @@ function truncate(text, cap) {
   return text.length > cap ? `${text.slice(0, cap).trim()}…` : text;
 }
 
+// /api/projects returns {name, title, status} per agent (server has no
+// access to live node state). Resolve back to the full org.json agent object
+// so dotClass/metaText/attach — the same functions the Org tab uses — work
+// unmodified here too.
+function resolveAgent(entry) {
+  return org.agents.find((a) => a.name === entry.name) || entry;
+}
+
+// One-line, muted list of agent names — a hint on the overview card, not a
+// duplicate of the detail view's full Agents section.
+function agentsHint(p) {
+  if (!p.agents?.length) return null;
+  const el = document.createElement('div');
+  el.className = 'project-agents-hint';
+  el.textContent = p.agents.map((a) => a.name).join(' · ');
+  return el;
+}
+
+function agentsSection(p) {
+  const el = document.createElement('div');
+  el.className = 'field';
+  const label = document.createElement('div');
+  label.className = 'field-label';
+  label.textContent = 'Agents';
+  el.append(label);
+  if (p.agents?.length) {
+    const list = document.createElement('div');
+    list.className = 'project-agents';
+    for (const entry of p.agents) list.append(card(resolveAgent(entry), 'agent-row'));
+    el.append(list);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'field-value';
+    empty.textContent = '—';
+    el.append(empty);
+  }
+  return el;
+}
+
 function pulseLine(p) {
   const el = document.createElement('div');
   if (p.commits24h > 0) {
@@ -488,6 +540,8 @@ function miniCard(p) {
   tldr.textContent = p.tldr || '—';
 
   el.append(head, tldr, pulseLine(p));
+  const hint = agentsHint(p);
+  if (hint) el.append(hint);
   const open = () => selectProject(p.file);
   el.addEventListener('click', open);
   el.addEventListener('keydown', (e) => {
@@ -565,7 +619,7 @@ function detailCard(p) {
   meta.className = 'project-meta';
   meta.textContent = [p.owner, p.updated, p.repos?.join(', ')].filter(Boolean).join(' · ');
 
-  el.append(back, head, meta, activityBlock(p), field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
+  el.append(back, head, meta, agentsSection(p), activityBlock(p), field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
   return el;
 }
 
