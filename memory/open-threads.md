@@ -26,10 +26,13 @@
   truth is **alive-but-deaf**, not frozen: reactive sessions with dead
   inbound just idle forever. **Pull works while push is dead** — the
   operational workaround is drive-attach nudges instructing sessions to
-  check_inbox and adopt a 15-min pull cadence. Filed: **relay#1386** (chief
-  subagent — relay's own seat was among the afflicted; the
-  session-liveness feature issue is being filed alongside since relay's
-  copy of that order died in its deaf inbox). **Standing rules: restart verification includes an
+  check_inbox and adopt a 15-min pull cadence. Filed: **relay#1386** + **#1387**
+  (session-liveness). **Confirmed 2026-07-30 by the nudge experiment:
+  alive-but-deaf is proven** — burn and cpo were healthy sessions on dead
+  push links; SDK-injected pull nudges restored both instantly (burn
+  drained + ACK'd; cpo draining 25 deep, oldest-first). Both now run
+  15-min pull cadences (session-scoped — lost on respawn until the
+  platform fix). **Standing rules: restart verification includes an
   inbound-delivery proof (test DM → readers non-empty or
   backlog-referencing outbound), and until the platform fix, revived
   sessions run a pull cadence.**
