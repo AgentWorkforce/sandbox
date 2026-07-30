@@ -1,16 +1,6 @@
 # Learnings — expensive lessons as operating rules
 
-- **Infra outages must enter the brain when they happen.** The 2026-07-22
-  relayauth D1-full outage (10 GiB ceiling, token mints failing, 14.7M rows
-  emergency-deleted; runbook
-  cloud/docs/runbooks/relayauth-d1-retention-gc.md, tracking cloud#2801)
-  never made memory/ — so its 07-29 recurrence burned a full diagnosis
-  cycle reading as a brand-new bug. Standing condition to remember:
-  relayauth's 90-day retention does not fit in D1's 10 GiB; until
-  archive-to-R2 (or equivalent) lands, mint-flapping = check DB fill
-  first.
-
-Distilled 2026-07-29 from six months of session history
+Distilled from six months of session history
 (`~/.claude/docs/claude-usage-review-2026-07.md`).
 
 - **Process overhead is the enemy.** ~Half of everything Will typed was
@@ -45,9 +35,8 @@ Distilled 2026-07-29 from six months of session history
   key name, never by value length.
 - **Never `git add -A` in the chief repo.** Headless cron bodies (groom,
   digest) edit brain files concurrently with the resident; a blanket `add
-  -A` sweeps their mid-flight edits into unrelated commits (happened
-  2026-07-29 — the "Pilot go" commit silently absorbed a groom pass).
-  Stage explicit paths, always.
+  -A` sweeps their mid-flight edits into unrelated commits (the "Pilot go"
+  commit once silently absorbed a groom pass). Stage explicit paths, always.
 - **Start chief's node from launchd, never from a Claude Code session.** Claude
   Code stamps `CLAUDE_CODE_CHILD_SESSION=1` into every Bash-spawned subprocess;
   `agent-relay node up` passes its env through the broker into chief's PTY, so
@@ -63,3 +52,8 @@ Distilled 2026-07-29 from six months of session history
   CLAUDE_CODE_CHILD_SESSION` in the Bash tool always shows `1`, since Claude
   Code stamps every subprocess) — verify persistence by watching the
   session's `.jsonl` under `~/.claude/projects/...` grow.
+- **relayauth D1 capacity is a standing failure mode, not a one-off bug.**
+  The 90-day retention band doesn't fit D1's 10 GiB ceiling. Until
+  archive-to-R2 (or equivalent) lands, treat any auth mint-flapping as a
+  DB-fill check first, not a fresh diagnosis. Runbook:
+  `cloud/docs/runbooks/relayauth-d1-retention-gc.md`; tracking cloud#2801.

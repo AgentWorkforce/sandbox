@@ -12,7 +12,7 @@ session; don't restate it. Chief-specific emphases:
   toil removed — and include cost when burn data is available.
 - **Simplicity bias for this repo:** chief stays markdown + skills. A feature
   needing plumbing becomes a platform PR against the owning component.
-- **Model/harness tiering (Will, 2026-07-29 — token budget is real):**
+- **Model/harness tiering (Will — token budget is real):**
   chief = Fable (unchanged). Department leads + manager heads (cmo, cso,
   cpo, heads, coo-when-seated) = claude/Opus. **Implementor leads on
   non-C-suite teams (relay, cloud, scout, burn, chief-app,
@@ -20,7 +20,7 @@ session; don't restate it. Chief-specific emphases:
   implementation. Scheduled bodies (digest, groom) = sonnet. Chief's
   subagents: Opus for judgment work, sonnet for mechanical scaffolding.
   Every seat's harness/model is explicit in its teams.json — never left to
-  the machine's default (recon 2026-07-29 confirmed all 11 residents were
+  the machine's default (recon confirmed all 11 residents were
   on unpinned Fable 5). Mechanics: teams.json has NO model field — the
   working pin is `"cli": "claude --model opus"` (the doc-comment's
   `claude:opus` syntax is dead code and fails); codex = `"cli": "codex"`,
@@ -34,16 +34,16 @@ session; don't restate it. Chief-specific emphases:
   absolute, resolved threads deleted, duplicates merged. Runs headless via
   `com.agentworkforce.chief.groom` (/groom skill); aborts if the tree is
   dirty so it never fights the resident.
-- **Peers talk to peers (Will, 2026-07-29):** product owners and leads DM
+- **Peers talk to peers (Will):** product owners and leads DM
   each other directly — the hierarchy is for briefs, gates, and
   escalations, not a message-routing constraint. How much cross-talk vs
   routing through the lead is each team lead's call for their own team.
-- **Found issues become GitHub issues (Will, 2026-07-29):** every defect
+- **Found issues become GitHub issues (Will):** every defect
   found in passing gets filed on the owning repo — by the repo's product
   owner when one is seated (chief DMs them the finding), by a chief
   subagent when no owner exists. Open-threads holds the pointer, never the
   only copy.
-- **Trust reports; don't shadow-poll (Will, 2026-07-29).** Once work is
+- **Trust reports; don't shadow-poll (Will).** Once work is
   dispatched to an owner with report obligations, chief does not stand up
   watchers/polling over the same work — that duplicates the delegate's
   reporting duty and un-delegates it. Verify evidence AT report time

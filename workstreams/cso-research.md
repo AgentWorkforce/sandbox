@@ -12,7 +12,7 @@ repos: [cso]
 verdict, and a standing watch; ideas worth stealing become GitHub issues in
 the owning repos; partnership candidates flow to cmo/scout.
 
-**Now:** department seated 2026-07-29; officer verified online (ACK'd
+**Now:** department seated; officer verified online (ACK'd
 chief's DM 15:49Z from its own node, correct mandate, ritual from files).
 Boots via launchd (`com.agentworkforce.cso.node`) with its own git author
 identity. Watchlist is empty.

@@ -13,7 +13,7 @@ repos: [burn, factory]
 product; gaps found in burn get fixed in factory. The burn resident owns
 both; reports to cpo (Will → chief → cpo → burn).
 
-**Now:** owner seated and online 2026-07-29 (workspace-seeding recipe, fifth
+**Now:** owner seated and online (workspace-seeding recipe, fifth
 clean boot). Bootstrap assignment dispatched: learn factory (pear = reference
 implementation), set it up in burn, drive the **macos-v\* release item**
 through it end-to-end — burn PR #495 merged the in-app macOS updater but no

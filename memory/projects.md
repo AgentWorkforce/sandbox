@@ -15,7 +15,7 @@ workstream.
   repo, not tubing in this one):
   1. **wake-on-delivery** (relay/relaycast) — spawn a registered-but-offline
      agent on its home node when a durable delivery lands. Keystone: makes
-     "wake the team" = "send a message". Today messages queue 1h then
+     "wake the team" = "send a message". Currently messages queue 1h then
      dead-letter, and channel-mention triggers can spawn but DMs fire nothing.
   2. **agent directory over MCP** (relaycast) — FTS directory + capability
      routing exist server-side and auto-populate from metadata.skills; not

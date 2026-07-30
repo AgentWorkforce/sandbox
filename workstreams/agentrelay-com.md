@@ -10,7 +10,7 @@ repos: [agentrelay.com]
 
 **Goal:** one domain, docs current with the shipped product.
 
-**Now:** resident lead being seated 2026-07-29 (codex, reports to cmo —
+**Now:** resident lead being seated (codex, reports to cmo —
 Will: the front door belongs to GTM). New mandate alongside the site: the
 **content pipeline** — `content/pipeline.md`, a running list of blog posts
 (idea → notes → ready-for-will → drafting → published). Will fires ideas

@@ -16,7 +16,7 @@ that). Cloudflare-only by charter.
 
 **Now:** the July work (GTM metrics agent: daily collectors, D1 history,
 dashboard, digest, deploy-on-merge CI) is **safe on origin** —
-`feat/gtm-metrics-agent` pushed 2026-07-29 (tip b3bcec4; the only-copy risk
+`feat/gtm-metrics-agent` pushed (tip b3bcec4; the only-copy risk
 is retired). The cmo resident is seated and respawned on pinned opus;
 scout reports to it.
 

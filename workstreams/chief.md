@@ -12,7 +12,7 @@ repos: [chief]
 (workstreams), and future (next steps) across the whole ecosystem, and
 delegates real work to repo agents over Agent Relay.
 
-**Now:** Phase 2 in progress. Phase 1 shipped 2026-07-29 (brain scaffolded:
+**Now:** Phase 2 in progress. Phase 1 shipped (brain scaffolded:
 persona, memory, journal backfilled Dec 2025–Jul 2026, workstreams,
 /retro /status /digest). Broker is up in this repo and chief runs as a
 resident relay agent — registered, posting to #general, DM-able.
@@ -28,8 +28,8 @@ dogfood relaycron; the launchd job is the bridge, not the destination).
 Relayfile-backed workspace exists — chief-dev is messaging-only. Unblock is a
 ~3-min browser task: `relayfile login --provision-messaging-only`, then
 `relayfile integration connect github|slack|notion`. Worker standing by to
-mount and verify. Scoping (chief, 07-29, settled after two revisions):
-senses belong to the consuming department, one relayfile workspace each
+mount and verify. Scoping: senses belong to the consuming department,
+one relayfile workspace each
 (also the workaround for the one-mount-per-workspace limit). **Chief's
 mount = the GitHub org tree** (`/github/repos/AgentWorkforce`) for digest
 senses. **#research-market went to cso** — see [cso-research]. The
