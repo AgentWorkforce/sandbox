@@ -156,6 +156,13 @@
     color: var(--muted); font-size: 12.5px; line-height: 1.45;
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
+  .project-pulse {
+    margin-top: 7px; font-size: 11.5px; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .project-pulse.quiet { color: var(--muted); }
+  .project-pulse .pulse-up { color: var(--up); }
 
   .back-link {
     display: inline-flex; align-items: center; gap: 4px;
@@ -193,6 +200,26 @@
   .field { margin-top: 8px; }
   .field-label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-bottom: 2px; }
   .field-value { font-size: 13.5px; line-height: 1.5; }
+
+  .activity-update { font-size: 13.5px; line-height: 1.5; }
+  .activity-update .activity-date { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .activity-commits { list-style: none; margin: 4px 0 0; padding: 0; }
+  .activity-commits li {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 4px 0; font-size: 12.5px;
+    border-top: 1px solid var(--line);
+  }
+  .activity-commits li:first-child { border-top: none; }
+  .activity-commits .commit-subject {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .activity-commits .commit-repo {
+    flex: none; color: var(--muted); font-size: 11px;
+    padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line);
+  }
+  .activity-commits .commit-ago {
+    flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  }
 
   footer { margin-top: 36px; color: var(--muted); font-size: 12.5px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
@@ -416,6 +443,30 @@ function shortTitle(title) {
   return title;
 }
 
+// Truncates a commit subject for a single-line pulse display.
+function truncate(text, cap) {
+  if (!text) return '';
+  return text.length > cap ? `${text.slice(0, cap).trim()}…` : text;
+}
+
+function pulseLine(p) {
+  const el = document.createElement('div');
+  if (p.commits24h > 0) {
+    el.className = 'project-pulse';
+    const up = document.createElement('span');
+    up.className = 'pulse-up';
+    up.textContent = `▲ ${p.commits24h} commit${p.commits24h === 1 ? '' : 's'} 24h`;
+    el.append(up);
+    if (p.latestCommit) {
+      el.append(document.createTextNode(` · ${truncate(p.latestCommit.subject, 46)} — ${p.latestCommit.ago}`));
+    }
+  } else {
+    el.className = 'project-pulse quiet';
+    el.textContent = p.latestCommit ? `quiet ${p.latestCommit.ago}` : 'no activity';
+  }
+  return el;
+}
+
 function miniCard(p) {
   const el = document.createElement('div');
   el.className = 'project-card-mini';
@@ -436,12 +487,60 @@ function miniCard(p) {
   tldr.className = 'project-mini-tldr';
   tldr.textContent = p.tldr || '—';
 
-  el.append(head, tldr);
+  el.append(head, tldr, pulseLine(p));
   const open = () => selectProject(p.file);
   el.addEventListener('click', open);
   el.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
   });
+  return el;
+}
+
+function activityBlock(p) {
+  const el = document.createElement('div');
+  el.className = 'field';
+
+  const label = document.createElement('div');
+  label.className = 'field-label';
+  label.textContent = 'Latest activity';
+  el.append(label);
+
+  if (p.latestUpdate) {
+    const update = document.createElement('div');
+    update.className = 'activity-update';
+    const date = document.createElement('span');
+    date.className = 'activity-date';
+    date.textContent = p.latestUpdate.date;
+    update.append(date, document.createTextNode(p.latestUpdate.text));
+    el.append(update);
+  }
+
+  if (p.recentCommits?.length) {
+    const list = document.createElement('ul');
+    list.className = 'activity-commits';
+    for (const c of p.recentCommits) {
+      const li = document.createElement('li');
+      const subject = document.createElement('span');
+      subject.className = 'commit-subject';
+      subject.textContent = c.subject;
+      subject.title = c.subject;
+      const repo = document.createElement('span');
+      repo.className = 'commit-repo';
+      repo.textContent = c.repo;
+      const ago = document.createElement('span');
+      ago.className = 'commit-ago';
+      ago.textContent = c.ago;
+      li.append(subject, repo, ago);
+      list.append(li);
+    }
+    el.append(list);
+  } else if (!p.latestUpdate) {
+    const empty = document.createElement('div');
+    empty.className = 'field-value';
+    empty.textContent = '—';
+    el.append(empty);
+  }
+
   return el;
 }
 
@@ -466,7 +565,7 @@ function detailCard(p) {
   meta.className = 'project-meta';
   meta.textContent = [p.owner, p.updated, p.repos?.join(', ')].filter(Boolean).join(' · ');
 
-  el.append(back, head, meta, field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
+  el.append(back, head, meta, activityBlock(p), field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
   return el;
 }
 

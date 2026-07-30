@@ -17,6 +17,12 @@ const PORT = 4780;
 const WORKSTREAMS_DIR = join(HERE, '..', '..', 'workstreams');
 const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };
 
+// Sibling repos referenced by workstream frontmatter `repos:` live one level
+// above the AgentWorkforce projects directory this repo sits in.
+const REPOS_ROOT = join(HERE, '..', '..', '..');
+const GIT_CACHE_TTL_MS = 60_000;
+const GIT_LOG_DELIM = '\x1f';
+
 // Terminal.app inherits a minimal env, so the attach command carries its own
 // PATH — the agent-relay shim is a node script and needs node beside it.
 const RELAY_BIN_DIR = '/Users/will/.nvm/versions/node/v22.22.2/bin';
@@ -92,29 +98,123 @@ function extractField(body, label) {
   return value ? clean(value) : '';
 }
 
+// History bullets look like "- YYYY-MM-DD — text" or "- YYYY-MM-DD (digest) —
+// text", newest first, with wrapped continuation lines indented under the
+// bullet. The first bullet in the section is the latest update.
+//
+// The heading is located with a multiline `^` (it isn't at the start of
+// body), but the entry itself is then matched against the *un-flagged*
+// remainder of the string — under the 'm' flag `$` matches end-of-line, not
+// end-of-string, which would truncate every multi-line entry to its first line.
+const HISTORY_HEADING_RE = /^## History\s*\n+/m;
+const HISTORY_ENTRY_RE = /^- (\d{4}-\d{2}-\d{2})(?:\s*\([^)]*\))?\s*—\s*([\s\S]*?)(?=\n- \d{4}-\d{2}-\d{2}|\n#{1,6}\s|$)/;
+
+function extractLatestUpdate(body) {
+  const heading = body.match(HISTORY_HEADING_RE);
+  if (!heading) return null;
+  const section = body.slice(heading.index + heading[0].length);
+  const match = section.match(HISTORY_ENTRY_RE);
+  if (!match) return null;
+  return { date: match[1], text: clean(match[2], 200) };
+}
+
+function humanizeAgo(epochSeconds) {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
+}
+
+function runGit(repoPath, args) {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd: repoPath, maxBuffer: 2 * 1024 * 1024, timeout: 5000 }, (err, stdout) => {
+      resolve(err ? '' : stdout);
+    });
+  });
+}
+
+// Per-repo git activity (read-only), memoized for GIT_CACHE_TTL_MS so the
+// 60s UI poll doesn't fork a fresh `git log` per project every request —
+// repos shared across workstreams (relaycast, cloud, ...) are read once per
+// cache window regardless of how many projects reference them.
+const gitCache = new Map();
+
+function repoGitActivity(repoPath) {
+  const cached = gitCache.get(repoPath);
+  const now = Date.now();
+  if (cached && cached.expires > now) return cached.promise;
+  const promise = (async () => {
+    const [countOut, recentOut] = await Promise.all([
+      runGit(repoPath, ['log', '--all', '--since=24h', '--oneline']),
+      runGit(repoPath, ['log', '--all', '-5', `--format=%s${GIT_LOG_DELIM}%ct`]),
+    ]);
+    const commits24h = countOut ? countOut.split('\n').filter(Boolean).length : 0;
+    const recent = recentOut
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [subject, epoch] = line.split(GIT_LOG_DELIM);
+        return { subject, epoch: Number(epoch) };
+      });
+    return { commits24h, recent };
+  })();
+  gitCache.set(repoPath, { expires: now + GIT_CACHE_TTL_MS, promise });
+  return promise;
+}
+
+// Aggregates git activity across a workstream's repos: total commits in the
+// last 24h, the single most recent commit, and up to 5 most recent overall.
+async function projectPulse(repos) {
+  const existing = repos.filter((r) => existsSync(join(REPOS_ROOT, r)));
+  const perRepo = await Promise.all(
+    existing.map(async (r) => ({ repo: r, ...(await repoGitActivity(join(REPOS_ROOT, r))) }))
+  );
+  const commits24h = perRepo.reduce((sum, r) => sum + r.commits24h, 0);
+  const allRecent = perRepo
+    .flatMap((r) => r.recent.map((c) => ({ ...c, repo: r.repo })))
+    .sort((a, b) => b.epoch - a.epoch);
+  const toCommit = (c) => ({ repo: c.repo, subject: c.subject, ago: humanizeAgo(c.epoch), epoch: c.epoch });
+  return {
+    commits24h,
+    latestCommit: allRecent[0] ? toCommit(allRecent[0]) : null,
+    recentCommits: allRecent.slice(0, 5).map(toCommit),
+  };
+}
+
 async function loadProjects() {
   const files = (await readdir(WORKSTREAMS_DIR)).filter((f) => f.endsWith('.md')).sort();
   const projects = await Promise.all(files.map(async (file) => {
     const raw = await readFile(join(WORKSTREAMS_DIR, file), 'utf8');
     const { meta, body } = parseFrontmatter(raw);
     const goal = extractField(body, 'Goal');
+    const repos = meta.repos ?? [];
+    const pulse = await projectPulse(repos);
     return {
       file,
       status: meta.status ?? '',
       owner: meta.owner ?? '',
       updated: meta.updated ?? '',
-      repos: meta.repos ?? [],
+      repos,
       title: extractTitle(body),
       card: meta.card ? stripQuotes(meta.card) : '',
       tldr: (meta.tldr ? stripQuotes(meta.tldr) : '') || firstSentence(goal),
       goal,
       now: extractField(body, 'Now'),
       next: extractField(body, 'Next'),
+      latestUpdate: extractLatestUpdate(body),
+      commits24h: pulse.commits24h,
+      latestCommit: pulse.latestCommit,
+      recentCommits: pulse.recentCommits,
     };
   }));
   projects.sort((a, b) => {
     const order = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
-    return order !== 0 ? order : a.file.localeCompare(b.file);
+    if (order !== 0) return order;
+    const aEpoch = a.latestCommit?.epoch ?? -Infinity;
+    const bEpoch = b.latestCommit?.epoch ?? -Infinity;
+    if (bEpoch !== aEpoch) return bEpoch - aEpoch;
+    return a.file.localeCompare(b.file);
   });
   return projects;
 }
