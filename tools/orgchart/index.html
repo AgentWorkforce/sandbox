@@ -234,6 +234,12 @@
   .chip.parked { background: color-mix(in srgb, var(--hold) 16%, transparent); color: var(--hold); border-color: color-mix(in srgb, var(--hold) 40%, transparent); }
   .chip.done { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); }
 
+  .status-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+  .updated-stamp {
+    font-size: 10.5px; color: var(--muted); white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
   .project-agents { margin-top: 2px; }
   .project-agents .card.agent-row { margin: 5px 0; box-shadow: none; }
 
@@ -531,6 +537,18 @@ function chip(status) {
   return el;
 }
 
+// Top-right column of a project card/header: status chip, with the
+// "updated <ago>" stamp stacked subtly beneath it. Shared by the grid's
+// mini card and the detail view header so both stay in lockstep.
+function statusCol(p) {
+  const el = document.createElement('div');
+  el.className = 'status-col';
+  el.append(chip(p.status));
+  const stamp = updatedStamp(p);
+  if (stamp) el.append(stamp);
+  return el;
+}
+
 function field(label, value) {
   const row = document.createElement('div');
   row.className = 'field';
@@ -556,6 +574,16 @@ function shortTitle(title) {
 function truncate(text, cap) {
   if (!text) return '';
   return text.length > cap ? `${text.slice(0, cap).trim()}…` : text;
+}
+
+// Mirrors the server's per-commit "ago" humanizer (serve.mjs) so the
+// "updated <ago>" stamp reads the same as the rest of the UI's relative times.
+function humanizeAgo(epochSeconds) {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
 }
 
 // /api/projects returns {name, title, status} per agent (server has no
@@ -634,7 +662,7 @@ function miniCard(p) {
   title.className = 'project-mini-title';
   title.textContent = cardLabel(p);
   title.title = fullTitle;
-  head.append(title, chip(p.status));
+  head.append(title, statusCol(p));
 
   const tldr = document.createElement('div');
   tldr.className = 'project-mini-tldr';
@@ -714,7 +742,7 @@ function detailCard(p) {
   const title = document.createElement('div');
   title.className = 'project-title';
   title.textContent = p.title || p.file;
-  head.append(title, chip(p.status));
+  head.append(title, statusCol(p));
 
   const meta = document.createElement('div');
   meta.className = 'project-meta';
@@ -741,6 +769,23 @@ function activityEpoch(p) {
   const commitEpoch = p.latestCommit?.epoch ?? -Infinity;
   const updateEpoch = p.latestUpdate ? Date.parse(`${p.latestUpdate.date}T00:00:00Z`) / 1000 : -Infinity;
   return Math.max(commitEpoch, updateEpoch);
+}
+
+// Explicit "updated <ago>" stamp — same key the Activity sort uses, so the
+// stamp and the sort order can never disagree. Null for a project with
+// neither a commit nor a journal update to key off of.
+function updatedAgoText(p) {
+  const epoch = activityEpoch(p);
+  return Number.isFinite(epoch) ? `updated ${humanizeAgo(epoch)} ago` : null;
+}
+
+function updatedStamp(p) {
+  const text = updatedAgoText(p);
+  if (!text) return null;
+  const el = document.createElement('span');
+  el.className = 'updated-stamp';
+  el.textContent = text;
+  return el;
 }
 
 function sortedProjects() {
