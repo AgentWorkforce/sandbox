@@ -118,7 +118,12 @@ async function waitForOperation(opId, timeoutMs = 90_000) {
   throw new Error(`Timed out waiting for Relayfile writeback ${opId}`);
 }
 
-async function writeCreateDraft(remotePath, payload) {
+async function writeProviderMutation(
+  remotePath,
+  payload,
+  identityKind = "chief-provider-mutation",
+  { requireNewOperation = true } = {},
+) {
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   const digest = createHash("sha256").update(content).digest("hex");
   const response = await relayfileRequest(
@@ -132,7 +137,7 @@ async function writeCreateDraft(remotePath, payload) {
           content,
           encoding: "utf-8",
           contentIdentity: {
-            kind: "mount-writeback-create-draft",
+            kind: identityKind,
             key: `${relayfileWorkspace}:${remotePath}:${digest}`,
             ttlSeconds: 2_592_000,
           },
@@ -144,6 +149,7 @@ async function writeCreateDraft(remotePath, payload) {
     throw new Error(`Relayfile rejected ${remotePath}`);
   }
   if (response.operationCountDelta < 1) {
+    if (!requireNewOperation) return null;
     throw new Error(
       `Relayfile stored ${remotePath} without creating a provider operation`,
     );
@@ -153,6 +159,14 @@ async function writeCreateDraft(remotePath, payload) {
     response.correlationId,
   );
   return waitForOperation(admitted.opId);
+}
+
+async function writeCreateDraft(remotePath, payload) {
+  return writeProviderMutation(
+    remotePath,
+    payload,
+    "mount-writeback-create-draft",
+  );
 }
 
 function createReceipt(value) {
@@ -363,6 +377,139 @@ async function createWorkspaceConvergenceTask() {
   }, null, 2));
 }
 
+async function waitForIssuePromotion(
+  issueKey,
+  stateId,
+  titlePrefix,
+  requiredLabels,
+  timeoutMs = 90_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await readRemoteJson(
+      `/linear/issues/by-id/${issueKey}.json`,
+      { allowNotFound: true },
+    );
+    const issue = value?.payload ?? value;
+    const labelNames = (issue?.labels ?? []).map((label) =>
+      typeof label === "string" ? label : label?.name
+    );
+    if (
+      issue?.stateId === stateId &&
+      issue?.title?.toLowerCase().startsWith(titlePrefix.toLowerCase()) &&
+      requiredLabels.every((label) =>
+        labelNames.some((candidate) =>
+          candidate?.toLowerCase() === label.toLowerCase()
+        )
+      )
+    ) {
+      return issue;
+    }
+    await delay(1_000);
+  }
+  throw new Error(
+    `Linear accepted the update for ${issueKey}, but its mounted record did not converge`,
+  );
+}
+
+async function promoteExistingIssue(issueKey, repoNames, recipe) {
+  const { state, readinessLabel } = await bootstrap();
+  const value = await readRemoteJson(
+    `/linear/issues/by-id/${issueKey}.json`,
+    { allowNotFound: true },
+  );
+  const issue = value?.payload ?? value;
+  if (!issue?.id || !issue?.title) {
+    throw new Error(`Linear issue ${issueKey} was not found`);
+  }
+
+  const routeLabels = [];
+  for (const repoName of repoNames) {
+    const label = await findLabel([repoName]);
+    if (!label?.id) {
+      throw new Error(`Linear repository label ${repoName} was not found`);
+    }
+    routeLabels.push(label);
+  }
+  const recipeName = recipe ?? config.work.factory.defaultRecipe;
+  const recipeLabelName = config.work.factory.recipeLabels[recipeName];
+  const recipeLabel = recipeLabelName
+    ? await findLabel([recipeLabelName])
+    : null;
+  if (recipeLabelName && !recipeLabel?.id) {
+    throw new Error(`Linear recipe label ${recipeLabelName} was not found`);
+  }
+
+  const currentLabels = (issue.labels ?? []).map((label) =>
+    typeof label === "string" ? { name: label } : label
+  );
+  const desiredLabels = [
+    readinessLabel,
+    ...routeLabels,
+    ...(recipeLabel ? [recipeLabel] : []),
+  ];
+  const addedLabelIds = desiredLabels
+    .filter((label) =>
+      !currentLabels.some((current) =>
+        current?.id === label.id ||
+        current?.name?.toLowerCase() === label.name?.toLowerCase()
+      )
+    )
+    .map((label) => label.id);
+  const title = issue.title.toLowerCase().startsWith(
+    config.work.factory.titlePrefix.toLowerCase(),
+  )
+    ? issue.title
+    : `${config.work.factory.titlePrefix} ${issue.title}`;
+  const alreadyReady =
+    issue.stateId === state.id &&
+    title === issue.title &&
+    addedLabelIds.length === 0;
+  if (alreadyReady) {
+    console.log(JSON.stringify({
+      promoted: false,
+      reason: "already_ready",
+      issue: {
+        id: issue.id,
+        key: issue.identifier ?? issueKey,
+        title: issue.title,
+        url: issue.url,
+      },
+    }, null, 2));
+    return;
+  }
+
+  const canonicalPath =
+    `/linear/issues/${issue.identifier ?? issueKey}__${issue.id}.json`;
+  await writeProviderMutation(canonicalPath, {
+    title,
+    stateId: state.id,
+    ...(addedLabelIds.length > 0 ? { addedLabelIds } : {}),
+  }, "chief-factory-promotion", { requireNewOperation: false });
+  const promoted = await waitForIssuePromotion(
+    issue.identifier ?? issueKey,
+    state.id,
+    config.work.factory.titlePrefix,
+    desiredLabels.map((label) => label.name),
+  );
+  console.log(JSON.stringify({
+    promoted: true,
+    issue: {
+      id: promoted.id,
+      key: promoted.identifier ?? issueKey,
+      title: promoted.title,
+      url: promoted.url,
+      state: promoted.state?.name,
+      labels: promoted.labels?.map((label) =>
+        typeof label === "string" ? label : label.name
+      ),
+    },
+    repos: repoNames,
+    recipe: recipeName,
+    mergePolicy: config.work.factory.mergePolicy,
+  }, null, 2));
+}
+
 try {
   if (command === "bootstrap") {
     await bootstrap();
@@ -370,10 +517,28 @@ try {
     await status();
   } else if (command === "dispatch-workspace-task") {
     await createWorkspaceConvergenceTask();
+  } else if (command === "promote-issue") {
+    const issueKey = process.argv[3];
+    const repoNames = (process.argv[4] ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const recipe = process.argv[5];
+    if (!issueKey || repoNames.length === 0) {
+      throw new Error(
+        "Usage: node scripts/factory-control.mjs promote-issue " +
+        "<LINEAR-KEY> <repo[,repo]> [single|workflow|team]",
+      );
+    }
+    if (recipe && !["single", "workflow", "team"].includes(recipe)) {
+      throw new Error(`Unsupported Factory recipe ${recipe}`);
+    }
+    await promoteExistingIssue(issueKey, repoNames, recipe);
   } else {
     throw new Error(
       "Usage: node scripts/factory-control.mjs " +
-      "bootstrap|status|dispatch-workspace-task",
+      "bootstrap|status|dispatch-workspace-task|" +
+      "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]",
     );
   }
 } catch (error) {

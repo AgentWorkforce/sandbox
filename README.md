@@ -58,6 +58,16 @@ rejects a workspace whose Relaycast, Relayfile, and RelayAuth identities have
 drifted. Restart-stable resident-agent identity is the first Factory task, with
 a stop/start regression test required before that stronger guarantee is made.
 
+`npm run chief:view` opens a read-only local view. The web dashboards show
+infrastructure rather than the Chief conversation:
+
+- `https://agentrelay.com/cloud/dashboard/fleet` shows the current Relay node
+  roster and socket/handler health.
+- `https://agentrelay.com/cloud/dashboard/factory` shows Factory instance
+  heartbeats, issue runs, dispatch, and completion telemetry.
+
+Use `npm run chief` when you want to talk to Chief.
+
 ## Dispatch work
 
 A Linear issue becomes Factory work only when all of these are true:
@@ -72,6 +82,18 @@ A Linear issue becomes Factory work only when all of these are true:
 
 Factory creates and coordinates GitHub-side work, then writes useful
 checkpoints back to the Linear issue. It never merges.
+
+GitHub issues mirrored into Linear can be promoted through the same durable
+Relayfile writeback path used by Chief:
+
+```bash
+npm run factory:promote -- AR-445 relay single
+npm run factory:promote -- AR-449 cloud,relay team
+```
+
+The command adds missing readiness, route, and recipe labels, prefixes the
+title, moves the issue to `Ready for Agent`, waits for the provider-backed
+mount to converge, and is idempotent on rerun.
 
 ## Layout
 
