@@ -11,6 +11,13 @@
       "status": "resident"
     },
     {
+      "name": "voice",
+      "title": "Chief's Voice",
+      "reportsTo": "chief",
+      "repo": "/Users/will/Projects/AgentWorkforce/chief",
+      "status": "resident"
+    },
+    {
       "name": "cmo",
       "title": "CMO \u2014 GTM dept",
       "reportsTo": "chief",
