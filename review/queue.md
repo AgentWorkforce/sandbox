@@ -8,7 +8,11 @@ next." Chief is the sole writer; verdicts arrive as dashboard clicks
 cleared. Statuses: pending → cleared(approved | rejected | answered).
 
 ## RQ-1: Cloudflare re-auth (unblock)
-- status: pending
+- status: cleared(rejected) 2026-07-30 — Will: no production access for
+  agents or this machine; anything needed happens via CI/review process.
+  D1 mitigation routes through reviewed PRs deploying via CI, or through
+  Khaliq (human, owns the durable fix). Cloud's cred-contingent sweep
+  pre-auth is void.
 - date: 2026-07-29
 - from: cloud → chief (live prod incident)
 - ask: run `wrangler login` (browser, ~2 min) — every CF credential on
