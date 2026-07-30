@@ -1,5 +1,5 @@
 ---
-status: parked
+status: done
 tldr: "Parked donor project; its spike and live-pane protocol feed the chief-app cockpit."
 card: "Live-Pane Terminal"
 owner: cpo

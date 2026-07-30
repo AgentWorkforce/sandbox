@@ -102,13 +102,6 @@
       "status": "resident"
     },
     {
-      "name": "marquee",
-      "title": "marquee (parked)",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/marquee",
-      "status": "parked"
-    },
-    {
       "name": "notesnumber",
       "title": "notesnumber (in ladd)",
       "reportsTo": "head-of-experiments",
