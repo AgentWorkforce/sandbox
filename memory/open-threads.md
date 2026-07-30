@@ -33,7 +33,11 @@
   unimplemented. Owner: Relay Product Owner, RFC-first, after the release
   package. The repro also found **--workspace-key not honored** (cloud
   session follow-user scope silently re-homes brokers to prod) — filed
-  separately as a prod-safety bug.
+  separately as a prod-safety bug. Local sibling hit 2026-07-30: the
+  fleet restart re-homed chief's node (alone, 1/15) into the stale probe
+  workspace because `node up` prefers the global workspace store's
+  active entry over the repo state-dir key — fixed by aligning both on
+  the org key; relay issue to be filed via the Relay Product Owner.
   **Standing rules: restart verification requires an inbound-delivery
   proof (test DM → non-empty readers or backlog-referencing outbound);
   the 15-min pull cadences are RETIRED (token furnace) — watchdog-
