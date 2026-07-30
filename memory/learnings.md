@@ -57,3 +57,7 @@ Distilled from six months of session history
   archive-to-R2 (or equivalent) lands, treat any auth mint-flapping as a
   DB-fill check first, not a fresh diagnosis. Runbook:
   `cloud/docs/runbooks/relayauth-d1-retention-gc.md`; tracking cloud#2801.
+- **Never bundle additions into a mid-build subagent task.** Twice in one
+  day (2026-07-30) a "while you're in the file" addition arrived after the
+  worker finished and silently missed the build. Queue follow-ups as fresh
+  tasks after DONE; verify the live artifact for each addition separately.
