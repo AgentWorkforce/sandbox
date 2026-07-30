@@ -8,13 +8,16 @@ repos: [chief-app]
 ---
 # chief-app — native clients, unparked under cpo
 
-**Goal:** the org cockpit (Will): "this conversation, but with
-the ability for chief to show visuals in side panes, and drop me into the
-conversations I need to be in without typing — 'direct me to the CPO' in a
-side pane while chief is always right there; or a 4x4 pane of everyone
-working." Chief conversation as the spine; chief-pushed side-pane visuals;
-no-typing routing into any resident's session; grid of the whole fleet.
-Strictly a client of the chief brain and the relay, never a second brain.
+**Goal:** the org cockpit, three-pane layout (Will, refined 2026-07-30):
+**left** = org chart + Projects tabs (the localhost:4780 tool productized;
+clicking a project opens its leads' terminals); **middle** = always-on
+chat with chief as the primary interface (chief likely headless — a chat
+participant, not an attached PTY; the pivot's `headless-chief.ts` is
+prior art); **right** = attach terminals pear-style, splitting 2/3/4
+panes with tabs as views open. Underneath, the original framing stands:
+chief-pushed visuals, no-typing routing ("direct me to the CPO"), fleet
+grid. Strictly a client of the chief brain and the relay, never a second
+brain.
 
 **Now:** unparked by Will as a cpo-tree project
 (Will → chief → cpo → chief-app); resident owner being seated. Inherited
