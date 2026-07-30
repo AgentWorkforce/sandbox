@@ -157,12 +157,35 @@ Don't call it onboarded until all three pass:
    registered agent that never wakes on an inbound DM is deaf, not idle —
    don't assume it'll catch up on its own.
 
-   If it's deaf: attach in drive mode and nudge it to pull manually —
-   `agent-relay node agent attach <name> --mode drive`, then type an
-   instruction telling the session to call `check_inbox` itself (pull
-   delivery works even when push delivery is broken). This is the
-   documented workaround for the #1386 failure mode (section 6), not a
-   fix — it clears one stuck session, it doesn't durably cure the node.
+   If it's deaf: attach in drive mode and nudge it to pull manually. Two
+   gotchas that make this fail silently if you skip them:
+   - **Timing.** The TUI needs a few seconds to render after attach —
+     text sent immediately after `attach` is lost. Wait for the prompt
+     to actually render before you send anything, wait again before
+     sending the return keystroke, and don't detach (`Ctrl+]`) until
+     you've watched it start processing.
+   - **Broker env.** If your shell has `RELAY_BROKER_API_KEY` /
+     `RELAY_BROKER_URL` exported for a *different* repo's broker, unset
+     them first — inherited env from another broker silently redirects
+     the attach to the wrong one:
+     ```
+     env -u RELAY_BROKER_API_KEY -u RELAY_BROKER_URL \
+       agent-relay node agent attach <name> --mode drive
+     ```
+
+   Example operator nudge (this is illustrative text an operator typed
+   into a session, not a product command — adapt it, don't paste it
+   blind):
+
+   > hosted push delivery to your broker appears dead — a known SEV-1.
+   > From now on IN THIS SESSION: (1) immediately run your relay
+   > check_inbox tool and process EVERYTHING queued, oldest first; (2)
+   > adopt a pull cadence — any time you are idle with nothing to do,
+   > run check_inbox again before going quiet, and repeat at least every
+   > 15 minutes; (3) reply to the newest DM so delivery is proven.
+
+   This clears one stuck session — it doesn't durably cure the node
+   (see #1386 below).
 
 ## 5. Conventions
 
@@ -196,9 +219,11 @@ Don't call it onboarded until all three pass:
   seed `workspace-key.json` before first boot (step 3).
 - **[#1386](https://github.com/AgentWorkforce/relay/issues/1386)** —
   broker restart can leave a node's inbound delivery dead while `/health`
-  still reports it connected; PTYs sit idle forever. Cure: none durable
-  yet — pull still works, so a drive-attach nudge instructing the session
-  to `check_inbox` clears one stuck session at a time (step 4).
+  still reports it connected; PTYs sit idle forever. Pull survives
+  because `check_inbox` reads the deliveries table directly
+  (`GET /v1/inbox`) with no provider predicate and no socket in the
+  path — that's why the workaround (step 4) works at all. Cure: none
+  durable yet.
 - **[#1388](https://github.com/AgentWorkforce/relay/issues/1388)** — a
   bare `add_agent`/`spawn` MCP call has no `cwd` concept; the broker can
   place the new seat on whichever node has capacity, including a
