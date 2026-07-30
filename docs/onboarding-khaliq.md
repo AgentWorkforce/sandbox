@@ -164,10 +164,13 @@ Don't call it onboarded until all three pass:
      to actually render before you send anything, wait again before
      sending the return keystroke, and don't detach (`Ctrl+]`) until
      you've watched it start processing.
-   - **Broker env.** If your shell has `RELAY_BROKER_API_KEY` /
-     `RELAY_BROKER_URL` exported for a *different* repo's broker, unset
-     them first — inherited env from another broker silently redirects
-     the attach to the wrong one:
+   - **Broker env.** `RELAY_BROKER_URL` / `RELAY_BROKER_API_KEY` take
+     precedence over the repo's `connection.json`, and broker-spawned
+     agent sessions inherit them. Every broker start gets a fresh port
+     and api key, so stale values misroute the attach to a dead or wrong
+     broker — **including in the same repo, right after the restart
+     you're trying to recover from** (not just a different repo's
+     broker). Scrub them first:
      ```
      env -u RELAY_BROKER_API_KEY -u RELAY_BROKER_URL \
        agent-relay node agent attach <name> --mode drive
