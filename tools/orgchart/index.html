@@ -140,6 +140,22 @@
     vertical-align: middle;
   }
 
+  .projects-toolbar { display: flex; justify-content: flex-end; margin: 0 0 10px; }
+  .sort-toggle {
+    display: inline-flex; border: 1px solid var(--line); border-radius: 7px;
+    overflow: hidden;
+  }
+  button.sort-btn {
+    font: inherit; font-size: 12px; font-weight: 560;
+    padding: 5px 12px; border: none; background: transparent; color: var(--muted);
+    cursor: pointer;
+  }
+  button.sort-btn + button.sort-btn { border-left: 1px solid var(--line); }
+  button.sort-btn:hover { color: var(--ink); }
+  button.sort-btn.active {
+    color: var(--ink); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
   #projects.projects-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -327,6 +343,12 @@
   </section>
 
   <section id="projectsView" hidden>
+    <div class="projects-toolbar" id="projectsToolbar">
+      <div class="sort-toggle" role="group" aria-label="Sort projects">
+        <button class="sort-btn active" id="sortActivity" type="button">Activity</button>
+        <button class="sort-btn" id="sortAZ" type="button">A–Z</button>
+      </div>
+    </div>
     <div class="projects-grid" id="projects"></div>
   </section>
 
@@ -593,6 +615,11 @@ function pulseLine(p) {
   return el;
 }
 
+// The label shown on a project's grid card, and what A–Z sort keys on.
+function cardLabel(p) {
+  return p.card || shortTitle(p.title || p.file);
+}
+
 function miniCard(p) {
   const el = document.createElement('div');
   el.className = 'project-card-mini';
@@ -605,7 +632,7 @@ function miniCard(p) {
   head.className = 'project-mini-head';
   const title = document.createElement('div');
   title.className = 'project-mini-title';
-  title.textContent = p.card || shortTitle(fullTitle);
+  title.textContent = cardLabel(p);
   title.title = fullTitle;
   head.append(title, chip(p.status));
 
@@ -700,19 +727,61 @@ function detailCard(p) {
 let projectsCache = [];
 let selectedProject = null;
 
+// Sort mode for the Projects grid, persisted across sessions. 'activity':
+// most-recent-activity first (no status grouping — chips on cards carry
+// parked/blocked legibility instead). 'az': alphabetical by card label.
+const SORT_STORAGE_KEY = 'orgchart.projectSort';
+const SORT_MODES = new Set(['activity', 'az']);
+let projectSort = localStorage.getItem(SORT_STORAGE_KEY);
+if (!SORT_MODES.has(projectSort)) projectSort = 'activity';
+
+// Most recent of the workstream's latest commit and its latest journal-style
+// update; -Infinity for projects with neither, so they sink to the bottom.
+function activityEpoch(p) {
+  const commitEpoch = p.latestCommit?.epoch ?? -Infinity;
+  const updateEpoch = p.latestUpdate ? Date.parse(`${p.latestUpdate.date}T00:00:00Z`) / 1000 : -Infinity;
+  return Math.max(commitEpoch, updateEpoch);
+}
+
+function sortedProjects() {
+  const list = [...projectsCache];
+  if (projectSort === 'az') {
+    list.sort((a, b) => cardLabel(a).localeCompare(cardLabel(b)));
+  } else {
+    list.sort((a, b) => activityEpoch(b) - activityEpoch(a) || cardLabel(a).localeCompare(cardLabel(b)));
+  }
+  return list;
+}
+
+function updateSortButtons() {
+  document.getElementById('sortActivity').classList.toggle('active', projectSort === 'activity');
+  document.getElementById('sortAZ').classList.toggle('active', projectSort === 'az');
+}
+
+function setProjectSort(mode) {
+  if (mode === projectSort) return;
+  projectSort = mode;
+  localStorage.setItem(SORT_STORAGE_KEY, mode);
+  updateSortButtons();
+  renderProjects();
+}
+
 function renderProjects() {
   const list = document.getElementById('projects');
+  const toolbar = document.getElementById('projectsToolbar');
   if (selectedProject && !projectsCache.some((p) => p.file === selectedProject)) {
     selectedProject = null; // the selected project vanished from disk
   }
   if (selectedProject) {
+    toolbar.hidden = true;
     const p = projectsCache.find((x) => x.file === selectedProject);
     list.className = 'projects-detail';
     list.replaceChildren(detailCard(p));
     return;
   }
+  toolbar.hidden = false;
   list.className = 'projects-grid';
-  list.replaceChildren(...projectsCache.map(miniCard));
+  list.replaceChildren(...sortedProjects().map(miniCard));
 }
 
 function selectProject(file) {
@@ -855,6 +924,9 @@ function showTab(tab) {
 document.getElementById('tabOrg').addEventListener('click', () => showTab('org'));
 document.getElementById('tabProjects').addEventListener('click', () => showTab('projects'));
 document.getElementById('tabReview').addEventListener('click', () => showTab('review'));
+document.getElementById('sortActivity').addEventListener('click', () => setProjectSort('activity'));
+document.getElementById('sortAZ').addEventListener('click', () => setProjectSort('az'));
+updateSortButtons();
 
 (async () => {
   org = await (await fetch('/org.json')).json();
