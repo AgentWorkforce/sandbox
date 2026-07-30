@@ -9,8 +9,9 @@ workstream.
   changes acceptable when stated.
 - **chief (this repo)** restarts the chief-of-staff effort app-less. chief-app
   proved the persona and brain conventions but drifted into building Mac/iOS
-  clients; parked deliberately. Brain = markdown in git; mechanics belong in
-  platform components, never here.
+  clients; unparked under cpo as a native-client project ([chief-app]),
+  strictly a client of this brain, never a second brain. Brain = markdown in
+  git; mechanics belong in platform components, never here.
 - **Platform primitives chief depends on** (each is a PR against the owning
   repo, not tubing in this one):
   1. **wake-on-delivery** (relay/relaycast) — spawn a registered-but-offline
@@ -49,7 +50,8 @@ workstream.
   direction memos in `direction/`; two manager agents share the cpo
   repo/roster under it: **head-of-ecosystem** runs the Agent Relay
   ecosystem projects — chief-app, burn (which also owns `../factory`),
-  relaycron-cloud, parked marquee — and **head-of-experiments** runs
+  relaycron-cloud, mobile, relayfile, parked marquee — and
+  **head-of-experiments** runs
   non-OSS-core side projects — notesnumber (inside `../ladd`) and
   hoopsheet (`../hoopsheet`; both inherit the parent conventions).
   File-ownership partition in the cpo repo: `direction/` = cpo alone;

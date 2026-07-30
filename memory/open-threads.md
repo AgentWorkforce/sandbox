@@ -77,14 +77,10 @@
   deploy. Privacy rule (CLAUDE.md §6): transcripts/attendee text never enter
   the tracked brain.
 
-- **cso watchlist is empty; seed corpus = #research-market.** Mounts into
-  **cso's own** `senses/` (its own relayfile workspace; senses belong to the
-  consuming department, which also keeps chief's one-mount slot for the
-  GitHub tree). **Blocked:** `relayfile login --provision-messaging-only`
-  fails server-side — `http 500: Failed to create workspace` from
-  agentrelay.com/cloud; diagnosis subagent dispatched (suspect: handler on
-  torn-down cloud/AWS infra). After the fix: Will's OAuth (~3 min) → mount →
-  cso sweeps → dossiers. Interim habit: DM fresh finds to cso directly.
+- **cso watchlist is empty, blocked on relayfile provisioning.** See
+  [cso-research] for the seed plan and [relayfile-cutover-tails] for the
+  provisioning-500 fix now owned by the relayfile lead. Interim: DM fresh
+  finds to cso directly.
 
 - **YC F26 decision due by 08-28** — applications submitted ~07-26 (YC on
   time, a16z Speedrun off-cycle for SR008). Watch for responses; see
