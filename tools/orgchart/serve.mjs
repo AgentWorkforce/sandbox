@@ -273,8 +273,11 @@ const shellQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 // target repo's connection.json answer for itself.
 const CONNECTION_ENV = ['RELAY_BROKER_URL', 'RELAY_BROKER_API_KEY'];
 
-function attachCommand(agent) {
-  const attach = `${shellQuote(RELAY_BIN)} node agent attach ${shellQuote(agent.name)}`;
+const ATTACH_MODES = new Set(['view', 'drive']);
+
+function attachCommand(agent, mode) {
+  const driveFlag = mode === 'drive' ? ' --mode drive' : '';
+  const attach = `${shellQuote(RELAY_BIN)} node agent attach ${shellQuote(agent.name)}${driveFlag}`;
   return [
     `unset ${CONNECTION_ENV.join(' ')}`,
     `export PATH=${shellQuote(RELAY_BIN_DIR)}:"$PATH"`,
@@ -358,15 +361,18 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/attach') {
-      const { name } = JSON.parse((await readBody(req)) || '{}');
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const { name } = body;
+      const mode = body.mode ?? 'view';
+      if (!ATTACH_MODES.has(mode)) return send(res, 400, { ok: false, error: `Invalid mode: ${mode}` });
       const org = await loadOrg();
       const agent = org.agents.find((a) => a.name === name);
       if (!agent) return send(res, 404, { ok: false, error: `Unknown agent: ${name}` });
       if (NOT_ATTACHABLE[agent.status]) {
         return send(res, 409, { ok: false, error: `${agent.name} ${NOT_ATTACHABLE[agent.status]}` });
       }
-      const app = await openTerminal(attachCommand(agent));
-      console.log(`attach ${agent.name} -> ${app} (${agent.repo})`);
+      const app = await openTerminal(attachCommand(agent, mode));
+      console.log(`attach ${agent.name} -> ${app} (${agent.repo}) mode=${mode}`);
       return send(res, 200, { ok: true, app, message: `Attached to ${agent.name} in ${app}` });
     }
 

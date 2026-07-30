@@ -89,6 +89,7 @@
     box-shadow: var(--shadow);
   }
   .card .id { min-width: 0; flex: 1; }
+  .card .actions { display: flex; gap: 6px; flex: none; }
   .name { font-weight: 600; font-size: 14px; letter-spacing: -.005em; }
   .title {
     color: var(--muted); font-size: 12.5px;
@@ -110,6 +111,13 @@
   }
   button.view:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button.view:disabled { opacity: .35; cursor: not-allowed; }
+
+  button.view.drive { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.view.drive:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 82%, black);
+    border-color: color-mix(in srgb, var(--accent) 82%, black);
+    color: #fff;
+  }
 
   .tabs { display: flex; gap: 6px; margin: 18px 0 0; }
   button.tab {
@@ -267,7 +275,7 @@
 
     <ul class="tree" id="tree"></ul>
 
-    <footer>View mode is read-only; <code>Ctrl+]</code> detaches.</footer>
+    <footer>View is read-only · Drive takes the wheel (your keystrokes go to the agent) · <code>Ctrl+]</code> detaches; queued messages flush on detach</footer>
   </section>
 
   <section id="projectsView" hidden>
@@ -320,14 +328,28 @@ function card(agent, extraClass) {
   meta.dataset.metaFor = agent.name;
   meta.textContent = metaText(agent);
 
-  const btn = document.createElement('button');
-  btn.className = 'view';
-  btn.textContent = 'View';
-  btn.disabled = NOT_ATTACHABLE.has(agent.status);
-  if (btn.disabled) btn.title = `${agent.name} is ${agent.status.replace('-', ' ')}`;
-  btn.addEventListener('click', () => attach(agent.name, btn));
+  const disabled = NOT_ATTACHABLE.has(agent.status);
+  const disabledTitle = disabled ? `${agent.name} is ${agent.status.replace('-', ' ')}` : '';
 
-  el.append(dot, id, meta, btn);
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'view';
+  viewBtn.textContent = 'View';
+  viewBtn.disabled = disabled;
+  if (disabled) viewBtn.title = disabledTitle;
+  viewBtn.addEventListener('click', () => attach(agent.name, 'view', viewBtn));
+
+  const driveBtn = document.createElement('button');
+  driveBtn.className = 'view drive';
+  driveBtn.textContent = 'Drive';
+  driveBtn.disabled = disabled;
+  if (disabled) driveBtn.title = disabledTitle;
+  driveBtn.addEventListener('click', () => attach(agent.name, 'drive', driveBtn));
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  actions.append(viewBtn, driveBtn);
+
+  el.append(dot, id, meta, actions);
   return el;
 }
 
@@ -401,13 +423,13 @@ function toast(message, isError) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 3600);
 }
 
-async function attach(name, btn) {
+async function attach(name, mode, btn) {
   btn.disabled = true;
   try {
     const res = await fetch('/api/attach', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, mode }),
     });
     const body = await res.json();
     if (res.ok && body.ok) toast(body.message);
