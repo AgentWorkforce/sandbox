@@ -58,3 +58,49 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   in the application ("eight-figure" vs "~$7M"), the "agents" metric
   definition (active vs created), runway (bank + monthly spend).
 - on-done: answers land in coo's interview-prep file, not chief's brain.
+
+## RQ-6: URGENT — rotate leaked credentials (decision reversal)
+- status: pending
+- date: 2026-07-30
+- from: relayfile + head-of-ecosystem + cpo (security escalations, overnight)
+- ask: the deferred rotation batch is no longer deferrable — overnight,
+  a live `rk_live_` workspace key + `at_live_` agent token were printed
+  into a Codex tool transcript (third-party conversation store), and a
+  `--reveal-token` probe separately captured the live `cld_at_` cloud
+  session token. Approve immediate rotation.
+- your-part: `agent-relay cloud login --force` (rotates cld_at_, one
+  command) + approve chief running the coordinated rk_live_/at_live_
+  rotation op (new key, re-seed all node state dirs, rolling restarts
+  with pull-nudge protocol — plan ready, ~30 min fleet disruption).
+- on-approve: chief executes the fleet rotation; vendor-retention
+  question (OpenAI store deletion request) comes as a follow-up decision.
+
+## RQ-7: Codex allowance — top up or re-tier (decision)
+- status: pending
+- date: 2026-07-30
+- from: chief (Will observed the spend; multiple codex seats frozen)
+- ask: the codex allowance is ~exhausted (overnight autonomous work +
+  the 15-min pull cadences — now retired in favor of watchdog-triggered
+  nudges). Top up codex, or re-tier some implementor seats to
+  claude/sonnet, or let codex seats idle until the quota resets?
+- recommendation: retire cadences (done), keep seats idle today, top up
+  if the price is right — and relay's seat temporarily back to claude to
+  finish the release package if you want the terminal fixes shipped today.
+
+## RQ-8: Test-drive Agent Relay Mobile (ready for you)
+- status: pending
+- date: 2026-07-30
+- from: mobile → head-of-ecosystem
+- ask: the verified runbook is on main —
+  https://github.com/AgentWorkforce/mobile/blob/main/docs/RUNNING.md
+  (clean clone → Xcode → Simulator; CI green at 14c2ddaf). Shell/design
+  review only — no live account until the platform gaps close.
+
+## RQ-9: Test-drive chief-app (ready for you)
+- status: pending
+- date: 2026-07-30
+- from: chief-app → head-of-ecosystem
+- ask: docs/RUNNING.md merged to main (bb8f785): fresh clone → XcodeGen
+  → unsigned Mac build → launch; 89/89 tests + launch verified. Honest
+  limitation: sign-in fails closed (device-session provisioning not yet
+  composed) — no live chat with chief yet; UI/shape review only.
