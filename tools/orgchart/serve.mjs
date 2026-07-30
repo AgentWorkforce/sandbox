@@ -3,10 +3,10 @@
 // a terminal attached to an agent, and renders live workstream status.
 // Localhost only, no dependencies.
 import { createServer } from 'node:http';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -22,6 +22,16 @@ const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };
 const REPOS_ROOT = join(HERE, '..', '..', '..');
 const GIT_CACHE_TTL_MS = 60_000;
 const GIT_LOG_DELIM = '\x1f';
+
+// Review inbox: chief is the sole writer of queue.md, this server only reads
+// it and relays verdict clicks back to chief as a DM — it never edits the
+// file directly.
+const CHIEF_REPO = join(HERE, '..', '..');
+const REVIEW_QUEUE_PATH = join(CHIEF_REPO, 'review', 'queue.md');
+const REVIEW_CACHE_TTL_MS = 30_000;
+const REVIEW_STATE_DIR = join(HERE, '.state');
+const REVIEW_STATE_FILE = join(REVIEW_STATE_DIR, 'review-seen.json');
+const REVIEW_VERDICTS = new Set(['approve', 'reject', 'discuss']);
 
 // Terminal.app inherits a minimal env, so the attach command carries its own
 // PATH — the agent-relay shim is a node script and needs node beside it.
@@ -238,6 +248,188 @@ async function loadProjects(agents) {
   return projects;
 }
 
+// --------------------------------------------------------------- review queue
+
+// review/queue.md sections look like:
+//   ## RQ-1: Title
+//   - status: pending
+//   - ask: run `wrangler login` (browser, ~2 min) — every CF credential on
+//     this machine is dead.
+// Bullet values wrap onto indented continuation lines with no `- ` prefix;
+// those are folded back into the bullet they follow.
+const REVIEW_HEADING_RE = /^## (RQ-\d+):\s*(.+)$/;
+const REVIEW_BULLET_RE = /^- ([a-z][a-z-]*):\s?(.*)$/;
+const REVIEW_SUMMARY_KEYS = new Set(['status', 'date', 'from', 'ask']);
+
+function parseReviewQueue(raw) {
+  const items = [];
+  let current = null;
+  let currentField = null;
+  for (const line of raw.split('\n')) {
+    const heading = line.match(REVIEW_HEADING_RE);
+    if (heading) {
+      current = { id: heading[1], title: heading[2].trim(), order: [], fields: {} };
+      items.push(current);
+      currentField = null;
+      continue;
+    }
+    if (!current) continue;
+    const bullet = line.match(REVIEW_BULLET_RE);
+    if (bullet) {
+      const [, key, value] = bullet;
+      current.fields[key] = value.trim();
+      current.order.push(key);
+      currentField = key;
+      continue;
+    }
+    if (currentField && /^\s+\S/.test(line)) {
+      current.fields[currentField] = `${current.fields[currentField]} ${line.trim()}`;
+      continue;
+    }
+    currentField = null; // blank line or unindented prose ends the run
+  }
+  return items.map(toReviewCard);
+}
+
+// Splits a parsed item into the fields the UI treats specially (status,
+// date, from, ask) and the rest, in file order, for generic labeled rows —
+// keys vary per item (why-you, recommendation, on-done, on-approve, ...) so
+// nothing beyond the summary keys is hardcoded.
+function toReviewCard(item) {
+  const status = item.fields.status ?? '';
+  const seen = new Set();
+  const fields = [];
+  for (const key of item.order) {
+    if (REVIEW_SUMMARY_KEYS.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    fields.push({ key, value: item.fields[key] });
+  }
+  return {
+    id: item.id,
+    title: item.title,
+    status,
+    pending: status === 'pending',
+    date: item.fields.date ?? '',
+    from: item.fields.from ?? '',
+    ask: item.fields.ask ?? '',
+    fields,
+  };
+}
+
+// In-memory seen-id set for review notifications, backed by a state file so
+// restarts don't re-page for items already surfaced. `null` means not yet
+// loaded from disk this process; loadSeenState() populates it once.
+let seenReviewIds = null;
+let seenReviewInitialized = false;
+
+async function loadSeenState() {
+  if (seenReviewIds) return;
+  try {
+    const data = JSON.parse(await readFile(REVIEW_STATE_FILE, 'utf8'));
+    seenReviewIds = new Set(data.seenIds ?? []);
+    seenReviewInitialized = true;
+  } catch {
+    seenReviewIds = new Set();
+    seenReviewInitialized = false; // no state file yet: bootstrap on first pass, don't page
+  }
+}
+
+async function saveSeenState() {
+  await mkdir(REVIEW_STATE_DIR, { recursive: true });
+  await writeFile(REVIEW_STATE_FILE, JSON.stringify({ seenIds: [...seenReviewIds] }, null, 2));
+}
+
+// AppleScript string literal for `osascript -e`: backslash- and
+// quote-escape. osascript takes one shell arg per -e, so nothing beyond
+// this needs escaping.
+function appleScriptString(text) {
+  return `"${String(text).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+async function notifyNewReviewItem(item) {
+  const message = appleScriptString(`${item.id}: ${item.title}`);
+  try {
+    await run('osascript', ['-e', `display notification ${message} with title "Review needed" sound name "Glass"`]);
+  } catch (err) {
+    console.error(`review notification failed for ${item.id}:`, err.message);
+  }
+}
+
+// Called on every fresh (non-memoized) parse of queue.md. Diffs the current
+// pending set against what's already been seen and pages for anything new.
+// First-ever run adopts the current pending set as seen without paging —
+// those items are already known to Will.
+async function handleReviewNotifications(items) {
+  await loadSeenState();
+  const pending = items.filter((i) => i.pending);
+  if (!seenReviewInitialized) {
+    for (const item of pending) seenReviewIds.add(item.id);
+    seenReviewInitialized = true;
+    await saveSeenState();
+    return;
+  }
+  const fresh = pending.filter((item) => !seenReviewIds.has(item.id));
+  if (!fresh.length) return;
+  for (const item of fresh) {
+    await notifyNewReviewItem(item);
+    seenReviewIds.add(item.id);
+  }
+  await saveSeenState();
+}
+
+let reviewCache = null; // { expires, promise }
+
+async function loadReviewQueue() {
+  const now = Date.now();
+  if (reviewCache && reviewCache.expires > now) return reviewCache.promise;
+  const promise = (async () => {
+    let raw;
+    try {
+      raw = await readFile(REVIEW_QUEUE_PATH, 'utf8');
+    } catch {
+      return [];
+    }
+    const items = parseReviewQueue(raw);
+    await handleReviewNotifications(items);
+    return items;
+  })();
+  reviewCache = { expires: now + REVIEW_CACHE_TTL_MS, promise };
+  return promise;
+}
+
+// Reads port + key from chief's own connection.json. The api_key never
+// leaves this process — it's only ever attached to the outbound request
+// header, never logged.
+async function chiefConnection() {
+  const path = join(CHIEF_REPO, '.agentworkforce/relay/connection.json');
+  if (!existsSync(path)) return null;
+  try {
+    const conn = JSON.parse(await readFile(path, 'utf8'));
+    return conn.port && conn.api_key ? conn : null;
+  } catch {
+    return null;
+  }
+}
+
+// Relays a verdict click to chief as a DM over the broker HTTP API. The
+// dashboard never edits queue.md — chief is the sole writer and clears the
+// item itself once it acts on the DM.
+async function sendToChief(text) {
+  const conn = await chiefConnection();
+  if (!conn) return { ok: false };
+  try {
+    const res = await fetch(`http://127.0.0.1:${conn.port}/api/send`, {
+      method: 'POST',
+      headers: { 'X-API-Key': conn.api_key, 'content-type': 'application/json' },
+      body: JSON.stringify({ to: 'chief', from: 'review-dashboard', message: text }),
+      signal: AbortSignal.timeout(15000),
+    });
+    return { ok: res.ok, status: res.status };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // Reads only the port. The api_key in this file never leaves the process.
 async function brokerPort(repo) {
   const path = join(repo, '.agentworkforce/relay/connection.json');
@@ -360,6 +552,25 @@ const server = createServer(async (req, res) => {
       return send(res, 200, await loadProjects(org.agents));
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/review') {
+      return send(res, 200, await loadReviewQueue());
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/review/verdict') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const { id, verdict } = body;
+      if (!REVIEW_VERDICTS.has(verdict)) {
+        return send(res, 400, { ok: false, error: `Invalid verdict: ${verdict}` });
+      }
+      const items = await loadReviewQueue();
+      const item = items.find((i) => i.id === id);
+      if (!item) return send(res, 404, { ok: false, error: `Unknown review item: ${id}` });
+      const text = `[review] Will clicked ${verdict.toUpperCase()} on ${item.id}: ${item.title}`;
+      const result = await sendToChief(text);
+      if (!result.ok) return send(res, 502, { ok: false, error: 'Could not reach chief over the broker' });
+      return send(res, 200, { ok: true, message: 'Sent to chief — it executes and clears the item' });
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/attach') {
       const body = JSON.parse((await readBody(req)) || '{}');
       const { name } = body;
@@ -391,6 +602,13 @@ server.on('error', (err) => {
   throw err;
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Org chart on http://${HOST}:${PORT}`);
-});
+// Guarded so this module can be imported (e.g. to exercise the review-queue
+// parser/notifier in a test script) without binding the port a second time.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  server.listen(PORT, HOST, () => {
+    console.log(`Org chart on http://${HOST}:${PORT}`);
+  });
+}
+
+export { parseReviewQueue, handleReviewNotifications };

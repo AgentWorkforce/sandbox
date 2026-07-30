@@ -5,3 +5,4 @@ node_modules/
 senses/
 .agentworkforce/*
 !.agentworkforce/trajectories/
+tools/orgchart/.state/

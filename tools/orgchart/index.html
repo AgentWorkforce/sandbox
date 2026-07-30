@@ -132,6 +132,14 @@
     background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
+  .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; margin-left: 7px; padding: 0 5px;
+    border-radius: 999px; background: var(--bad); color: #fff;
+    font-size: 10.5px; font-weight: 700; line-height: 16px;
+    vertical-align: middle;
+  }
+
   #projects.projects-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -240,6 +248,45 @@
   footer { margin-top: 36px; color: var(--muted); font-size: 12.5px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
 
+  #reviewView { display: block; }
+  .review-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: var(--shadow); padding: 16px 18px; margin: 0 0 14px;
+  }
+  .review-title { font-weight: 640; font-size: 15px; letter-spacing: -.005em; }
+  .review-meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .review-ask {
+    margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    font-size: 14px; line-height: 1.5;
+  }
+  .review-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .review-btn {
+    font: inherit; font-size: 13px; font-weight: 600;
+    padding: 7px 16px; border-radius: 7px; border: 1px solid var(--edge);
+    background: transparent; color: var(--ink); cursor: pointer;
+  }
+  .review-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .review-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .review-btn-approve { background: var(--up); border-color: var(--up); color: #fff; }
+  .review-btn-approve:hover:not(:disabled) { background: color-mix(in srgb, var(--up) 82%, black); color: #fff; }
+  .review-btn-reject { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .review-btn-reject:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 82%, black); color: #fff; }
+  .review-btn-discuss { background: var(--hold); border-color: var(--hold); color: #14161a; }
+  .review-btn-discuss:hover:not(:disabled) { background: color-mix(in srgb, var(--hold) 82%, black); }
+
+  .review-empty { color: var(--muted); font-size: 13.5px; padding: 8px 2px; }
+  .review-cleared { margin-top: 18px; }
+  .review-cleared > summary {
+    cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 600;
+    padding: 6px 0; list-style: none;
+  }
+  .review-cleared > summary::-webkit-details-marker { display: none; }
+  .review-cleared > summary::before { content: '▸ '; }
+  .review-cleared[open] > summary::before { content: '▾ '; }
+  .review-cleared .review-card { opacity: .55; margin-top: 10px; }
+
   #toast {
     position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
     max-width: min(520px, 88vw);
@@ -262,6 +309,7 @@
     <nav class="tabs">
       <button class="tab active" id="tabOrg" type="button">Org</button>
       <button class="tab" id="tabProjects" type="button">Projects</button>
+      <button class="tab" id="tabReview" type="button">Review<span class="badge" id="reviewBadge" hidden>0</span></button>
     </nav>
   </header>
 
@@ -280,6 +328,10 @@
 
   <section id="projectsView" hidden>
     <div class="projects-grid" id="projects"></div>
+  </section>
+
+  <section id="reviewView" hidden>
+    <div id="review"></div>
   </section>
 </main>
 <div id="toast" role="status" aria-live="polite"></div>
@@ -675,17 +727,134 @@ async function loadProjects() {
   } catch { /* keep the last known state on a transient failure */ }
 }
 
+// key: value -> "Key: Value" for generic review-field labels (why-you,
+// on-done, on-approve, ... whatever the item happens to carry).
+function labelize(key) {
+  return key.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function reviewCard(item) {
+  const el = document.createElement('div');
+  el.className = 'review-card';
+
+  const title = document.createElement('div');
+  title.className = 'review-title';
+  title.textContent = `${item.id}: ${item.title}`;
+  el.append(title);
+
+  const meta = [item.from, item.date].filter(Boolean).join(' · ');
+  if (meta) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'review-meta';
+    metaEl.textContent = meta;
+    el.append(metaEl);
+  }
+
+  if (item.ask) {
+    const ask = document.createElement('div');
+    ask.className = 'review-ask';
+    ask.textContent = item.ask;
+    el.append(ask);
+  }
+
+  for (const f of item.fields) el.append(field(labelize(f.key), f.value));
+
+  if (item.pending) {
+    const actions = document.createElement('div');
+    actions.className = 'review-actions';
+    for (const [verdict, label] of [['approve', 'Approve'], ['reject', 'Reject'], ['discuss', 'Discuss']]) {
+      const btn = document.createElement('button');
+      btn.className = `review-btn review-btn-${verdict}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => submitVerdict(item.id, verdict, actions));
+      actions.append(btn);
+    }
+    el.append(actions);
+  }
+
+  return el;
+}
+
+async function submitVerdict(id, verdict, actions) {
+  const buttons = [...actions.querySelectorAll('button')];
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    const res = await fetch('/api/review/verdict', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, verdict }),
+    });
+    const body = await res.json();
+    if (res.ok && body.ok) {
+      toast(body.message || 'Sent to chief — it executes and clears the item');
+    } else {
+      toast(body.error || `Could not send verdict for ${id}`, true);
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  } catch (err) {
+    toast(`Could not reach the org chart server: ${err.message}`, true);
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+function renderReview() {
+  const container = document.getElementById('review');
+  container.replaceChildren();
+
+  const pending = reviewCache.filter((i) => i.pending);
+  const cleared = reviewCache.filter((i) => !i.pending);
+
+  if (!pending.length) {
+    const empty = document.createElement('div');
+    empty.className = 'review-empty';
+    empty.textContent = 'Nothing needs your call right now.';
+    container.append(empty);
+  } else {
+    for (const item of pending) container.append(reviewCard(item));
+  }
+
+  if (cleared.length) {
+    const details = document.createElement('details');
+    details.className = 'review-cleared';
+    const summary = document.createElement('summary');
+    summary.textContent = `Cleared (${cleared.length})`;
+    details.append(summary);
+    for (const item of cleared) details.append(reviewCard(item));
+    container.append(details);
+  }
+}
+
+function updateReviewBadge() {
+  const badge = document.getElementById('reviewBadge');
+  const count = reviewCache.filter((i) => i.pending).length;
+  badge.textContent = String(count);
+  badge.hidden = count === 0;
+}
+
+let reviewCache = [];
+
+async function loadReview() {
+  try {
+    reviewCache = await (await fetch('/api/review')).json();
+    updateReviewBadge();
+    renderReview();
+  } catch { /* keep the last known state on a transient failure */ }
+}
+
 function showTab(tab) {
-  const isOrg = tab === 'org';
-  document.getElementById('tabOrg').classList.toggle('active', isOrg);
-  document.getElementById('tabProjects').classList.toggle('active', !isOrg);
-  document.getElementById('orgView').hidden = !isOrg;
-  document.getElementById('projectsView').hidden = isOrg;
-  if (!isOrg) loadProjects();
+  document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
+  document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
+  document.getElementById('tabReview').classList.toggle('active', tab === 'review');
+  document.getElementById('orgView').hidden = tab !== 'org';
+  document.getElementById('projectsView').hidden = tab !== 'projects';
+  document.getElementById('reviewView').hidden = tab !== 'review';
+  if (tab === 'projects') loadProjects();
+  if (tab === 'review') loadReview();
 }
 
 document.getElementById('tabOrg').addEventListener('click', () => showTab('org'));
 document.getElementById('tabProjects').addEventListener('click', () => showTab('projects'));
+document.getElementById('tabReview').addEventListener('click', () => showTab('review'));
 
 (async () => {
   org = await (await fetch('/org.json')).json();
@@ -694,6 +863,8 @@ document.getElementById('tabProjects').addEventListener('click', () => showTab('
   setInterval(poll, 10000);
   await loadProjects();
   setInterval(loadProjects, 60000);
+  await loadReview();
+  setInterval(loadReview, 60000);
 })();
 </script>
 </body>
