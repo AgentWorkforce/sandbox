@@ -51,7 +51,7 @@ workstream.
   ecosystem projects — chief-app, burn (which also owns `../factory`),
   relaycron-cloud, parked marquee — and **head-of-experiments** runs
   non-OSS-core side projects — notesnumber (inside `../ladd`) and
-  hoopsheet (`~/Projects/hoopsheet`, outside the AgentWorkforce tree).
+  hoopsheet (`../hoopsheet`; both inherit the parent conventions).
   File-ownership partition in the cpo repo: `direction/` = cpo alone;
   `ecosystem/` and `experiments/` = each head alone. The **relay core
   product seat is "Relay Product Owner" under head-of-ecosystem** (Will,
