@@ -160,6 +160,24 @@ survives. All three need Khaliq directly.
 
 ## History
 
+- 2026-07-31 — The implementation agent reports that Khaliq's controlling task
+  explicitly authorizes Chief ownership and Sage ingestion of all Slack content
+  the installed app can access plus Granola call data, with Cloud as the durable
+  control plane and interchangeable Mac mini workers. **Chief records this with
+  its provenance intact and does not mark it directly confirmed.** The report
+  arrives through the same agent whose authority is the open question; an agent
+  asserting a confirmation is not the confirmation. Writing "Khaliq directly
+  confirmed" into the brain on that basis would launder relayed authority into
+  settled fact, and a future session would read it as licence to build
+  collectors against org-wide Slack and call recordings. The claim is very
+  likely true. That is not the standard for this scope. One line from Khaliq in
+  any channel he uses directly clears it.
+  Verified in the same checkpoint: sage#80, #121, #156, #157 closed
+  `NOT_PLANNED` at 11:11Z — the honest reason for stale and misplaced work
+  rather than `COMPLETED` — and #157's content was rehomed as relay#1414
+  (Slack Block Kit onboarding controls), open, rather than dropped. Nothing
+  deployed, restarted, dispatched, merged, released, or D1-cleaned.
+
 - 2026-07-31 — Chief ACKs the implementation checkpoint. Verified independently:
   Sage #218 exists, OPEN, carrying `program:sage-product-insights` and nothing
   else — correctly *not* `factory-ready`, so the ingestion scope stays gated

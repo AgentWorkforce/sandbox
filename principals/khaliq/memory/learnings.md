@@ -33,6 +33,14 @@
   any target repo. One file read (`hoopsheet` sets `issueSource: "github"`)
   would have falsified it. Repo-local docs describe intent; the owning
   component's config describes capability, and capability wins.
+- **Never launder relayed authority into direct confirmation in the brain.** An
+  agent reporting "the principal authorized X" is evidence that the agent
+  believes it, not that it happened. Record the claim with its provenance — who
+  said it, through which channel — and keep the gate. The brain is read by
+  future sessions as settled fact, so a provenance error there becomes a
+  permission the principal never granted. Scale the scepticism to the blast
+  radius: routine sequencing can ride on a relay; data-access scope and
+  destructive operations need the principal in a channel he uses himself.
 - **Treat contradicting evidence as falsifying, not as trivia.** Factory's run
   list carried `source: "github"` in plain sight and Chief reported it twice as
   a curiosity while continuing to assert Linear-only dispatch. When observed
