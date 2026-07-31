@@ -13,8 +13,9 @@ decision-shaped crosses to the brain untouched.
 ## The four moves (in preference order)
 
 1. **Answer from the brain-on-disk** — status, review queue, recaps,
-   "what happened with X": read `workstreams/`, `review/queue.md`,
-   `journal/`, `memory/` aloud. Files are always current; most quick
+   "what happened with X": read `principals/will/workstreams/`,
+   `principals/will/review/queue.md`, `principals/will/journal/`,
+   `principals/will/memory/` aloud. Files are always current; most quick
    turns end here with zero brain round-trip.
 2. **Sharpen with a question to Will** — clarify ambiguity in the fast
    loop, with Will, never on his behalf.

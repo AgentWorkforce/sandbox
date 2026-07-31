@@ -1,0 +1,11 @@
+{
+  "idempotencyKey": "cloud-2872-workflow-schedule-lifecycle",
+  "title": "Cloud workflow schedules lack safe CLI lifecycle and verifiable provenance",
+  "description": "Source: https://github.com/AgentWorkforce/cloud/issues/2872\n\n## Outcome\n\nMake scheduled workflow deployments safely operable and verifiable from the Agent Relay CLI without duplicate schedules or hand-written HTTP calls. This is one cross-repository team task: Cloud owns API/storage correctness and Relay owns the CLI/SDK surface.\n\n## Relay workstream\n\nAdd these commands:\n\n- `relay cloud schedule update <id> <workflow> [--cron] [--timezone] [--name] [--description] [--env KEY=VALUE]`\n- `relay cloud schedule pause <id>`\n- `relay cloud schedule resume <id>`\n- `relay cloud schedule delete <id> [--yes]`\n- `relay cloud schedule show <id> [--json]`\n\nBack them with Cloud SDK functions beside `scheduleWorkflow` and `listWorkflowSchedules`. Update must reuse `resolveWorkflowInput` and the same TypeScript/YAML validation gate as create. Delete prompts unless `--yes` or non-interactive. Creating a second active schedule with the same name must warn or require an explicit duplicate flag.\n\n## Cloud workstream\n\nExpose non-secret provenance from `toPublicWorkflowSchedule`: `workflowHash` (sha256), `workflowFileType`, `workflowBytes`, `envSecretKeys`, and optional source `{ gitSha, branch, path }` captured at create/update time.\n\nFix PATCH so updating workflow content without `envSecrets` preserves the schedule's existing environment secrets. Keep `parsePatchBody` and workflow request handling split as they are now.\n\n## Acceptance\n\n- Updating workflow content is one CLI command and creates no duplicate.\n- `schedule show` reports a stable hash that changes after content changes.\n- A workflow-only PATCH preserves existing environment secrets, with a regression test.\n- Pause stops firing, resume restores it, and delete removes it from list output.\n- Duplicate active names require an explicit choice.\n- Invalid workflow updates fail before mutating the stored schedule.\n- Both repositories open PRs with test evidence; Factory must not merge them.\n\nExisting schedule source backfill is out of scope.",
+  "repos": [
+    "cloud",
+    "relay"
+  ],
+  "recipe": "team",
+  "priority": 2
+}

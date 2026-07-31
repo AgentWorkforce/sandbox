@@ -4,7 +4,7 @@
 // Localhost only, no dependencies.
 import { createServer } from 'node:http';
 import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join } from 'node:path';
@@ -14,7 +14,12 @@ const HOST = '127.0.0.1';
 const PORT = 4780;
 
 // Read-only: this server never writes outside its own directory.
-const WORKSTREAMS_DIR = join(HERE, '..', '..', 'workstreams');
+const REPO_ROOT = join(HERE, '..', '..');
+const BRAIN_ROOT = join(
+  REPO_ROOT,
+  JSON.parse(readFileSync(join(REPO_ROOT, 'chief.config.json'), 'utf8')).brainRoot,
+);
+const WORKSTREAMS_DIR = join(BRAIN_ROOT, 'workstreams');
 const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };
 
 // Sibling repos referenced by workstream frontmatter `repos:` live one level

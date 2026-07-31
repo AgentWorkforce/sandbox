@@ -7,7 +7,8 @@ description: Brain grooming pass — curate memory/ and workstreams/ so a fresh 
 
 Curate chief's standing notes so a fresh reader sees only what IS.
 
-Scope: `memory/*.md` and `workstreams/*.md`. NEVER `journal/` (append-only
+Scope (resolve `brainRoot` from `chief.config.json` first): the brainRoot's
+`memory/*.md` and `workstreams/*.md`. NEVER its `journal/` (append-only
 history) and never files outside the chief repo.
 
 1. If `git status` shows uncommitted changes under memory/ or workstreams/,

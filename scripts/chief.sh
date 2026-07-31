@@ -1,15 +1,21 @@
 #!/bin/sh
-# Attach to chief's voice (Will's entry point). Pass "brain" as the first arg
-# to reach the resident Chief directly instead. Broker starts via launchd
-# (clean env — see memory/learnings.md on CLAUDE_CODE_CHILD_SESSION leaking
-# into chief's PTY).
+# Attach to the resident Chief — or its voice, when the local roster has one.
+# Default entry is the voice; pass "brain" as the first arg to reach the
+# resident Chief directly. Broker starts via launchd (clean env —
+# CLAUDE_CODE_CHILD_SESSION from a harness-spawned shell disables transcript
+# persistence in spawned agents).
 cd "$(dirname "$0")/.." || exit 1
+CHIEF_NAME="$(node -p 'require("./chief.config.json").agent.name')" || exit 1
+HAS_VOICE="$(node -p '(require("./teams.json").agents||[]).some(a=>a.name==="voice")?"1":""' 2>/dev/null)"
 
 if [ "$1" = "brain" ]; then
-  TARGET=chief
+  TARGET="$CHIEF_NAME"
   MODE="${2:-drive}"
-else
+elif [ -n "$HAS_VOICE" ]; then
   TARGET=voice
+  MODE="${1:-drive}"
+else
+  TARGET="$CHIEF_NAME"
   MODE="${1:-drive}"
 fi
 
@@ -24,19 +30,31 @@ if ! agent-relay node status 2>/dev/null | grep -q RUNNING; then
   done
 fi
 
-has_agent() { agent-relay node agent list 2>/dev/null | grep -q "\"name\": *\"$1\""; }
+has_agent() {
+  agent-relay node agent list 2>/dev/null | AGENT_NAME="$1" node -e '
+    let text = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => text += chunk);
+    process.stdin.on("end", () => {
+      try {
+        const body = JSON.parse(text);
+        const agents = Array.isArray(body) ? body : (body.agents || []);
+        process.exit(agents.some(agent => agent.name === process.env.AGENT_NAME) ? 0 : 1);
+      } catch {
+        process.exit(text.includes(`"name": "${process.env.AGENT_NAME}"`) ? 0 : 1);
+      }
+    });
+  '
+}
 
 spawn_agent() {
-  case "$1" in
-    chief)
-      agent-relay node agent spawn claude --name chief --model opus \
-        --task "$(node -p 'require("./teams.json").agents.find(a => a.name === "chief").task')"
-      ;;
-    voice)
-      agent-relay node agent spawn claude --name voice --model sonnet \
-        --task "$(node -p 'require("./teams.json").agents.find(a => a.name === "voice").task')"
-      ;;
-  esac
+  TASK="$(AGENT_NAME="$1" node -p 'require("./teams.json").agents.find(a => a.name === process.env.AGENT_NAME).task')" || return 1
+  MODEL="$(AGENT_NAME="$1" node -p '((require("./teams.json").agents.find(a => a.name === process.env.AGENT_NAME).cli || "").match(/--model (\S+)/) || [])[1] || ""')"
+  if [ -n "$MODEL" ]; then
+    agent-relay node agent spawn claude --name "$1" --model "$MODEL" --task "$TASK"
+  else
+    agent-relay node agent spawn claude --name "$1" --task "$TASK"
+  fi
 }
 
 if ! has_agent "$TARGET"; then
@@ -44,8 +62,8 @@ if ! has_agent "$TARGET"; then
   spawn_agent "$TARGET" || exit 1
 fi
 
-# autoSpawn (teams.json) normally brings both agents up on node start; this
-# loop tolerates the case where attach races ahead of that.
+# autoSpawn (teams.json) normally brings agents up on node start; this loop
+# tolerates attach racing ahead of it.
 i=0
 until has_agent "$TARGET"; do
   i=$((i + 1))
