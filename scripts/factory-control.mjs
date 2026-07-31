@@ -505,13 +505,18 @@ async function waitForIssuePromotion(
  * Open pull requests that already reference this Linear key, across the repos
  * the issue routes to.
  *
- * `Ready for Agent` is the only claim signal every dispatcher can see, so an
- * issue sitting in that state means "nobody is working on this". An open PR
- * says otherwise. AR-448 proved the gap: Factory dispatched it and recorded
- * the claim only in its own hosted state store, the writeback that would have
- * moved the issue out of `Ready for Agent` failed on the RelayAuth outage, and
- * 77 minutes later a second dispatcher took the still-ready issue and opened a
- * competing PR against the same files.
+ * An issue sitting in `Ready for Agent` means "nobody is working on this". An
+ * open PR says otherwise. AR-448 proved the gap: Factory dispatched it and
+ * recorded the claim only in its own hosted state store, the writeback that
+ * would have moved the issue out of `Ready for Agent` failed on the RelayAuth
+ * outage, and 77 minutes later a second dispatcher took the still-ready issue
+ * and opened a competing PR against the same files.
+ *
+ * This guard is deliberately narrow: it reads a Linear key and searches GitHub
+ * PRs, so it only covers the Linear-expressed, GitHub-executed path Chief
+ * promotes. Factory is surface-agnostic, so the general fix is a Factory-owned
+ * claim on the work unit itself — this only stops Chief from re-offering work
+ * that GitHub can already prove is claimed.
  */
 async function findOpenPullRequestsForIssue(issueKey, repoNames) {
   const found = [];

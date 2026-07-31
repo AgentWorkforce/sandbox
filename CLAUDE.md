@@ -60,7 +60,11 @@ one stable data-plane ID across restarts.
 
 ## 4. Work planes
 
-### Linear — human command plane
+Surfaces are where humans express work; GitHub is where agents execute it;
+Factory bridges the two from any surface. Linear is Khaliq's current surface,
+not the only one Factory serves.
+
+### Linear — today's human command plane
 
 Linear holds goals, priority, readiness, decisions, blockers, and concise
 progress that a person needs. Chief may create and update Linear issues through
@@ -76,14 +80,33 @@ GitHub holds branches, commits, pull requests, CI, reviews, and the detailed
 task graph produced by agents. Chief has read-only GitHub senses. Agents and
 Factory own GitHub write operations.
 
-### Cloud Factory — bridge
+### Cloud Factory — the surface-agnostic bridge
 
-A task is dispatchable only when it satisfies `work.factory` in
-`chief.config.json`: the `[factory]` title prefix, `factory-ready` readiness
-label (or its canonical `factory` equivalent), `Ready for Agent` state, `AR`
-team, and a repository route. A recipe label is optional; without one, Factory
-uses the configured default recipe. Factory translates that issue into the
-selected agent recipe and reconciles results back to Linear.
+**Factory works from any surface** — Linear, Notion, GitHub, and whatever comes
+next. A surface is where a task is *expressed*; Factory is what turns any
+expressed task into an agent run. Chief works *with* Factory rather than owning
+dispatch, and must not assume the task arrived through Linear.
+
+Linear is the surface Khaliq drives today, so `work.factory` in
+`chief.config.json` describes the Linear-shaped readiness contract Chief uses:
+the `[factory]` title prefix, `factory-ready` readiness label (or its canonical
+`factory` equivalent), `Ready for Agent` state, `AR` team, and a repository
+route. A recipe label is optional; without one, Factory uses the configured
+default recipe. Treat that block as *one surface's* dispatch contract, not as
+the definition of dispatchable work.
+
+Two rules follow from surface-agnosticism, both learned the expensive way from
+the AR-448 duplicate (see `memory/learnings.md`):
+
+- **A claim belongs to the work unit, not to a surface or a dispatcher.** The
+  same task can arrive through more than one surface, and a claim recorded in
+  one dispatcher's private state is invisible to every other. Deduplication has
+  to key on the work unit's identity across surfaces.
+- **A dispatch gate fails closed.** If the claim cannot be recorded, abort the
+  dispatch. A queue that silently re-offers claimed work is worse than one that
+  stalls.
+
+Factory reconciles results back to the surface the task came from.
 
 No agent or Factory workflow merges a PR. The principal owns the merge gate.
 

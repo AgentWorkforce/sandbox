@@ -23,9 +23,10 @@
   both sync and ingress are unhealthy.
 - **A claim that lives in one dispatcher's private state is not a claim.**
   Factory fences work in its own hosted state store, which no other dispatcher
-  can see. The only cross-dispatcher claim signal is the Linear issue's own
-  state, so dispatch must move the issue out of `Ready for Agent` *before*
-  spawning agents, not as a completion checkpoint.
+  can see. Because Factory is surface-agnostic, the claim cannot live in one
+  surface's fields either — the same work unit can arrive via Linear, Notion,
+  or GitHub. The claim has to belong to the work unit, be written before agents
+  spawn, and be projected back to whichever surface expressed it.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking
