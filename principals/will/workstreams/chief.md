@@ -28,7 +28,10 @@ hosted relayfile (Gate 3 done; blocked on Will's OAuth, see below);
 (2) scheduled daily /digest: an interim launchd job already exists
 (`com.agentworkforce.chief.digest`, 17:30 daily, headless sonnet) — replace
 it with the relaycron message transport once that lands (dogfood relaycron;
-the launchd job is the bridge, not the destination).
+the launchd job is the bridge, not the destination); (3) execute the
+chief-rename flip (`chief`→`chief-will`, `voice`→`voice-will`) when
+`chief-khaliq` joins the org workspace — runbook in the 2026-07-31 journal
+entry; staged inert in the committed teams/config variants.
 
 **Senses leg is blocked on Will:** no Relayfile-backed workspace exists —
 chief-dev is messaging-only. Unblock is a ~3-min browser task: `relayfile

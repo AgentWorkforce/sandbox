@@ -6,7 +6,7 @@
     "timezone": "America/New_York"
   },
   "agent": {
-    "name": "chief",
+    "name": "chief-will",
     "displayName": "Chief"
   },
   "brainRoot": "principals/will",

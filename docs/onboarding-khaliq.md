@@ -193,8 +193,10 @@ Don't call it onboarded until all three pass:
 ## 5. Conventions
 
 - **Distinct agent names.** The workspace is shared across both fleets —
-  don't reuse a name Will's fleet already has (`chief`, `voice`, per-repo
-  leads, etc.). Collisions aren't rejected, they're confusing.
+  don't reuse a name already on the roster (check `list_agents`).
+  Principal-scoped seats follow `<role>-<principal>` (`chief-will`,
+  `chief-khaliq`, `voice-will`); department seats are role-named (`cpo`,
+  `relay`, …). Collisions aren't rejected, they're confusing.
 - **`.gitignore` hygiene**, every repo that runs a node:
   ```
   .agentworkforce/
