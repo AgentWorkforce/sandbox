@@ -70,3 +70,10 @@ Distilled from six months of session history
   worker seats open. Also: verify spend hypotheses with burn before
   legislating around them — the first policy response (cadence
   retirement) aimed at 4% of the problem.
+- **Retiring a practice means editing the durable files that prescribe
+  it.** A #general announcement reaches only the instances alive to hear
+  it; recycled seats re-adopt whatever their durable state still says
+  (relayfile's fresh instance resumed the retired 15-min pull cadence 12h
+  after retirement). Every retirement ships with a sweep of the files that
+  encode the practice — agreed and written are different states, and only
+  one survives a recycle.
