@@ -1,5 +1,7 @@
 ---
 status: active
+tldr: "Relay is in deliberate hardening — commits run overwhelmingly corrective; the AI-SDK harness soak/gating work is the open item."
+card: "Relay Core"
 owner: relay
 updated: 2026-07-29
 repos: [relay]
@@ -28,4 +30,4 @@ gates are not marked complete).
 - 2026-07-29 (digest) — Telemetry identity-leak fix cluster (clear
   inherited/cloud identity out of child env when telemetry is opted out)
   still in flight on `claude/posthog-events-mapping-9gl0p7`; CLI version
-  bump + pinning test added this morning, not yet merged to main.
+  bump + pinning test added, not yet merged to main.

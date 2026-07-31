@@ -1,5 +1,7 @@
 ---
 status: active
+tldr: "AWS is mostly dismantled; S3 storage and four SQS queues are the big remaining pieces before Cloudflare-only."
+card: "AWS Teardown"
 owner: cloud
 updated: 2026-07-29
 repos: [cloud]
@@ -30,4 +32,4 @@ three AWS accounts still gate deploys.
 - 2026-07-29 (digest) — Unrelated to teardown scope but same repo: RelayAuth
   D1 dormant-rebuild safety gates (issue #2857, branch
   `agent/2857-relayauth-d1-rebuild-dormant`) saw dense bot iteration
-  overnight, still unmerged — see [[open-threads]].
+  overnight, still unmerged — see [open-threads].

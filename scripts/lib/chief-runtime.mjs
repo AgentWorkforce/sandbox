@@ -43,13 +43,20 @@ export function validateConfig(config) {
     throw new Error("senses.scopes must contain at least one Relayfile scope");
   }
   if (
-    config?.work?.humanSystem !== "linear" ||
-    config?.work?.agentSystem !== "github" ||
-    config?.work?.factory?.execution !== "cloud" ||
-    config?.work?.factory?.mergePolicy !== "never"
+    !["linear", "relay"].includes(config?.work?.humanSystem) ||
+    config?.work?.agentSystem !== "github"
   ) {
     throw new Error(
-      "Chief requires Linear for humans, GitHub for agents, Cloud Factory execution, and a never-auto-merge policy",
+      "Chief requires Linear or Agent Relay for humans and GitHub for agents",
+    );
+  }
+  if (
+    config?.work?.humanSystem === "linear" &&
+    (config?.work?.factory?.execution !== "cloud" ||
+      config?.work?.factory?.mergePolicy !== "never")
+  ) {
+    throw new Error(
+      "A Linear profile requires Cloud Factory execution and a never-auto-merge policy",
     );
   }
   return config;

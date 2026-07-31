@@ -268,6 +268,15 @@ try {
   });
   writeJsonAtomic(CONFIG_PATH, config);
   starterBrain(config);
+  const teamsPath = join(REPO_ROOT, "teams.json");
+  const teamsVariant = join(
+    REPO_ROOT,
+    `teams.${config.brainRoot.split("/").pop()}.json`,
+  );
+  if (!existsSync(teamsPath) && existsSync(teamsVariant)) {
+    writeFileSync(teamsPath, readFileSync(teamsVariant));
+    console.log(`✓ Seeded teams.json from ${teamsVariant}`);
+  }
   const workspace = activeWorkspace(config, { switchIfNeeded: true });
   console.log("✓ Workspace convergence verified");
   console.log(JSON.stringify(publicWorkspace(workspace), null, 2));

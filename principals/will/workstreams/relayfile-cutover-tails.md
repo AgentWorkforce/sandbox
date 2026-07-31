@@ -1,5 +1,7 @@
 ---
 status: active
+tldr: "The hosted migration has been done since June; three small tails remain — a stale doc line, the compat domain, the home flag."
+card: "File-Sync Tails"
 owner: relayfile
 updated: 2026-07-29
 repos: [relayfile, relayfile-cloud, relayauth]
@@ -18,8 +20,12 @@ infrastructure since. Three tails open:
 3. `relayfile-cloud/CLAUDE.md:13` stale — still says "Gate 3, prod: in
    progress"; misleads every reader.
 
-**Next:** fix the stale CLAUDE.md line (one-line PR), then schedule the
-domain retirement and home flip.
+**Next:** the relayfile lead seat is live (2026-07-30, approved by Will —
+codex, under head-of-ecosystem) and inherits these tails plus
+relayfile#378/#379, the #380 companion verification, the hoopsheet
+admin-route question, and the provisioning-500 CLI UX. First: clean-main
+working discipline (checkout was 150 behind on a dead branch), then the
+stale CLAUDE.md one-liner, then domain retirement + home flip scheduling.
 
 ## History
 - 2026-07-29 — Status established from decision doc

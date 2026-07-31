@@ -1,8 +1,10 @@
 ---
 status: active
-owner: chief
+tldr: "Extraction into relaycron-cloud is underway with Phase 0 done; the schedule-to-DM transport lands in the new home."
+card: "Scheduler Migration"
+owner: relaycron-cloud
 updated: 2026-07-29
-repos: [relaycron, cloud, relaycron-cloud]
+repos: [relaycron-cloud, cloud, relaycron]
 ---
 # relaycron migration
 
@@ -10,21 +12,24 @@ repos: [relaycron, cloud, relaycron-cloud]
 `cloud` SST repo, plus a relay-message transport so schedules can target
 agents directly.
 
-**Now:** corrected picture (2026-07-29 mining) — nothing "moved" and nothing
-forked. The standalone `relaycron` repo is the **published library**
-(`@relaycron/{types,server,sdk}`), frozen at v0.1.3 (2026-05-12) because all
-evolution since lives in the deployment layer: `cloud/packages/relaycron`
-(private `relaycron-cloud` package) consumes `^0.1.3` as npm deps and adds
-the Cloudflare layer — `relaycron-api`/`relaycron-sweep` Workers,
-scheduler-do Durable Object, D1 schema, sweeps, alerts. Consumers on main:
-proactive-runtime-worker, web sweep routes, the public schedules API;
-dynamic one-shot schedules and managed cloud schedules landed July.
+**Now:** nothing has "moved" and nothing forked. The standalone `relaycron`
+repo is the **published library** (`@relaycron/{types,server,sdk}`), frozen
+at v0.1.3 (2026-05-12) — all evolution since lives in the deployment layer:
+`cloud/packages/relaycron` (private `relaycron-cloud` package) consumes
+`^0.1.3` as npm deps and adds the Cloudflare layer — `relaycron-api`/
+`relaycron-sweep` Workers, scheduler-do Durable Object, D1 schema, sweeps,
+alerts. Consumers on main: proactive-runtime-worker, web sweep routes, the
+public schedules API; dynamic one-shot schedules and managed cloud
+schedules landed in July.
 
-**Next:** extract `cloud/packages/relaycron` + `infra/relaycron.ts` into its
-own repo following the relayfile-cloud pattern (infra/README names
-worker-cluster extraction as the stated direction), rewire the two service
-bindings, then add the relay-message transport ("at 9am, DM chief") — see
-[agent-org-primitives].
+**Next:** owner seated (Will: the migration "needs an agent
+owner in relaycron-cloud… work with cpo") — resident project owner in
+`relaycron-cloud` under cpo. Bootstrap brief: migration spike →
+docs/migration-plan.md (deployment-layer inventory in cloud, extraction
+sequence per relayfile-cloud precedent, binding rewires, transport designed
+into the target architecture), no code moves until cpo green-lights. The
+relay-message transport lands in the new home, not bolted onto cloud —
+see [agent-org-primitives].
 
 ## History
 - 2026-07-29 — Named a workstream by Will. Mining corrected the story:

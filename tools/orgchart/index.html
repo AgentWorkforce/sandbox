@@ -1,0 +1,1374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Org Chart</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #14161a;
+    --muted: #6b7280;
+    --line: #d8dce3;
+    --edge: #c3c9d3;
+    --accent: #3b6fd4;
+    --shadow: 0 1px 2px rgba(15, 20, 30, .08), 0 4px 12px rgba(15, 20, 30, .05);
+    --up: #22c55e;
+    --down: #9ca3af;
+    --hold: #f59e0b;
+    --bad: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101216;
+      --panel: #191c22;
+      --ink: #e8eaee;
+      --muted: #9aa2ae;
+      --line: #2c313a;
+      --edge: #3a404b;
+      --accent: #7aa2f7;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+      --bad: #f87171;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 64px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.45 ui-sans-serif, -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 780px; margin: 0 auto; }
+
+  header { margin-bottom: 28px; }
+  h1 { font-size: 19px; font-weight: 620; letter-spacing: -.01em; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 6px 18px;
+    margin: 16px 0 0; padding: 0; list-style: none;
+    color: var(--muted); font-size: 12.5px;
+  }
+  .legend li { display: flex; align-items: center; gap: 7px; }
+
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--down); flex: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--down) 18%, transparent);
+  }
+  .dot.up   { background: var(--up);   box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); }
+  .dot.hold { background: var(--hold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--hold) 22%, transparent); }
+  .dot.none { background: transparent; border: 1.5px solid var(--edge); box-shadow: none; }
+
+  /* Tree: each child draws its own elbow so the spine stops at the last item. */
+  ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
+  ul.tree ul { padding-left: 30px; }
+  ul.tree ul > li { position: relative; }
+  ul.tree ul > li::before {
+    content: ""; position: absolute; left: -15px; top: 0; bottom: 0;
+    width: 1px; background: var(--edge);
+  }
+  ul.tree ul > li:last-child::before { bottom: auto; height: 27px; }
+  ul.tree ul > li::after {
+    content: ""; position: absolute; left: -15px; top: 27px;
+    width: 15px; height: 1px; background: var(--edge);
+  }
+
+  .card {
+    display: flex; align-items: center; gap: 12px;
+    margin: 7px 0;
+    padding: 11px 13px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: var(--shadow);
+  }
+  .card .id { min-width: 0; flex: 1; }
+  .card .actions { display: flex; gap: 6px; flex: none; }
+  .name { font-weight: 600; font-size: 14px; letter-spacing: -.005em; }
+  .title {
+    color: var(--muted); font-size: 12.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .meta { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .card.principal {
+    background: var(--ink); color: var(--bg); border-color: var(--ink);
+  }
+  .card.principal .title { color: color-mix(in srgb, var(--bg) 62%, transparent); }
+
+  button.view {
+    flex: none;
+    font: inherit; font-size: 12.5px; font-weight: 550;
+    padding: 5px 13px; border-radius: 7px;
+    border: 1px solid var(--edge); background: transparent; color: var(--ink);
+    cursor: pointer;
+  }
+  button.view:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.view:disabled { opacity: .35; cursor: not-allowed; }
+
+  button.view.drive { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.view.drive:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 82%, black);
+    border-color: color-mix(in srgb, var(--accent) 82%, black);
+    color: #fff;
+  }
+
+  .tabs { display: flex; gap: 6px; margin: 18px 0 0; }
+  button.tab {
+    font: inherit; font-size: 13px; font-weight: 560;
+    padding: 6px 14px; border-radius: 7px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    cursor: pointer;
+  }
+  button.tab:hover { color: var(--ink); }
+  button.tab.active {
+    color: var(--ink); border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; margin-left: 7px; padding: 0 5px;
+    border-radius: 999px; background: var(--bad); color: #fff;
+    font-size: 10.5px; font-weight: 700; line-height: 16px;
+    vertical-align: middle;
+  }
+
+  .projects-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 8px 12px; margin: 0 0 14px;
+  }
+  .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .search-box { position: relative; display: flex; align-items: center; }
+  .search-box input {
+    font: inherit; font-size: 13px;
+    padding: 6px 26px 6px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    width: 200px;
+  }
+  .search-box input:focus { outline: none; border-color: var(--accent); }
+  .search-clear {
+    position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+    font: inherit; font-size: 15px; line-height: 1; padding: 3px 6px;
+    border: none; background: transparent; color: var(--muted); cursor: pointer; border-radius: 5px;
+  }
+  .search-clear:hover { color: var(--ink); }
+
+  .show-finished-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .show-finished-toggle input { cursor: pointer; }
+
+  .sort-toggle, .view-toggle {
+    display: inline-flex; border: 1px solid var(--line); border-radius: 7px;
+    overflow: hidden;
+  }
+  button.sort-btn, button.view-btn {
+    font: inherit; font-size: 12px; font-weight: 560;
+    padding: 5px 12px; border: none; background: transparent; color: var(--muted);
+    cursor: pointer;
+  }
+  button.sort-btn + button.sort-btn, button.view-btn + button.view-btn { border-left: 1px solid var(--line); }
+  button.sort-btn:hover, button.view-btn:hover { color: var(--ink); }
+  button.sort-btn.active, button.view-btn.active {
+    color: var(--ink); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  #projects.projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+  }
+  #projects.projects-detail { display: block; }
+
+  .project-card-mini {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: var(--shadow);
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: border-color .12s ease;
+  }
+  .project-card-mini:hover, .project-card-mini:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .project-card-mini.done { opacity: .55; }
+  .project-mini-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .project-mini-title {
+    font-weight: 620; font-size: 13.5px; letter-spacing: -.005em;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .project-mini-tldr {
+    color: var(--muted); font-size: 12.5px; line-height: 1.45;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .project-pulse {
+    margin-top: 7px; font-size: 11.5px; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .project-pulse.quiet { color: var(--muted); }
+  .project-pulse .pulse-up { color: var(--up); }
+
+  .project-agents-hint {
+    margin-top: 5px; font-size: 11px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .table-scroll { overflow-x: auto; }
+  .projects-table {
+    width: 100%; border-collapse: collapse; min-width: 640px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    box-shadow: var(--shadow); font-size: 12.5px;
+  }
+  .projects-table th, .projects-table td {
+    padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  .projects-table th {
+    font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em;
+    color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .projects-table th:hover { color: var(--ink); }
+  .projects-table th .sort-arrow { color: var(--accent); margin-left: 3px; }
+  .projects-table tbody tr { cursor: pointer; }
+  .projects-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .projects-table tbody tr:last-child td { border-bottom: none; }
+  .projects-table tr.done-row { opacity: .55; }
+  .projects-table td.col-label { font-weight: 600; white-space: nowrap; }
+  .projects-table td.col-tldr {
+    max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .projects-table .table-empty td { color: var(--muted); text-align: center; padding: 18px 12px; }
+
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    font: inherit; font-size: 12.5px; font-weight: 550;
+    padding: 0; margin-bottom: 12px;
+    border: none; background: transparent; color: var(--muted);
+    cursor: pointer;
+  }
+  .back-link:hover { color: var(--accent); }
+
+  .project-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+  }
+  .project-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .project-title { font-weight: 620; font-size: 14.5px; letter-spacing: -.005em; }
+  .project-meta { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+
+  .chip {
+    flex: none;
+    font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em;
+    padding: 2px 9px; border-radius: 999px;
+    background: color-mix(in srgb, var(--down) 16%, transparent);
+    color: var(--down);
+    border: 1px solid color-mix(in srgb, var(--down) 38%, transparent);
+  }
+  .chip.active { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); }
+  .chip.blocked { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .chip.parked { background: color-mix(in srgb, var(--hold) 16%, transparent); color: var(--hold); border-color: color-mix(in srgb, var(--hold) 40%, transparent); }
+  .chip.done { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); }
+
+  .status-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+  .updated-stamp {
+    font-size: 10.5px; color: var(--muted); white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .project-agents { margin-top: 2px; }
+  .project-agents .card.agent-row { margin: 5px 0; box-shadow: none; }
+
+  .field { margin-top: 8px; }
+  .field-label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-bottom: 2px; }
+  .field-value { font-size: 13.5px; line-height: 1.5; }
+
+  .activity-update { font-size: 13.5px; line-height: 1.5; }
+  .activity-update .activity-date { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .activity-commits { list-style: none; margin: 4px 0 0; padding: 0; }
+  .activity-commits li {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 4px 0; font-size: 12.5px;
+    border-top: 1px solid var(--line);
+  }
+  .activity-commits li:first-child { border-top: none; }
+  .activity-commits .commit-subject {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .activity-commits .commit-repo {
+    flex: none; color: var(--muted); font-size: 11px;
+    padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line);
+  }
+  .activity-commits .commit-ago {
+    flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  }
+
+  footer { margin-top: 36px; color: var(--muted); font-size: 12.5px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
+
+  .review-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: var(--shadow); padding: 16px 18px; margin: 0 0 14px;
+  }
+  .review-title { font-weight: 640; font-size: 15px; letter-spacing: -.005em; }
+  .review-meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .review-ask {
+    margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    font-size: 14px; line-height: 1.5;
+  }
+  .review-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .review-btn {
+    font: inherit; font-size: 13px; font-weight: 600;
+    padding: 7px 16px; border-radius: 7px; border: 1px solid var(--edge);
+    background: transparent; color: var(--ink); cursor: pointer;
+  }
+  .review-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .review-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .review-btn-approve { background: var(--up); border-color: var(--up); color: #fff; }
+  .review-btn-approve:hover:not(:disabled) { background: color-mix(in srgb, var(--up) 82%, black); color: #fff; }
+  .review-btn-reject { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .review-btn-reject:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 82%, black); color: #fff; }
+  .review-btn-discuss { background: var(--hold); border-color: var(--hold); color: #14161a; }
+  .review-btn-discuss:hover:not(:disabled) { background: color-mix(in srgb, var(--hold) 82%, black); }
+
+  .review-empty { color: var(--muted); font-size: 13.5px; padding: 8px 2px; }
+  .review-cleared { margin-top: 18px; }
+  .review-cleared > summary {
+    cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 600;
+    padding: 6px 0; list-style: none;
+  }
+  .review-cleared > summary::-webkit-details-marker { display: none; }
+  .review-cleared > summary::before { content: '▸ '; }
+  .review-cleared[open] > summary::before { content: '▾ '; }
+  .review-cleared .review-card { opacity: .55; margin-top: 10px; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
+    max-width: min(520px, 88vw);
+    padding: 10px 16px; border-radius: 9px;
+    background: var(--panel); border: 1px solid var(--line);
+    box-shadow: 0 6px 24px rgba(10, 14, 22, .18);
+    font-size: 13px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.err { border-color: #dc2626; color: #dc2626; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agent org chart</h1>
+    <p class="sub">Live node health across the workforce. Click <strong>View</strong> to open a terminal attached to an agent.</p>
+    <nav class="tabs">
+      <button class="tab active" id="tabOrg" type="button">Org</button>
+      <button class="tab" id="tabProjects" type="button">Projects</button>
+      <button class="tab" id="tabReview" type="button">Review<span class="badge" id="reviewBadge" hidden>0</span></button>
+    </nav>
+  </header>
+
+  <section id="orgView">
+    <ul class="legend">
+      <li><span class="dot up"></span> node up</li>
+      <li><span class="dot"></span> node down</li>
+      <li><span class="dot hold"></span> parked / pending spawn</li>
+      <li><span class="dot none"></span> unseated</li>
+    </ul>
+
+    <ul class="tree" id="tree"></ul>
+
+    <footer>View is read-only · Drive takes the wheel (your keystrokes go to the agent) · <code>Ctrl+]</code> detaches; queued messages flush on detach</footer>
+  </section>
+
+  <section id="projectsView" hidden>
+    <div class="projects-toolbar" id="projectsToolbar">
+      <div class="toolbar-left">
+        <div class="search-box">
+          <input type="text" id="projectSearch" placeholder="Search projects…" autocomplete="off" spellcheck="false">
+          <button type="button" id="projectSearchClear" class="search-clear" hidden aria-label="Clear search">×</button>
+        </div>
+        <label class="show-finished-toggle">
+          <input type="checkbox" id="showFinished"> Show finished
+        </label>
+      </div>
+      <div class="toolbar-right">
+        <div class="sort-toggle" id="cardSortToggle" role="group" aria-label="Sort projects">
+          <button class="sort-btn active" id="sortActivity" type="button">Activity</button>
+          <button class="sort-btn" id="sortAZ" type="button">A–Z</button>
+        </div>
+        <div class="view-toggle" role="group" aria-label="Projects view">
+          <button class="view-btn active" id="viewCards" type="button">Cards</button>
+          <button class="view-btn" id="viewTable" type="button">Table</button>
+        </div>
+      </div>
+    </div>
+    <div class="projects-grid" id="projects"></div>
+    <div class="table-scroll" id="projectsTableWrap" hidden>
+      <table class="projects-table" id="projectsTable"></table>
+    </div>
+  </section>
+
+  <section id="reviewView" hidden>
+    <div id="review"></div>
+  </section>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const NOT_ATTACHABLE = new Set(['unseated', 'pending-spawn']);
+let org = null;
+let status = {};
+
+function dotClass(agent) {
+  if (agent.status === 'unseated') return 'none';
+  if (agent.status === 'parked' || agent.status === 'pending-spawn') return 'hold';
+  return status[agent.repo]?.up ? 'up' : '';
+}
+
+function metaText(agent) {
+  if (agent.status === 'unseated') return 'unseated';
+  if (agent.status === 'pending-spawn') return 'pending spawn';
+  if (agent.status === 'parked') return 'parked';
+  const s = status[agent.repo];
+  if (!s) return '';
+  if (!s.up) return 'down';
+  return s.agentCount === 1 ? '1 agent' : `${s.agentCount} agents`;
+}
+
+function card(agent, extraClass) {
+  const el = document.createElement('div');
+  el.className = extraClass ? `card ${extraClass}` : 'card';
+
+  const dot = document.createElement('span');
+  dot.className = 'dot ' + dotClass(agent);
+  dot.dataset.dotFor = agent.name;
+
+  const id = document.createElement('div');
+  id.className = 'id';
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = agent.name;
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = agent.title;
+  id.append(name, title);
+
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.dataset.metaFor = agent.name;
+  meta.textContent = metaText(agent);
+
+  const disabled = NOT_ATTACHABLE.has(agent.status);
+  const disabledTitle = disabled ? `${agent.name} is ${agent.status.replace('-', ' ')}` : '';
+
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'view';
+  viewBtn.textContent = 'View';
+  viewBtn.disabled = disabled;
+  if (disabled) viewBtn.title = disabledTitle;
+  viewBtn.addEventListener('click', () => attach(agent.name, 'view', viewBtn));
+
+  const driveBtn = document.createElement('button');
+  driveBtn.className = 'view drive';
+  driveBtn.textContent = 'Drive';
+  driveBtn.disabled = disabled;
+  if (disabled) driveBtn.title = disabledTitle;
+  driveBtn.addEventListener('click', () => attach(agent.name, 'drive', driveBtn));
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  actions.append(viewBtn, driveBtn);
+
+  el.append(dot, id, meta, actions);
+  return el;
+}
+
+function principalCard(name) {
+  const el = document.createElement('div');
+  el.className = 'card principal';
+  const id = document.createElement('div');
+  id.className = 'id';
+  const n = document.createElement('div');
+  n.className = 'name';
+  n.textContent = name;
+  const t = document.createElement('div');
+  t.className = 'title';
+  t.textContent = 'Principal';
+  id.append(n, t);
+  el.append(id);
+  return el;
+}
+
+function render() {
+  const byParent = new Map();
+  for (const a of org.agents) {
+    if (!byParent.has(a.reportsTo)) byParent.set(a.reportsTo, []);
+    byParent.get(a.reportsTo).push(a);
+  }
+
+  const branch = (parentName) => {
+    const kids = byParent.get(parentName) || [];
+    if (!kids.length) return null;
+    const ul = document.createElement('ul');
+    for (const kid of kids) {
+      const li = document.createElement('li');
+      li.append(card(kid));
+      const sub = branch(kid.name);
+      if (sub) li.append(sub);
+      ul.append(li);
+    }
+    return ul;
+  };
+
+  const tree = document.getElementById('tree');
+  tree.replaceChildren();
+  const root = document.createElement('li');
+  root.append(principalCard(org.principal.name));
+  const sub = branch(org.principal.name);
+  if (sub) root.append(sub);
+  tree.append(root);
+}
+
+// querySelectorAll, not querySelector: an agent can appear both in the Org
+// tree and in a project's Agents section at once, and both copies need to
+// stay in sync with live status.
+function refreshDots() {
+  for (const agent of org.agents) {
+    document.querySelectorAll(`[data-dot-for="${agent.name}"]`).forEach((dot) => {
+      dot.className = 'dot ' + dotClass(agent);
+    });
+    document.querySelectorAll(`[data-meta-for="${agent.name}"]`).forEach((meta) => {
+      meta.textContent = metaText(agent);
+    });
+  }
+}
+
+let toastTimer;
+function toast(message, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.classList.toggle('err', !!isError);
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3600);
+}
+
+async function attach(name, mode, btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/attach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, mode }),
+    });
+    const body = await res.json();
+    if (res.ok && body.ok) toast(body.message);
+    else toast(body.error || `Could not attach to ${name}`, true);
+  } catch (err) {
+    toast(`Could not reach the org chart server: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function poll() {
+  try {
+    status = await (await fetch('/api/status')).json();
+    refreshDots();
+  } catch { /* keep the last known state on a transient failure */ }
+}
+
+const STATUS_LABELS = new Set(['active', 'blocked', 'parked', 'done']);
+
+function chip(status) {
+  const el = document.createElement('span');
+  el.className = 'chip ' + (STATUS_LABELS.has(status) ? status : '');
+  el.textContent = status || 'unknown';
+  return el;
+}
+
+// Top-right column of a project card/header: status chip, with the
+// "updated <ago>" stamp stacked subtly beneath it. Shared by the grid's
+// mini card and the detail view header so both stay in lockstep.
+function statusCol(p) {
+  const el = document.createElement('div');
+  el.className = 'status-col';
+  el.append(chip(p.status));
+  const stamp = updatedStamp(p);
+  if (stamp) el.append(stamp);
+  return el;
+}
+
+function field(label, value) {
+  const row = document.createElement('div');
+  row.className = 'field';
+  const l = document.createElement('div');
+  l.className = 'field-label';
+  l.textContent = label;
+  const v = document.createElement('div');
+  v.className = 'field-value';
+  v.textContent = value || '—';
+  row.append(l, v);
+  return row;
+}
+
+// Titles follow "short-name — long description"; the grid shows only the
+// short half, but the full title is kept on the element for reference.
+function shortTitle(title) {
+  const dash = title.indexOf('—');
+  if (dash !== -1 && title.length > 20) return title.slice(0, dash).trim();
+  return title;
+}
+
+// Truncates a commit subject for a single-line pulse display.
+function truncate(text, cap) {
+  if (!text) return '';
+  return text.length > cap ? `${text.slice(0, cap).trim()}…` : text;
+}
+
+// Mirrors the server's per-commit "ago" humanizer (serve.mjs) so the
+// "updated <ago>" stamp reads the same as the rest of the UI's relative times.
+function humanizeAgo(epochSeconds) {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
+}
+
+// /api/projects returns {name, title, status} per agent (server has no
+// access to live node state). Resolve back to the full org.json agent object
+// so dotClass/metaText/attach — the same functions the Org tab uses — work
+// unmodified here too.
+function resolveAgent(entry) {
+  return org.agents.find((a) => a.name === entry.name) || entry;
+}
+
+// One-line, muted list of agent names — a hint on the overview card, not a
+// duplicate of the detail view's full Agents section.
+function agentsHint(p) {
+  if (!p.agents?.length) return null;
+  const el = document.createElement('div');
+  el.className = 'project-agents-hint';
+  el.textContent = p.agents.map((a) => a.name).join(' · ');
+  return el;
+}
+
+function agentsSection(p) {
+  const el = document.createElement('div');
+  el.className = 'field';
+  const label = document.createElement('div');
+  label.className = 'field-label';
+  label.textContent = 'Agents';
+  el.append(label);
+  if (p.agents?.length) {
+    const list = document.createElement('div');
+    list.className = 'project-agents';
+    for (const entry of p.agents) list.append(card(resolveAgent(entry), 'agent-row'));
+    el.append(list);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'field-value';
+    empty.textContent = '—';
+    el.append(empty);
+  }
+  return el;
+}
+
+function pulseLine(p) {
+  const el = document.createElement('div');
+  if (p.commits24h > 0) {
+    el.className = 'project-pulse';
+    const up = document.createElement('span');
+    up.className = 'pulse-up';
+    up.textContent = `▲ ${p.commits24h} commit${p.commits24h === 1 ? '' : 's'} 24h`;
+    el.append(up);
+    if (p.latestCommit) {
+      el.append(document.createTextNode(` · ${truncate(p.latestCommit.subject, 46)} — ${p.latestCommit.ago}`));
+    }
+  } else {
+    el.className = 'project-pulse quiet';
+    el.textContent = p.latestCommit ? `quiet ${p.latestCommit.ago}` : 'no activity';
+  }
+  return el;
+}
+
+// The label shown on a project's grid card, and what A–Z sort keys on.
+function cardLabel(p) {
+  return p.card || shortTitle(p.title || p.file);
+}
+
+function miniCard(p) {
+  const el = document.createElement('div');
+  el.className = p.status === 'done' ? 'project-card-mini done' : 'project-card-mini';
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  const fullTitle = p.title || p.file;
+  el.dataset.fullTitle = fullTitle;
+
+  const head = document.createElement('div');
+  head.className = 'project-mini-head';
+  const title = document.createElement('div');
+  title.className = 'project-mini-title';
+  title.textContent = cardLabel(p);
+  title.title = fullTitle;
+  head.append(title, statusCol(p));
+
+  const tldr = document.createElement('div');
+  tldr.className = 'project-mini-tldr';
+  tldr.textContent = p.tldr || '—';
+
+  el.append(head, tldr, pulseLine(p));
+  const hint = agentsHint(p);
+  if (hint) el.append(hint);
+  const open = () => selectProject(p.file);
+  el.addEventListener('click', open);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
+  return el;
+}
+
+function activityBlock(p) {
+  const el = document.createElement('div');
+  el.className = 'field';
+
+  const label = document.createElement('div');
+  label.className = 'field-label';
+  label.textContent = 'Latest activity';
+  el.append(label);
+
+  if (p.latestUpdate) {
+    const update = document.createElement('div');
+    update.className = 'activity-update';
+    const date = document.createElement('span');
+    date.className = 'activity-date';
+    date.textContent = p.latestUpdate.date;
+    update.append(date, document.createTextNode(p.latestUpdate.text));
+    el.append(update);
+  }
+
+  if (p.recentCommits?.length) {
+    const list = document.createElement('ul');
+    list.className = 'activity-commits';
+    for (const c of p.recentCommits) {
+      const li = document.createElement('li');
+      const subject = document.createElement('span');
+      subject.className = 'commit-subject';
+      subject.textContent = c.subject;
+      subject.title = c.subject;
+      const repo = document.createElement('span');
+      repo.className = 'commit-repo';
+      repo.textContent = c.repo;
+      const ago = document.createElement('span');
+      ago.className = 'commit-ago';
+      ago.textContent = c.ago;
+      li.append(subject, repo, ago);
+      list.append(li);
+    }
+    el.append(list);
+  } else if (!p.latestUpdate) {
+    const empty = document.createElement('div');
+    empty.className = 'field-value';
+    empty.textContent = '—';
+    el.append(empty);
+  }
+
+  return el;
+}
+
+function detailCard(p) {
+  const el = document.createElement('div');
+  el.className = 'project-card';
+
+  const back = document.createElement('button');
+  back.className = 'back-link';
+  back.type = 'button';
+  back.textContent = '← back to all';
+  back.addEventListener('click', () => selectProject(null));
+
+  const head = document.createElement('div');
+  head.className = 'project-head';
+  const title = document.createElement('div');
+  title.className = 'project-title';
+  title.textContent = p.title || p.file;
+  head.append(title, statusCol(p));
+
+  const meta = document.createElement('div');
+  meta.className = 'project-meta';
+  meta.textContent = [p.owner, p.updated, p.repos?.join(', ')].filter(Boolean).join(' · ');
+
+  el.append(back, head, meta, agentsSection(p), activityBlock(p), field('Goal', p.goal), field('Now', p.now), field('Next', p.next));
+  return el;
+}
+
+let projectsCache = [];
+let selectedProject = null;
+
+// Sort mode for the Projects grid, persisted across sessions. 'activity':
+// most-recent-activity first (no status grouping — chips on cards carry
+// parked/blocked legibility instead). 'az': alphabetical by card label.
+const SORT_STORAGE_KEY = 'orgchart.projectSort';
+const SORT_MODES = new Set(['activity', 'az']);
+let projectSort = localStorage.getItem(SORT_STORAGE_KEY);
+if (!SORT_MODES.has(projectSort)) projectSort = 'activity';
+
+// Cards vs Table, persisted across sessions. Independent of projectSort,
+// which only governs the Cards grid — the Table has its own per-column sort.
+const VIEW_STORAGE_KEY = 'orgchart.projectView';
+const VIEW_MODES = new Set(['cards', 'table']);
+let projectView = localStorage.getItem(VIEW_STORAGE_KEY);
+if (!VIEW_MODES.has(projectView)) projectView = 'cards';
+
+// "Show finished" checkbox, persisted across sessions. Default unchecked:
+// done projects (e.g. a wound-down donor project) stay out of the way until
+// asked for.
+const SHOW_FINISHED_KEY = 'orgchart.showFinished';
+let showFinished = localStorage.getItem(SHOW_FINISHED_KEY) === 'true';
+
+// Live text filter, not persisted — a search is a one-off narrowing of the
+// current session, not a standing preference.
+let projectSearchQuery = '';
+
+function projectSearchText(p) {
+  return [
+    cardLabel(p),
+    p.title,
+    p.tldr,
+    p.owner,
+    ...(p.agents ?? []).map((a) => a.name),
+    ...(p.repos ?? []),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+// Shared by both views: hides done projects unless revealed, then narrows by
+// the search query. Always returns a fresh array so callers can sort in
+// place without mutating projectsCache.
+function filteredProjects() {
+  let list = [...projectsCache];
+  if (!showFinished) list = list.filter((p) => p.status !== 'done');
+  const query = projectSearchQuery.trim().toLowerCase();
+  if (query) list = list.filter((p) => projectSearchText(p).includes(query));
+  return list;
+}
+
+// Most recent of the workstream's latest commit and its latest journal-style
+// update; -Infinity for projects with neither, so they sink to the bottom.
+function activityEpoch(p) {
+  const commitEpoch = p.latestCommit?.epoch ?? -Infinity;
+  const updateEpoch = p.latestUpdate ? Date.parse(`${p.latestUpdate.date}T00:00:00Z`) / 1000 : -Infinity;
+  return Math.max(commitEpoch, updateEpoch);
+}
+
+// Explicit "updated <ago>" stamp — same key the Activity sort uses, so the
+// stamp and the sort order can never disagree. Null for a project with
+// neither a commit nor a journal update to key off of.
+function updatedAgoText(p) {
+  const epoch = activityEpoch(p);
+  return Number.isFinite(epoch) ? `updated ${humanizeAgo(epoch)} ago` : null;
+}
+
+function updatedStamp(p) {
+  const text = updatedAgoText(p);
+  if (!text) return null;
+  const el = document.createElement('span');
+  el.className = 'updated-stamp';
+  el.textContent = text;
+  return el;
+}
+
+function sortedProjects() {
+  const list = filteredProjects();
+  if (projectSort === 'az') {
+    list.sort((a, b) => cardLabel(a).localeCompare(cardLabel(b)));
+  } else {
+    list.sort((a, b) => activityEpoch(b) - activityEpoch(a) || cardLabel(a).localeCompare(cardLabel(b)));
+  }
+  return list;
+}
+
+function updateSortButtons() {
+  document.getElementById('sortActivity').classList.toggle('active', projectSort === 'activity');
+  document.getElementById('sortAZ').classList.toggle('active', projectSort === 'az');
+}
+
+function setProjectSort(mode) {
+  if (mode === projectSort) return;
+  projectSort = mode;
+  localStorage.setItem(SORT_STORAGE_KEY, mode);
+  updateSortButtons();
+  renderProjects();
+}
+
+function updateViewButtons() {
+  document.getElementById('viewCards').classList.toggle('active', projectView === 'cards');
+  document.getElementById('viewTable').classList.toggle('active', projectView === 'table');
+}
+
+function setProjectView(mode) {
+  if (mode === projectView) return;
+  projectView = mode;
+  localStorage.setItem(VIEW_STORAGE_KEY, mode);
+  updateViewButtons();
+  renderProjects();
+  replaceHash(buildProjectsHash());
+}
+
+// Table columns: key -> { label, type, get }. `type` drives the comparator
+// (string columns sort lexicographically, number columns numerically) and
+// the default direction on first click of a column (numbers start high-to-
+// low — most recent / most active first — strings start A–Z).
+const TABLE_COLUMNS = {
+  label: { label: 'Label', type: 'string', get: (p) => cardLabel(p) },
+  status: { label: 'Status', type: 'string', get: (p) => p.status || '' },
+  updated: { label: 'Updated', type: 'number', get: (p) => activityEpoch(p) },
+  commits24h: { label: '24h Commits', type: 'number', get: (p) => p.commits24h ?? 0 },
+  owner: { label: 'Owner', type: 'string', get: (p) => p.owner || '' },
+  agents: { label: 'Agents', type: 'string', get: (p) => (p.agents ?? []).map((a) => a.name).join(', ') },
+  tldr: { label: 'Tldr', type: 'string', get: (p) => p.tldr || '' },
+};
+
+// Table sort state — independent of projectSort (the Cards Activity/A-Z
+// toggle). Not persisted: a fresh Table view starts on the same default
+// every time, same as it always has for Cards' initial 'activity' mode.
+let tableSort = { key: 'updated', dir: 'desc' };
+
+function setTableSort(key) {
+  if (tableSort.key === key) {
+    tableSort.dir = tableSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    tableSort.key = key;
+    tableSort.dir = TABLE_COLUMNS[key].type === 'number' ? 'desc' : 'asc';
+  }
+  renderProjectsTable();
+}
+
+function sortForTable(list) {
+  const col = TABLE_COLUMNS[tableSort.key];
+  const dir = tableSort.dir === 'asc' ? 1 : -1;
+  return [...list].sort((a, b) => {
+    const av = col.get(a);
+    const bv = col.get(b);
+    if (col.type === 'number') return (av - bv) * dir;
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+}
+
+// Mirrors updatedAgoText's underlying value (activityEpoch) but as a bare
+// "3h ago" cell rather than the card stamp's "updated 3h ago" phrasing.
+function agoCell(p) {
+  const epoch = activityEpoch(p);
+  return Number.isFinite(epoch) ? `${humanizeAgo(epoch)} ago` : '—';
+}
+
+function tableHeaderRow() {
+  const tr = document.createElement('tr');
+  for (const [key, col] of Object.entries(TABLE_COLUMNS)) {
+    const th = document.createElement('th');
+    th.tabIndex = 0;
+    th.dataset.key = key;
+    if (key === 'commits24h') th.title = 'Commits in the last 24h';
+    const label = document.createElement('span');
+    label.textContent = col.label;
+    th.append(label);
+    if (tableSort.key === key) {
+      const arrow = document.createElement('span');
+      arrow.className = 'sort-arrow';
+      arrow.textContent = tableSort.dir === 'asc' ? '▲' : '▼';
+      th.append(arrow);
+    }
+    const activate = () => setTableSort(key);
+    th.addEventListener('click', activate);
+    th.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+    });
+    tr.append(th);
+  }
+  return tr;
+}
+
+function tableRow(p) {
+  const tr = document.createElement('tr');
+  tr.tabIndex = 0;
+  if (p.status === 'done') tr.classList.add('done-row');
+
+  const tdLabel = document.createElement('td');
+  tdLabel.className = 'col-label';
+  tdLabel.textContent = cardLabel(p);
+  tdLabel.title = p.title || p.file;
+
+  const tdStatus = document.createElement('td');
+  tdStatus.append(chip(p.status));
+
+  const tdUpdated = document.createElement('td');
+  tdUpdated.textContent = agoCell(p);
+
+  const tdCommits = document.createElement('td');
+  tdCommits.textContent = String(p.commits24h ?? 0);
+
+  const tdOwner = document.createElement('td');
+  tdOwner.textContent = p.owner || '—';
+
+  const tdAgents = document.createElement('td');
+  tdAgents.textContent = p.agents?.length ? p.agents.map((a) => a.name).join(', ') : '—';
+
+  const tdTldr = document.createElement('td');
+  tdTldr.className = 'col-tldr';
+  tdTldr.textContent = p.tldr || '—';
+  tdTldr.title = p.tldr || '';
+
+  tr.append(tdLabel, tdStatus, tdUpdated, tdCommits, tdOwner, tdAgents, tdTldr);
+  const open = () => selectProject(p.file);
+  tr.addEventListener('click', open);
+  tr.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); open(); }
+  });
+  return tr;
+}
+
+function renderProjectsTable() {
+  const table = document.getElementById('projectsTable');
+  const thead = document.createElement('thead');
+  thead.append(tableHeaderRow());
+
+  const tbody = document.createElement('tbody');
+  const rows = sortForTable(filteredProjects());
+  if (rows.length) {
+    for (const p of rows) tbody.append(tableRow(p));
+  } else {
+    const tr = document.createElement('tr');
+    tr.className = 'table-empty';
+    const td = document.createElement('td');
+    td.colSpan = Object.keys(TABLE_COLUMNS).length;
+    td.textContent = 'No projects match.';
+    tr.append(td);
+    tbody.append(tr);
+  }
+  table.replaceChildren(thead, tbody);
+}
+
+function renderProjects() {
+  const grid = document.getElementById('projects');
+  const tableWrap = document.getElementById('projectsTableWrap');
+  const toolbar = document.getElementById('projectsToolbar');
+  const cardSortToggle = document.getElementById('cardSortToggle');
+  if (selectedProject && !projectsCache.some((p) => p.file === selectedProject)) {
+    selectedProject = null; // the selected project vanished from disk
+  }
+  if (selectedProject) {
+    toolbar.hidden = true;
+    tableWrap.hidden = true;
+    grid.hidden = false;
+    const p = projectsCache.find((x) => x.file === selectedProject);
+    grid.className = 'projects-detail';
+    grid.replaceChildren(detailCard(p));
+    return;
+  }
+  toolbar.hidden = false;
+  cardSortToggle.hidden = projectView !== 'cards';
+  if (projectView === 'table') {
+    grid.hidden = true;
+    tableWrap.hidden = false;
+    renderProjectsTable();
+  } else {
+    tableWrap.hidden = true;
+    grid.hidden = false;
+    grid.className = 'projects-grid';
+    grid.replaceChildren(...sortedProjects().map(miniCard));
+  }
+}
+
+function selectProject(file) {
+  selectedProject = file;
+  renderProjects();
+  navigate(buildProjectsHash());
+}
+
+async function loadProjects() {
+  try {
+    projectsCache = await (await fetch('/api/projects')).json();
+    renderProjects();
+  } catch { /* keep the last known state on a transient failure */ }
+}
+
+// key: value -> "Key: Value" for generic review-field labels (why-you,
+// on-done, on-approve, ... whatever the item happens to carry).
+function labelize(key) {
+  return key.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function reviewCard(item) {
+  const el = document.createElement('div');
+  el.className = 'review-card';
+
+  const title = document.createElement('div');
+  title.className = 'review-title';
+  title.textContent = `${item.id}: ${item.title}`;
+  el.append(title);
+
+  const meta = [item.from, item.date].filter(Boolean).join(' · ');
+  if (meta) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'review-meta';
+    metaEl.textContent = meta;
+    el.append(metaEl);
+  }
+
+  if (item.ask) {
+    const ask = document.createElement('div');
+    ask.className = 'review-ask';
+    ask.textContent = item.ask;
+    el.append(ask);
+  }
+
+  for (const f of item.fields) el.append(field(labelize(f.key), f.value));
+
+  if (item.pending) {
+    const actions = document.createElement('div');
+    actions.className = 'review-actions';
+    for (const [verdict, label] of [['approve', 'Approve'], ['reject', 'Reject'], ['discuss', 'Discuss']]) {
+      const btn = document.createElement('button');
+      btn.className = `review-btn review-btn-${verdict}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => submitVerdict(item.id, verdict, actions));
+      actions.append(btn);
+    }
+    el.append(actions);
+  }
+
+  return el;
+}
+
+async function submitVerdict(id, verdict, actions) {
+  const buttons = [...actions.querySelectorAll('button')];
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    const res = await fetch('/api/review/verdict', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, verdict }),
+    });
+    const body = await res.json();
+    if (res.ok && body.ok) {
+      toast(body.message || 'Sent to chief — it executes and clears the item');
+    } else {
+      toast(body.error || `Could not send verdict for ${id}`, true);
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  } catch (err) {
+    toast(`Could not reach the org chart server: ${err.message}`, true);
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+function renderReview() {
+  const container = document.getElementById('review');
+  container.replaceChildren();
+
+  const pending = reviewCache.filter((i) => i.pending);
+  const cleared = reviewCache.filter((i) => !i.pending);
+
+  if (!pending.length) {
+    const empty = document.createElement('div');
+    empty.className = 'review-empty';
+    empty.textContent = 'Nothing needs your call right now.';
+    container.append(empty);
+  } else {
+    for (const item of pending) container.append(reviewCard(item));
+  }
+
+  if (cleared.length) {
+    const details = document.createElement('details');
+    details.className = 'review-cleared';
+    const summary = document.createElement('summary');
+    summary.textContent = `Cleared (${cleared.length})`;
+    details.append(summary);
+    for (const item of cleared) details.append(reviewCard(item));
+    container.append(details);
+  }
+}
+
+function updateReviewBadge() {
+  const badge = document.getElementById('reviewBadge');
+  const count = reviewCache.filter((i) => i.pending).length;
+  badge.textContent = String(count);
+  badge.hidden = count === 0;
+}
+
+let reviewCache = [];
+
+async function loadReview() {
+  try {
+    reviewCache = await (await fetch('/api/review')).json();
+    updateReviewBadge();
+    renderReview();
+  } catch { /* keep the last known state on a transient failure */ }
+}
+
+// The active tab, tracked outside the DOM classes so the router can read it
+// back (e.g. to know which hash to normalize to) without re-deriving it from
+// classList.
+let currentTab = 'org';
+
+function showTab(tab) {
+  currentTab = tab;
+  document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
+  document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
+  document.getElementById('tabReview').classList.toggle('active', tab === 'review');
+  document.getElementById('orgView').hidden = tab !== 'org';
+  document.getElementById('projectsView').hidden = tab !== 'projects';
+  document.getElementById('reviewView').hidden = tab !== 'review';
+  if (tab === 'projects') loadProjects();
+  if (tab === 'review') loadReview();
+}
+
+document.getElementById('tabOrg').addEventListener('click', () => navigate('/org'));
+document.getElementById('tabProjects').addEventListener('click', () => navigate(buildProjectsHash()));
+document.getElementById('tabReview').addEventListener('click', () => navigate('/review'));
+document.getElementById('sortActivity').addEventListener('click', () => setProjectSort('activity'));
+document.getElementById('sortAZ').addEventListener('click', () => setProjectSort('az'));
+updateSortButtons();
+
+document.getElementById('viewCards').addEventListener('click', () => setProjectView('cards'));
+document.getElementById('viewTable').addEventListener('click', () => setProjectView('table'));
+updateViewButtons();
+
+const showFinishedBox = document.getElementById('showFinished');
+showFinishedBox.checked = showFinished;
+showFinishedBox.addEventListener('change', () => {
+  showFinished = showFinishedBox.checked;
+  localStorage.setItem(SHOW_FINISHED_KEY, String(showFinished));
+  renderProjects();
+});
+
+const projectSearchInput = document.getElementById('projectSearch');
+const projectSearchClear = document.getElementById('projectSearchClear');
+
+function clearProjectSearch() {
+  projectSearchQuery = '';
+  projectSearchInput.value = '';
+  projectSearchClear.hidden = true;
+  renderProjects();
+  replaceHash(buildProjectsHash());
+}
+
+projectSearchInput.addEventListener('input', (e) => {
+  projectSearchQuery = e.target.value;
+  projectSearchClear.hidden = !projectSearchQuery;
+  renderProjects();
+  replaceHash(buildProjectsHash());
+});
+projectSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); clearProjectSearch(); }
+});
+projectSearchClear.addEventListener('click', () => { clearProjectSearch(); projectSearchInput.focus(); });
+
+// ------------------------------------------------------------------- routing
+// Hash shape: #/org · #/review · #/projects[?view=table&q=burn] ·
+// #/projects/<workstream-file>[?view=...&q=...]. The hash is the source of
+// truth for tab/detail/view/search state, so every state is linkable and
+// back/forward move through it via the native history stack. localStorage
+// still supplies the default when a param is absent from the hash (e.g. a
+// bare #/projects link honors whatever view the visitor last used).
+function parseHash() {
+  const raw = location.hash.slice(1); // drop leading '#'
+  const [path, qs] = raw.split('?');
+  const segments = path.split('/').filter(Boolean);
+  return { segments, params: new URLSearchParams(qs || '') };
+}
+
+// The canonical hash for the Projects tab given current in-memory state —
+// used both to build a target when navigating there and to normalize the
+// address bar after any state change.
+function buildProjectsHash() {
+  const params = new URLSearchParams();
+  if (projectView !== 'cards') params.set('view', projectView);
+  if (projectSearchQuery) params.set('q', projectSearchQuery);
+  const qs = params.toString();
+  const base = selectedProject ? `/projects/${encodeURIComponent(selectedProject)}` : '/projects';
+  return qs ? `${base}?${qs}` : base;
+}
+
+function canonicalHash() {
+  if (currentTab === 'review') return '/review';
+  if (currentTab === 'projects') return buildProjectsHash();
+  return '/org';
+}
+
+// Pushes a new history entry — for real navigations (tab switches, opening
+// or closing a project's detail view) that back/forward should step through.
+function navigate(path) {
+  if (location.hash.slice(1) === path) { applyRoute(); return; } // unchanged: hashchange won't fire, so re-apply directly
+  location.hash = path;
+}
+
+// Rewrites the current entry in place — for incidental state changes within
+// a tab (typing a search, flipping Cards/Table) that shouldn't spam back
+// with one entry per keystroke, while still keeping the URL shareable.
+function replaceHash(path) {
+  if (location.hash.slice(1) === path) return;
+  history.replaceState(null, '', `#${path}`);
+}
+
+// Reads the current hash and drives the UI to match it. Runs on first load
+// and on every 'hashchange' (browser back/forward, or an edited address bar).
+function applyRoute() {
+  const { segments, params } = parseHash();
+  const [section, sub] = segments;
+  if (section === 'review') {
+    selectedProject = null;
+    showTab('review');
+  } else if (section === 'projects') {
+    const view = params.get('view');
+    if (VIEW_MODES.has(view)) projectView = view;
+    projectSearchQuery = params.get('q') || '';
+    projectSearchInput.value = projectSearchQuery;
+    projectSearchClear.hidden = !projectSearchQuery;
+    updateViewButtons();
+    selectedProject = sub ? decodeURIComponent(sub) : null;
+    showTab('projects');
+  } else {
+    selectedProject = null;
+    showTab('org');
+  }
+  replaceHash(canonicalHash());
+}
+
+(async () => {
+  org = await (await fetch('/org.json')).json();
+  render();
+  await poll();
+  setInterval(poll, 10000);
+  // Prime Projects and Review regardless of which tab the hash lands on —
+  // the Review badge in the header is always live, and a warm Projects cache
+  // means switching tabs later shows data instantly instead of a blank flash.
+  await loadProjects();
+  setInterval(loadProjects, 60000);
+  await loadReview();
+  setInterval(loadReview, 60000);
+  window.addEventListener('hashchange', applyRoute);
+  applyRoute(); // honors the hash (or falls back to /org) on first load
+})();
+</script>
+</body>
+</html>

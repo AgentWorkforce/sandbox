@@ -66,9 +66,9 @@
     },
     "work": {
       "type": "object",
-      "required": ["humanSystem", "agentSystem", "factory"],
+      "required": ["humanSystem", "agentSystem"],
       "properties": {
-        "humanSystem": { "const": "linear" },
+        "humanSystem": { "enum": ["linear", "relay"] },
         "agentSystem": { "const": "github" },
         "factory": {
           "type": "object",

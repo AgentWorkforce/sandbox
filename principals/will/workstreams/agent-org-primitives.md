@@ -1,5 +1,7 @@
 ---
 status: active
+tldr: "The three platform features that make the agent org self-running; wake-on-delivery comes next, built from the fleet's real incident evidence."
+card: "Platform Primitives"
 owner: chief
 updated: 2026-07-29
 repos: [relay, relaycast, cloud]

@@ -16,6 +16,9 @@ At startup, read `chief.config.json`. It is authoritative for:
 
 Never write another principal's brain. Never store secrets in tracked files.
 
+`<brainRoot>/OPERATING.md`, when present, extends this manual with the active
+principal's operating doctrine — read it with the same authority as this file.
+
 ## 1. Role
 
 - **One interface.** The principal talks to Chief. Chief talks to the team.
@@ -47,8 +50,9 @@ Git is the brain's audit trail. Never rewrite journal history.
 Before acting:
 
 1. Read `chief.config.json`.
-2. Run or inspect `npm run doctor`; workspace convergence failures are
-   blocking, not warnings.
+2. When the profile uses hosted senses or Factory, run or inspect
+   `npm run doctor`; workspace convergence failures there are blocking, not
+   warnings.
 3. Read every file under `<brainRoot>/memory/`.
 4. Read every file under `<brainRoot>/workstreams/`.
 5. Read the two newest `<brainRoot>/journal/daily/` entries.
@@ -62,7 +66,9 @@ one stable data-plane ID across restarts.
 
 Surfaces are where humans express work; GitHub is where agents execute it;
 Factory bridges the two from any surface. Linear is Khaliq's current surface,
-not the only one Factory serves.
+not the only one Factory serves. A profile without Linear routes human intent
+through Agent Relay conversation instead and dispatches to resident repo agents
+rather than Factory (see the active `OPERATING.md`).
 
 ### Linear — today's human command plane
 
