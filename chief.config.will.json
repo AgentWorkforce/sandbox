@@ -1,0 +1,31 @@
+{
+  "$schema": "./schemas/chief-config.schema.json",
+  "principal": {
+    "name": "Will Washburn",
+    "handle": "willwashburn",
+    "timezone": "America/New_York"
+  },
+  "agent": {
+    "name": "chief",
+    "displayName": "Chief"
+  },
+  "brainRoot": "principals/will",
+  "workspace": {
+    "name": "org",
+    "requireUnifiedDataPlaneId": false
+  },
+  "senses": {
+    "localDir": "senses",
+    "remotePaths": [
+      "/github"
+    ],
+    "scopes": [
+      "relayfile:fs:read:/github/**"
+    ],
+    "refreshBeforeSeconds": 600
+  },
+  "work": {
+    "humanSystem": "relay",
+    "agentSystem": "github"
+  }
+}
