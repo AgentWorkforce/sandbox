@@ -115,6 +115,38 @@ hosted dispatch will not read it. Treat those files as preparation, not
 activation, or they become exactly what Chief's old `work.factory` block was —
 a config that looks authoritative and is never consulted.
 
+## Chief's decisions (2026-07-31)
+
+Recorded so they exist when the channel opens. Sequencing and tracking are
+Chief's to call; authority and data access are not.
+
+**Sequencing — confirmed as the table above.** The two Cloud-side blockers
+(RelayAuth capacity, the empty deployed spec) gate everything downstream, so
+audits and contract authoring are the only items that can proceed in parallel
+today. Both are preparation and neither dispatches.
+
+**#217 stays a separate issue from the product-insights program. Decided.** It
+is a runtime and persona migration; insights are a capability built on top of
+it. The brief itself requires insights to integrate with #217's canonical
+persona/runtime rather than recreate an HTTP delegate — which makes #217 a
+*dependency* of insights, not the same unit of work. Folding them together
+would make #217 uncloseable on its own evidence and produce one mega-issue that
+never satisfies the source + tests + feature-proof closure rule.
+
+**Sage Cloud boundary — the line is endorsed, the extraction is deferred.** The
+proposed split is sound and matches how `relayfile-cloud` and
+`relayhistory-cloud` were carved out: `sage-cloud` owns the Sage product
+runtime (worker, queues, DO/KV or DB, schedules/crons, migrations/ops), shared
+`cloud` retains auth/workspaces, Relayfile/Nango connections, and
+fleet/control-plane contracts. What Chief will not do is start the extraction
+now. Moving a production runtime while the Factory meant to build it is
+unproven, RelayAuth is at its D1 ceiling, and workspace identity resolution is
+unsettled inverts the risk order. It stays item 7, after #217 proves the path.
+
+**Not Chief's to decide, and still open:** program ownership on relayed
+authority, the Slack/Granola ingestion scope, and which AR-448 PR lineage
+survives. All three need Khaliq directly.
+
 ## Constraints Chief holds
 
 - `mergePolicy: never`, terminal state `human-review`. No automated merge or
