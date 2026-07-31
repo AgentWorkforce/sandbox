@@ -10,19 +10,22 @@ repos: [sage, nightcto, cloud, relay, chief]
 exhaustive executable feature maps for Sage and production NightCTO, and Sage
 issues closed only against verified feature proof.
 
-**Now:** Ownership requested by `sage-nightcto-factory-map-20260731`, which
-relays it as Khaliq's explicit direction. Chief has **not** confirmed that
-directly with Khaliq and is holding the program at map-and-record until he
-does. The worker's concrete claims verify: both worktrees exist on their stated
-branches, `sage#217` and `sage#216` are open. Chief cannot acknowledge over
-Relay — it has no `agent-relay` MCP tools this session, so the worker's request
-for acknowledgement and checkpoints is unanswerable until that is fixed.
+**Now:** Implementation is complete and inert. The canonical feature audit ran
+clean for both repos, Cloud dynamic routing regressions pass, and #217/#218
+carry no dispatch recipe gate, so nothing can fire. Activation waits on the two
+gates below. Ownership was requested by an agent relaying Khaliq's direction and
+later reported as directly confirmed — Chief records that with provenance intact
+rather than as direct confirmation, and the ingestion scope stays gated on
+Khaliq's own word. Chief has had no outbound Relay channel for this entire
+program: no `agent-relay` MCP tools resolved in this session, so every ACK,
+decision, and correction below reached the worker only if Khaliq relayed it.
 
-**Next:** Get Khaliq's direct confirmation of the topology direction, Chief's
-ownership, and the Slack/Granola ingestion scope, plus his decision on which
-AR-448 PR survives. Nothing dispatches before that. Chief's sequencing ACK is
-recorded below and stands; the remaining gates are the two Cloud-side blockers
-and the unverified dry-run workspace join.
+**Next:** Deploy the checked-in `cloud-factory-brain` persona and read the spec
+back non-empty, then enrol one node advertising `workflow:run` plus the Sage and
+NightCTO repo tags — the two activation gates below. Separately, Khaliq still
+owes a direct word on the Slack/Granola ingestion scope and a decision on which
+AR-448 PR survives; neither blocks the gates, but ingestion cannot start without
+the first and fleet identity should not be finalized without the second.
 
 ## Priority and dependency map
 
@@ -34,7 +37,7 @@ Ordered by what unblocks the most. Dependencies point at what must land first.
 | 2 | Hosted Factory contract actually configured | 1 | `cloud-factory-brain` has empty `inputValues`/`inputSpecs` — no `repoByLabel`, no `defaultRepo`. Hosted dispatch has been riding on Chief's removed hardcoded defaults. |
 | 3 | Sage + NightCTO gated workloads | 2 | Config shape depends on which contract home applies (below). |
 | 4 | Mac mini execution nodes | 2, 3 | Two nodes online (`sf-mini` 11.1.1, `chief` 11.2.0), both advertising `spawn:codex`/`spawn:claude`, neither yet advertising repo tags or `workflow:run`. Remaining blocker is deploying and enrolling a node with the real config — **not** central `clonePaths`, see the correction below. |
-| 5 | NightCTO test baseline | — | Independent; several package-local Vitest configs treat no-test-files as fatal, so "tests pass" is not yet a provable gate. Fix before it gates anything. |
+| 5 | NightCTO test baseline | — | **Resolved 2026-07-31.** Opened the program failing on no-test-files-fatal Vitest configs; now 909 tests pass with 2 live-PostgreSQL skips and strict build/typecheck/featuremap/test/E2E green. "Tests pass" is a usable gate again. |
 | 6 | Sage #217 through Factory | 1–4 | The program's outcome. |
 | 7 | sage-cloud boundary extraction | 6 | Sequence last; extracting a runtime under an unproven Factory adds risk. |
 | 8 | Sage insight ingestion (Slack + Granola) | 6, and Khaliq's direct sign-off | **Proposed, not accepted.** Relayed as Khaliq's scope on 2026-07-31 by an agent, not stated by him to Chief. Detail below. |
@@ -178,7 +181,36 @@ survives. All three need Khaliq directly.
 - A claim belongs to the work unit and a dispatch gate fails closed — the
   AR-448 duplicate lesson applies directly to a fleet with more claimants.
 
+## Activation gates
+
+Implementation is complete and inert. Chief holds activation until **both**:
+
+1. The checked-in `cloud-factory-brain` persona is deployed and read back — the
+   spec must be non-empty on the deployment, not merely committed. This is the
+   long-standing item 2 blocker, now the primary one.
+2. A node advertises `workflow:run` plus the Sage and NightCTO repo tags.
+
+Then, and separately, the Cloud-backed dry-run workspace join must succeed
+before real dispatch. `#217`/`#218` carry no dispatch recipe gate, so they stay
+inert on their own — the gates above are what turn the program on, and
+`mergePolicy: never` with terminal `human-review` survives activation.
+
 ## History
+
+- 2026-07-31 — Final implementation checkpoint recorded. Canonical feature
+  audit run `68486810c6ddac406efb94a1` completed 24/24 steps with 0 failures.
+  **Sage:** 15 categories, 100 features; strict build/typecheck/featuremap/test/
+  E2E green; 1,168 tests pass with 5 pre-existing skips; guardian 41/41;
+  Factory validate-only passes for both #217 and #218. **NightCTO:** 13
+  categories, 63 features; strict gates green; 909 tests pass with 2 live
+  PostgreSQL skips; guardian 40/40; 54 deterministic feature records pass, 7
+  live SKIP, 2 MANUAL; a pre-existing infra/gcp audit carries 19 findings not
+  owned by this program. **Cloud dynamic routing regression:** typecheck green,
+  148 focused tests, 83 persona tests, 3 replaceable-node config tests; the
+  GitHub repo comes from the event, Linear mapping is runtime input, and
+  node-local clone maps plus repo tags keep the Mac minis interchangeable.
+  Nothing deployed, restarted, dispatched, merged, released, scheduled, or
+  live-posted.
 
 - 2026-07-31 — The implementation agent reports that Khaliq's controlling task
   explicitly authorizes Chief ownership and Sage ingestion of all Slack content
