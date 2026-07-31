@@ -32,7 +32,7 @@ Ordered by what unblocks the most. Dependencies point at what must land first.
 | 1 | RelayAuth D1 capacity recovery (gated #2857) | Khaliq's explicit grant | Blocking. No Relayfile provider writeback, so no Linear checkpoints or fresh scoped credentials. |
 | 2 | Hosted Factory contract actually configured | 1 | `cloud-factory-brain` has empty `inputValues`/`inputSpecs` — no `repoByLabel`, no `defaultRepo`. Hosted dispatch has been riding on Chief's removed hardcoded defaults. |
 | 3 | Sage + NightCTO gated workloads | 2 | Config shape depends on which contract home applies (below). |
-| 4 | Mac mini execution nodes | 2, 3 | Registration, capability-aware claiming, leases/heartbeats, artifact return. |
+| 4 | Mac mini execution nodes | 2, 3 | Two nodes online (`sf-mini` 11.1.1, `chief` 11.2.0), both advertising `spawn:codex`/`spawn:claude`, neither advertising repo tags or `workflow:run`. Placement is blocked twice over: `clonePaths` is hardcoded `{}` in the orchestrator (lines 431, 474), and repo-tag authoring via `factory.node.json` is explicitly out of scope in `dev-stack/fleet-node-bootstrap/README.md:116`. |
 | 5 | NightCTO test baseline | — | Independent; several package-local Vitest configs treat no-test-files as fatal, so "tests pass" is not yet a provable gate. Fix before it gates anything. |
 | 6 | Sage #217 through Factory | 1–4 | The program's outcome. |
 | 7 | sage-cloud boundary extraction | 6 | Sequence last; extracting a runtime under an unproven Factory adds risk. |
@@ -53,6 +53,26 @@ So "define Sage and NightCTO factory configs" resolves differently depending on
 whether those workloads run hosted or on the Mac mini nodes. The Mac mini fleet
 described in the brief is a *third* shape — registered execution nodes claiming
 from a Cloud queue — and which contract governs them is undecided.
+
+Verified against `cloud` `origin/main` on 2026-07-31 (the local checkout is 27
+commits behind, so these were read from the remote ref):
+
+- `factory-cloud-orchestrator.ts:127` hardcodes
+  `REPO_LABELS = ["cloud", "relay", "relayfile", "pear", "agents"]`. Sage and
+  NightCTO are absent.
+- **But line 426 spreads `triage.labelRoutes` *after* those defaults**, so the
+  deployed spec can add repo routes without a Cloud code change. The blocker is
+  therefore item 2 — the spec is empty — not the hardcoded list. Patching
+  `REPO_LABELS` would be the wrong fix.
+- `factory.config.json` appears nowhere in cloud's `packages/web` or
+  `packages/core`. Hosted Factory genuinely never reads a repo contract file,
+  which confirms the two-contract-homes split above.
+
+The practical consequence for the program: writing `factory.config.json` into
+Sage and NightCTO prepares the *local loop* path and documents intent, but
+hosted dispatch will not read it. Treat those files as preparation, not
+activation, or they become exactly what Chief's old `work.factory` block was —
+a config that looks authoritative and is never consulted.
 
 ## Constraints Chief holds
 
