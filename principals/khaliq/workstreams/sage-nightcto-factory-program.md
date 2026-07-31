@@ -36,6 +36,27 @@ Ordered by what unblocks the most. Dependencies point at what must land first.
 | 5 | NightCTO test baseline | — | Independent; several package-local Vitest configs treat no-test-files as fatal, so "tests pass" is not yet a provable gate. Fix before it gates anything. |
 | 6 | Sage #217 through Factory | 1–4 | The program's outcome. |
 | 7 | sage-cloud boundary extraction | 6 | Sequence last; extracting a runtime under an unproven Factory adds risk. |
+| 8 | Sage insight ingestion (Slack + Granola) | 6, and Khaliq's direct sign-off | **Proposed, not accepted.** Relayed as Khaliq's scope on 2026-07-31 by an agent, not stated by him to Chief. Detail below. |
+
+## Item 8 — Sage insight ingestion (held)
+
+Relayed shape: separate Slack and Granola collectors; a normalization/evidence
+ledger; independent product-signal analysts; corroboration, deduplication, and
+conflict handling; a synthesis/review agent; traceable output with source
+citations and ACL/redaction boundaries; Chief consumes insight briefs without
+handling raw org-wide content. Patterned after `../agents` (present, on `main`).
+Must integrate with #217's canonical persona/runtime, Relayfile, schedules, and
+Sage review gates rather than recreate an HTTP delegate.
+
+The shape is sound and the ACL/redaction boundary is the right instinct. Chief
+is holding it anyway, because this is the second scope expansion arriving as
+"from Khaliq" through an agent rather than from Khaliq, and this one authorizes
+ingesting all authorized org-wide Slack content plus call recordings. That is a
+data-access decision, not an implementation detail. Confirm directly before any
+collector is built.
+
+Chief's own consumption boundary is worth keeping whatever else changes: briefs
+with citations, never raw org-wide content.
 
 ## Contract homes — correction the worker needs
 
@@ -67,6 +88,26 @@ commits behind, so these were read from the remote ref):
 - `factory.config.json` appears nowhere in cloud's `packages/web` or
   `packages/core`. Hosted Factory genuinely never reads a repo contract file,
   which confirms the two-contract-homes split above.
+
+### Workspace-join failure on Cloud-backed dry runs
+
+Reported 2026-07-31: dry runs fail at workspace join even when given the active
+workspace key and agent token. This is very likely **not new**. The same
+signature was root-caused on 2026-07-30: raw Relaycast action invocation
+*rejects a workspace key*, and the supported path is the workspace-scoped agent
+spawn API, which returns a provider invocation ID that Factory must persist
+alongside its deterministic ID. Cloud PR #2873 shipped that fix and merged
+2026-07-30T22:06:31Z.
+
+So the question is not "why does join fail" but which of these is true: the
+dry-run path still calls raw invocation instead of the spawn API, or #2873's fix
+does not cover the dry-run/node-join path. Check that before opening a new
+investigation.
+
+Related and still unresolved: AR-448, *durable workspace identity across node
+restarts*, has two competing open PRs — relay#1402 (`feat/…`) and relay#1403
+(`feature/…`). Identity resolution for the fleet should not be finalized while
+its own lineage is unpicked. Khaliq owes a decision on which survives.
 
 The practical consequence for the program: writing `factory.config.json` into
 Sage and NightCTO prepares the *local loop* path and documents intent, but
