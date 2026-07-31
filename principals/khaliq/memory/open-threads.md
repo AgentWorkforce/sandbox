@@ -43,6 +43,22 @@
   and/or raise the connect timeout. Secondary: `.claude/settings.json` allows
   `mcp__relaycast__*`, not `mcp__agent-relay__*` — confirm which server name is
   canonical.
+- **AR-448 was implemented twice and both PRs are open.** Relay #1402
+  (`feat/ar-448-…`, khaliqgant, +959) and #1403 (`feature/ar-448-…`, kjgbot,
+  +522) are independent implementations of the same issue, and both edit
+  `packages/cli/src/cli/commands/workspace.ts` and its test, so they cannot
+  both merge cleanly. #1402 goes wider (broker lifecycle plus a cloud
+  convergence test); #1403 ships a `specs/durable-workspace-identity.md` and a
+  separate `durable-workspace-identity` lib. Two more open relay PRs sit in the
+  same code: #1412 (one broker-workspace precedence ladder) and #1413 (Cloud
+  workspace IDs discoverable from the CLI). Khaliq picks one lineage before any
+  of the four merges. Root cause to fix: nothing stopped a second agent from
+  claiming an issue that already had an open PR.
+- **Workspace keys leak through observer links too.** `agent-relay node status`
+  prints `https://agentrelay.com/observer?key=rk_live_…` in plaintext — a
+  channel the 07-29 rotation batch did not cover. Relay PR #1405 (`fix(plugins):
+  stop exposing workspace keys in observer links`) is open and addresses it;
+  confirm it covers the CLI status path, not only plugin output.
 - **AR-448's Linear checkpoint is written but unposted.** Relay PR #1402 is
   open (2026-07-31). The checkpoint body is staged at
   `factory-tasks/ar-448-pr-opened-checkpoint.md` and
