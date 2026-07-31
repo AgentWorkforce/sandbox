@@ -130,3 +130,17 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - recommendation: 2-3 bot accounts (reviewer pool) + branch protection
   requiring 2 approvals on main across the org's repos; also advances
   the mergedBy-attribution problem (relay#1388 family).
+
+## RQ-11: Creator-partnerships material in cmo — yours? (FYI, non-blocking)
+- status: pending
+- date: 2026-07-31
+- from: cmo → chief
+- ask: 19 untracked files in cmo (1,109 lines: sponsorship playbook,
+  scorecard, ICP tiers, templates, exclusions, plus a 78-account scored
+  outreach sheet with contact emails) predate cmo's first session —
+  authorship unknown, possibly yours. Chain ruling already executing:
+  strategy docs commit to cmo; the 78-account list + any outreach become
+  a scout campaign with contact data in scout's CRM store, never a
+  committed CSV. Redirect only if you authored it and want it elsewhere;
+  silence means proceed.
+- recommendation: proceed as ruled; nothing blocks on this.
