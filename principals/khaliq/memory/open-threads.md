@@ -1,5 +1,20 @@
 # Open threads
 
+- **Chief was handed a program on Khaliq's authority, relayed by an agent, and
+  is holding.** `sage-nightcto-factory-map-20260731` asked Chief to own the
+  Sage/NightCTO distributed-Factory program and relayed a fleet topology (Cloud
+  control plane, Mac mini execution nodes). Its verifiable claims check out, but
+  an agent asserting "Khaliq explicitly directs" is not the same as Khaliq
+  saying so, and this commits fleet-wide execution. Chief recorded the map
+  (`workstreams/sage-nightcto-factory-program.md`) and dispatches nothing until
+  Khaliq confirms directly. Trigger: ask him at the next exchange.
+- **The hosted Factory brain has no contract configured at all.**
+  `cloud-factory-brain` returns empty `inputValues` and `inputSpecs`, so
+  `spec.capabilities.factoryBrain.triage` has no `repoByLabel` or `defaultRepo`.
+  Hosted dispatch worked because Chief's hardcoded Linear defaults filled the
+  gap; removing them exposed it. This blocks any gated workload, Sage and
+  NightCTO included.
+
 - **No Factory contract covers `relay`, `cloud`, or `relayfile` yet.** Chief
   resolves `factory.config.json` nearest-first — target repo, then clone root —
   and refuses to route when neither exists rather than assuming Linear. One
