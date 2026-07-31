@@ -32,7 +32,7 @@ const GIT_LOG_DELIM = '\x1f';
 // it and relays verdict clicks back to chief as a DM — it never edits the
 // file directly.
 const CHIEF_REPO = join(HERE, '..', '..');
-const REVIEW_QUEUE_PATH = join(CHIEF_REPO, 'review', 'queue.md');
+const REVIEW_QUEUE_PATH = join(BRAIN_ROOT, 'review', 'queue.md');
 const REVIEW_CACHE_TTL_MS = 30_000;
 const REVIEW_STATE_DIR = join(HERE, '.state');
 const REVIEW_STATE_FILE = join(REVIEW_STATE_DIR, 'review-seen.json');
