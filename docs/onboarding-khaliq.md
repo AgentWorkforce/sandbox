@@ -2,7 +2,7 @@
 
 Runbook for getting Khaliq's machine and his team of agents onto the same
 Agent Relay workspace Will's fleet runs on. Every command below is verified
-against the installed CLI (`agent-relay --version` → `11.2.0`) — run
+against the installed CLI (`agent-relay --version` → `11.3.0`) — run
 `agent-relay <command> --help` yourself if anything here looks stale.
 
 ## 1. Install
@@ -11,9 +11,9 @@ against the installed CLI (`agent-relay --version` → `11.2.0`) — run
 npm i -g agent-relay
 ```
 
-Will's fleet currently runs **11.2.0**. Check with `agent-relay --version`
+Will's fleet currently runs **11.3.0**. Check with `agent-relay --version`
 after install; if it's drifted ahead, pin to match with
-`npm i -g agent-relay@11.2.0` so both fleets behave identically.
+`npm i -g agent-relay@11.3.0` so both fleets behave identically.
 
 ## 2. Join the workspace
 

@@ -43,6 +43,12 @@ multi-allowlist brief becomes a relayfile CLI issue (expose repeated
 `--remote-path` / `--local-layout`).
 
 ## History
+- 2026-07-31 — Adopted Khaliq's profile-aware layout (merge `54fa2f9`):
+  brain at `principals/will/`, doctrine split into OPERATING.md,
+  per-machine config/teams mechanism, shared mechanics generalized to
+  linear|relay profiles. `khaliq-chief` lives at `principals/khaliq/` on
+  his machine; chief-to-chief link pending his org-workspace join (Will
+  sends the key) and the relay MCP-timeout fix.
 - 2026-07-29 — Orgchart dashboard shipped (`tools/orgchart/`, localhost:4780):
   live org tree, attach-in-terminal launcher, Projects overview reading tldr
   and curated card labels straight from `workstreams/*.md` frontmatter.
