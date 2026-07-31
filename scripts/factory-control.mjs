@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -500,7 +501,76 @@ async function waitForIssuePromotion(
   );
 }
 
-async function promoteExistingIssue(issueKey, repoNames, recipe) {
+/**
+ * Open pull requests that already reference this Linear key, across the repos
+ * the issue routes to.
+ *
+ * `Ready for Agent` is the only claim signal every dispatcher can see, so an
+ * issue sitting in that state means "nobody is working on this". An open PR
+ * says otherwise. AR-448 proved the gap: Factory dispatched it and recorded
+ * the claim only in its own hosted state store, the writeback that would have
+ * moved the issue out of `Ready for Agent` failed on the RelayAuth outage, and
+ * 77 minutes later a second dispatcher took the still-ready issue and opened a
+ * competing PR against the same files.
+ */
+async function findOpenPullRequestsForIssue(issueKey, repoNames) {
+  const found = [];
+  for (const repoName of repoNames) {
+    const repo = repoName.includes("/") ? repoName : `AgentWorkforce/${repoName}`;
+    const result = spawnSync("gh", [
+      "pr",
+      "list",
+      "--repo",
+      repo,
+      "--state",
+      "open",
+      "--search",
+      issueKey,
+      "--json",
+      "number,title,headRefName,author,url",
+    ], { encoding: "utf8", timeout: 60_000 });
+    if (result.status !== 0) {
+      // An unreachable GitHub is not proof the issue is unclaimed. Say so and
+      // let the caller decide rather than silently promoting into a race.
+      throw new Error(
+        `Cannot verify whether ${issueKey} is already claimed: ` +
+        `\`gh pr list --repo ${repo}\` failed ` +
+        `(${(result.stderr || result.error?.message || "unknown error").trim()}). ` +
+        "Re-run once GitHub is reachable, or pass --allow-claimed to override.",
+      );
+    }
+    for (const pr of JSON.parse(result.stdout || "[]")) {
+      found.push({ repo, ...pr, author: pr.author?.login ?? null });
+    }
+  }
+  return found;
+}
+
+async function assertUnclaimed(issueKey, repoNames, { allowClaimed }) {
+  const open = await findOpenPullRequestsForIssue(issueKey, repoNames);
+  if (open.length === 0) return;
+  const summary = open
+    .map((pr) => `${pr.repo}#${pr.number} (${pr.author ?? "unknown"}) ${pr.title}`)
+    .join("; ");
+  if (allowClaimed) {
+    console.warn(
+      `Warning: ${issueKey} already has ${open.length} open pull request(s) ` +
+      `— ${summary}. Promoting anyway because --allow-claimed was passed.`,
+    );
+    return;
+  }
+  throw new Error(
+    `${issueKey} already has ${open.length} open pull request(s): ${summary}. ` +
+    "Promoting it back to Ready for Agent would re-offer claimed work to a " +
+    "second dispatcher. Close or merge the existing PR first, or pass " +
+    "--allow-claimed if the duplicate is intentional.",
+  );
+}
+
+async function promoteExistingIssue(issueKey, repoNames, recipe, options = {}) {
+  await assertUnclaimed(issueKey, repoNames, {
+    allowClaimed: Boolean(options.allowClaimed),
+  });
   const { team, state, readinessLabel } = await bootstrap();
   const value = await readRemoteJson(
     `/linear/issues/by-id/${issueKey}.json`,
@@ -765,7 +835,8 @@ const COMMANDS = new Set([
 const USAGE =
   "Usage: node scripts/factory-control.mjs " +
   "bootstrap|status|dispatch-workspace-task|" +
-  "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]|" +
+  "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team] " +
+  "[--allow-claimed]|" +
   "create-task <task-spec.json>|" +
   "comment <LINEAR-KEY> <body-file|-> [idempotency-key]";
 
@@ -784,22 +855,26 @@ async function planCommand() {
     return () => createWorkspaceConvergenceTask();
   }
   if (command === "promote-issue") {
-    const issueKey = process.argv[3];
-    const repoNames = (process.argv[4] ?? "")
+    const positional = process.argv.slice(3).filter((value) =>
+      value !== "--allow-claimed"
+    );
+    const allowClaimed = process.argv.includes("--allow-claimed");
+    const issueKey = positional[0];
+    const repoNames = (positional[1] ?? "")
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    const recipe = process.argv[5];
+    const recipe = positional[2];
     if (!issueKey || repoNames.length === 0) {
       throw new Error(
         "Usage: node scripts/factory-control.mjs promote-issue " +
-        "<LINEAR-KEY> <repo[,repo]> [single|workflow|team]",
+        "<LINEAR-KEY> <repo[,repo]> [single|workflow|team] [--allow-claimed]",
       );
     }
     if (recipe && !["single", "workflow", "team"].includes(recipe)) {
       throw new Error(`Unsupported Factory recipe ${recipe}`);
     }
-    return () => promoteExistingIssue(issueKey, repoNames, recipe);
+    return () => promoteExistingIssue(issueKey, repoNames, recipe, { allowClaimed });
   }
   if (command === "create-task") {
     const specPath = process.argv[3];

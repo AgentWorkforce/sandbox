@@ -52,8 +52,18 @@
   separate `durable-workspace-identity` lib. Two more open relay PRs sit in the
   same code: #1412 (one broker-workspace precedence ladder) and #1413 (Cloud
   workspace IDs discoverable from the CLI). Khaliq picks one lineage before any
-  of the four merges. Root cause to fix: nothing stopped a second agent from
-  claiming an issue that already had an open PR.
+  of the four merges. **Root cause established 2026-07-31**, with the chain
+  evidenced end to end: Factory dispatched AR-448 at 22:56 and recorded the
+  claim only in its own hosted state store
+  (`factory-cloud-orchestrator.ts` dedupes on `stateStore.getIssue`, which no
+  other dispatcher can read); the writeback that moves the issue out of
+  `Ready for Agent` failed on the RelayAuth D1 outage and was treated as
+  non-fatal; AR-448 therefore still reads `stateId = Ready for Agent`,
+  `updatedAt 2026-07-30T20:41:32Z`, unchanged since creation; 77 minutes later
+  a second dispatcher took the still-ready issue and opened #1403.
+  **Remaining fix is cloud-side** — claim before spawning, not after, and abort
+  the dispatch when the claim write fails. Chief's half (a promote-time guard
+  that refuses to re-offer an issue with an open PR) is done.
 - **Workspace keys leak through observer links too.** `agent-relay node status`
   prints `https://agentrelay.com/observer?key=rk_live_…` in plaintext — a
   channel the 07-29 rotation batch did not cover. Relay PR #1405 (`fix(plugins):

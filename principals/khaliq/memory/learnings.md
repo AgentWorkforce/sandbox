@@ -21,3 +21,14 @@
 - A doctor `OK` on `broker` says the process is up, not that the planes are
   healthy. Read every integration line; GitHub can report a recent event while
   both sync and ingress are unhealthy.
+- **A claim that lives in one dispatcher's private state is not a claim.**
+  Factory fences work in its own hosted state store, which no other dispatcher
+  can see. The only cross-dispatcher claim signal is the Linear issue's own
+  state, so dispatch must move the issue out of `Ready for Agent` *before*
+  spawning agents, not as a completion checkpoint.
+- **A dispatch gate must fail closed.** AR-448 was duplicated because the
+  writeback that releases the claim depends on Relayfile, Relayfile was down,
+  the failure was non-fatal, and the run proceeded — leaving the issue looking
+  ready with a PR already open. If the claim cannot be written, abort the
+  dispatch; a queue that silently re-offers claimed work is worse than a queue
+  that stalls.
