@@ -16,9 +16,9 @@ NOT passive dashboards/alerts — plus documented best practices for
 creating/using channels, plus a **periodic review** cadence (mechanism
 open; burn-data-informed is the natural candidate) to catch drift.
 
-**Now:** captured 2026-07-30 18:13Z; the fleet restart lands first.
+**Now:** the fleet restart has landed; c2a recon not yet started.
 
-**Next (post-restart):** (1) recon the c2a repo — what the protocol
+**Next:** (1) recon the c2a repo — what the protocol
 currently says about channels/membership; (2) proposal draft: protocol
 additions (membership criteria, join/leave semantics, broadcast scoping
 so voice-class agents stop drowning in #general), org conventions, and

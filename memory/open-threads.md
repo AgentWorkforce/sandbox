@@ -9,7 +9,13 @@
   deliveries — delivery simply stops waking the session. Durable fix
   (broker-native session/responsiveness heartbeat in `node agent list` +
   health, and "delivered but never processed" as a first-class
-  wake-on-delivery state) is filed with relay, not yet built.
+  wake-on-delivery state) is filed with relay, not yet built. 2026-07-30
+  restart: the watchdog fired a stale BROKER_DOWN×15 ("recommend
+  kickstart") that raced the restart window — needs restart-awareness /
+  a confirming re-scan before recommending kickstarts. Sharper gap, from
+  cpo (escalations.md, 69b95aa): none of the four 07-30 seat deaths
+  tripped it, and the restart cleared the roster — the evidence of the
+  detection gap is destroyed while the gap itself persists.
 
 - **Broker restarts can leave nodes alive-but-deaf, not frozen.** Hosted→
   broker inbound delivery can die on restart while everything looks healthy
@@ -23,7 +29,7 @@
   workaround is drive-attach nudges instructing sessions to check_inbox and
   a 15-min pull cadence (session-scoped — lost on respawn until the
   platform fix lands). Filed: **relay#1386** + **#1387** (session-liveness).
-  **ROOT-CAUSED 2026-07-30 — deterministic repro (36/36), four composing
+  **Root-caused — deterministic repro (36/36), four composing
   defects, posted on #1386:** dead sockets never superseded (NodeDO); the
   new broker's one-shot node.register swallows a 409
   provider_instance_conflict (35s liveness window = the restart
@@ -33,11 +39,11 @@
   unimplemented. Owner: Relay Product Owner, RFC-first, after the release
   package. The repro also found **--workspace-key not honored** (cloud
   session follow-user scope silently re-homes brokers to prod) — filed
-  separately as a prod-safety bug. Local sibling hit 2026-07-30: the
-  fleet restart re-homed chief's node (alone, 1/15) into the stale probe
-  workspace because `node up` prefers the global workspace store's
-  active entry over the repo state-dir key — fixed by aligning both on
-  the org key; relay issue to be filed via the Relay Product Owner.
+  separately as a prod-safety bug. A local sibling case: a fleet restart
+  re-homed chief's node (alone, 1/15) into a stale probe workspace
+  because `node up` prefers the global workspace store's active entry
+  over the repo state-dir key — fixed by aligning both on the org key;
+  relay issue still to be filed via the Relay Product Owner.
   **Standing rules: restart verification requires an inbound-delivery
   proof (test DM → non-empty readers or backlog-referencing outbound);
   the 15-min pull cadences are RETIRED (token furnace) — watchdog-

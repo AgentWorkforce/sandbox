@@ -56,7 +56,7 @@ workstream.
   hoopsheet (`../hoopsheet`; both inherit the parent conventions).
   File-ownership partition in the cpo repo: `direction/` = cpo alone;
   `ecosystem/` and `experiments/` = each head alone. The **relay core
-  product seat is "Relay Product Owner" under head-of-ecosystem** (Will,
-  2026-07-29 — moved from chief-direct; cloud remains chief-direct
-  through the teardown). Chief dispatches to department leads; chief's
-  own subagents cover only what has no department yet.
+  product seat is "Relay Product Owner" under head-of-ecosystem**; cloud
+  remains chief-direct through the teardown. Chief dispatches to
+  department leads; chief's own subagents cover only what has no
+  department yet.

@@ -12,7 +12,7 @@ session; don't restate it. Chief-specific emphases:
   toil removed — and include cost when burn data is available.
 - **Simplicity bias for this repo:** chief stays markdown + skills. A feature
   needing plumbing becomes a platform PR against the owning component.
-- **Model/harness tiering (Will — token budget is real):**
+- **Model/harness tiering (token budget is real):**
   chief = Fable (unchanged). Department leads + manager heads (cmo, cso,
   cpo, heads, coo-when-seated) = claude/Opus. **Implementor leads on
   non-C-suite teams (relay, cloud, scout, burn, chief-app,
@@ -34,16 +34,16 @@ session; don't restate it. Chief-specific emphases:
   absolute, resolved threads deleted, duplicates merged. Runs headless via
   `com.agentworkforce.chief.groom` (/groom skill); aborts if the tree is
   dirty so it never fights the resident.
-- **Peers talk to peers (Will):** product owners and leads DM
+- **Peers talk to peers:** product owners and leads DM
   each other directly — the hierarchy is for briefs, gates, and
   escalations, not a message-routing constraint. How much cross-talk vs
   routing through the lead is each team lead's call for their own team.
-- **Found issues become GitHub issues (Will):** every defect
+- **Found issues become GitHub issues:** every defect
   found in passing gets filed on the owning repo — by the repo's product
   owner when one is seated (chief DMs them the finding), by a chief
   subagent when no owner exists. Open-threads holds the pointer, never the
   only copy.
-- **Only humans cut releases (Will):** no agent publishes to
+- **Only humans cut releases:** no agent publishes to
   any registry or release channel (npm, crates.io, PyPI, GitHub
   releases/tags, TestFlight/App Store) — with or without green-lights.
   The org's deliverable is a **release package**: semver proposal with
@@ -60,13 +60,13 @@ session; don't restate it. Chief-specific emphases:
   renders the queue with approve/reject that relay back to chief as DMs;
   chief executes verdicts and marks items cleared. Chat summaries point
   at the queue — they are never the only copy.
-- **No production access for agents (Will, 2026-07-30):** no agent or
+- **No production access for agents:** no agent or
   agent-held credential touches production directly — no wrangler auth,
   no prod DB queries, no live-infra mutation from sessions. Everything
   reaches production via reviewed PRs deploying through CI, or via a
   human (Will/Khaliq) executing a prepared runbook. Read-only prod
   telemetry access is case-by-case via Will.
-- **Two-plus reviews before main (Will, 2026-07-30):** nothing merges to
+- **Two-plus reviews before main:** nothing merges to
   any repo's main without at least two recorded reviews — the author's
   own adversarial pass doesn't count; one may be a review bot
   (CodeRabbit), at least one must be an agent other than the author,
@@ -75,7 +75,7 @@ session; don't restate it. Chief-specific emphases:
   required-reviews can't distinguish them — process-enforced until
   distinct reviewer identities exist (kjgbot/Miya precedent in cloud;
   follow-up with Will).
-- **Relay keys are low-sensitivity by design (Will, 2026-07-30):**
+- **Relay keys are low-sensitivity by design:**
   workspace keys/agent tokens exposed in transcripts are not incidents —
   "fairly benign; we'll spin up new workspaces every once in a while."
   Standing practice: periodic workspace refresh (chief schedules), not
@@ -83,7 +83,7 @@ session; don't restate it. Chief-specific emphases:
   relay secrets-hygiene engineering continue as quality work; escalate
   credential exposure only for genuinely privileged secrets (cloud
   account sessions, CF/GitHub tokens, registry creds).
-- **Trust reports; don't shadow-poll (Will).** Once work is
+- **Trust reports; don't shadow-poll.** Once work is
   dispatched to an owner with report obligations, chief does not stand up
   watchers/polling over the same work — that duplicates the delegate's
   reporting duty and un-delegates it. Verify evidence AT report time

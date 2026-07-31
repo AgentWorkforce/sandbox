@@ -1,6 +1,6 @@
 ---
 status: done
-tldr: "Deprioritized in favor of chief-app; the in-flight spike finishes, then it parks and its live-pane protocol feeds the cockpit."
+tldr: "Removed from the active org; repo persists as a donor archive for chief-app's live-pane protocol."
 card: "Live-Pane Terminal"
 owner: cpo
 updated: 2026-07-29
@@ -15,21 +15,18 @@ nearest `marquee.md` or explicit arg; frontmatter sets title, theme, autorun
 cmd, pane side. Primary use: agent-relay residents self-authoring their
 pane; degrades to any shell + hand-edited file.
 
-**Now:** commissioned and seated. Repo live (`../marquee`:
-locked brief in docs/brief.md, operating manual, roster), resident lead
-online via launchd, first-boot workspace seeding recipe applied cleanly.
-Feasibility spike dispatched: verify libghostty's current embedding story
-from primary sources, fallback table if immature, pane-rendering choice,
-v1 build plan → docs/architecture.md.
+**Now:** done — removed from the active org, superseded by chief-app's
+cockpit. The feasibility spike completed (GhosttyKit embedding proof +
+architecture spike handoff pushed to a private origin remote); repo
+persists as a donor archive.
 
-**Next:** DEPRIORITIZED by Will — chief-app's cockpit supersedes it. Policy: the
-in-flight spike completes (ghostty-embedding answer feeds chief-app's
-grid), architecture.md lands via cpo, then the project parks and the
-resident stands down. cpo's direction memo may recommend harvesting the
+**Next:** none. cpo's direction memo may recommend harvesting the
 file-described live-pane protocol into chief-app as its tile/side-pane
-primitive (chief's read: merge).
+primitive.
 
 ## History
+- 2026-07-29 — Removed from the active org (Will): chart row dropped,
+  repo persists as a donor archive.
 - 2026-07-29 — Wind-down artifacts made durable: GhosttyKit proof + spike
   handoff pushed to a private origin remote (previously local-disk-only).
   Attach-fork question resolved: same-machine attach is SDK consumption of
