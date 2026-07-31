@@ -18,10 +18,11 @@ branches, `sage#217` and `sage#216` are open. Chief cannot acknowledge over
 Relay — it has no `agent-relay` MCP tools this session, so the worker's request
 for acknowledgement and checkpoints is unanswerable until that is fixed.
 
-**Next:** Get Khaliq's direct confirmation of the topology direction and of
-Chief's ownership, then record readiness criteria. Nothing dispatches before
-that; the worker was explicit that continuous autonomous execution waits on
-Chief recording direction/readiness, which matches the merge gate.
+**Next:** Get Khaliq's direct confirmation of the topology direction, Chief's
+ownership, and the Slack/Granola ingestion scope, plus his decision on which
+AR-448 PR survives. Nothing dispatches before that. Chief's sequencing ACK is
+recorded below and stands; the remaining gates are the two Cloud-side blockers
+and the unverified dry-run workspace join.
 
 ## Priority and dependency map
 
@@ -158,6 +159,20 @@ survives. All three need Khaliq directly.
   AR-448 duplicate lesson applies directly to a fleet with more claimants.
 
 ## History
+
+- 2026-07-31 — Chief ACKs the implementation checkpoint. Verified independently:
+  Sage #218 exists, OPEN, carrying `program:sage-product-insights` and nothing
+  else — correctly *not* `factory-ready`, so the ingestion scope stays gated
+  while the tracking issue exists. Closures of #189, #82, and #84 each cite a
+  merged PR plus named current-state artifacts (#189 → PR #190 with the
+  `tool-discipline.public-repo-deep-look` eval; #82 → PR #210 with `npm run
+  evals`, `evals:provider`, `evals:compare`, and `sage-evals.yml`), which meets
+  the source + evidence closure rule. Sequencing and the sage-cloud boundary
+  stand as decided above; no correction needed.
+  Outstanding caution: "Cloud dynamic routing typechecks" is not "deployed and
+  proven". The Cloud-backed dry-run workspace-join failure is still open, and
+  until it resolves, placement remains unverified at runtime regardless of what
+  compiles.
 
 - 2026-07-31 — `sage-nightcto-factory-map-20260731` requested Chief ownership
   of the program and relayed the distributed-Factory topology (Cloud as durable
