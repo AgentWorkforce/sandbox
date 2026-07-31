@@ -44,10 +44,27 @@ export function repoPath(repoName, cloneRoot) {
  * meaningful answer ("this repo is not Factory-enabled"), not an error, and the
  * caller decides whether that should block.
  */
+/**
+ * Where a repository's contract may be declared, nearest first.
+ *
+ * A contract does not have to be per-repository. Most repos in a workspace
+ * share one surface and one safety gate, so a single `factory.config.json` at
+ * the clone root covers them all; a repo only needs its own file when it
+ * differs — as `hoopsheet` does by dispatching from GitHub. Nearest wins.
+ */
+export function contractSearchPaths(repoName, cloneRoot) {
+  return [
+    join(repoPath(repoName, cloneRoot), FACTORY_CONFIG_FILENAME),
+    join(resolve(cloneRoot), FACTORY_CONFIG_FILENAME),
+  ];
+}
+
 export function loadFactoryContract(repoName, { cloneRoot }) {
   const root = repoPath(repoName, cloneRoot);
-  const path = join(root, FACTORY_CONFIG_FILENAME);
-  if (!existsSync(path)) return null;
+  const path = contractSearchPaths(repoName, cloneRoot).find((candidate) =>
+    existsSync(candidate)
+  );
+  if (!path) return null;
 
   let raw;
   try {
@@ -93,13 +110,13 @@ export function requireFactoryContract(repoName, { cloneRoot }) {
   const contract = loadFactoryContract(repoName, { cloneRoot });
   if (contract) return contract;
   throw new Error(
-    `${repoName} has no ${FACTORY_CONFIG_FILENAME} at ` +
-    `${repoPath(repoName, cloneRoot)}. Factory reads its dispatch contract ` +
-    "from the target repository, so Chief will not guess a surface for it. " +
-    "Add the file — minimally " +
+    `No ${FACTORY_CONFIG_FILENAME} covers ${repoName}. Looked in ` +
+    `${contractSearchPaths(repoName, cloneRoot).join(" then ")}. Chief will ` +
+    "not guess a surface. Add a shared contract at the clone root to cover " +
+    "every repository that dispatches the same way, or a per-repo file where " +
+    "one differs — minimally " +
     '{"issueSource":"linear","safety":{"requireTitlePrefix":"[factory]",' +
-    '"requireLabel":"factory","requireTeamKey":"AR"},"mergePolicy":"never"} ' +
-    "— or route the work to a repository that has one.",
+    '"requireLabel":"factory","requireTeamKey":"AR"},"mergePolicy":"never"}.',
   );
 }
 

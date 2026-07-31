@@ -1,14 +1,13 @@
 # Open threads
 
-- **`relay`, `cloud`, and `relayfile` have no `factory.config.json`, so Chief
-  can no longer route work to them.** Once Chief reads Factory's contract from
-  the target repo instead of restating a Linear-shaped copy, a repo without
-  that file has no declared surface and Chief refuses rather than assuming
-  Linear. Only `factory`, `hoopsheet`, `pear`, `pear-residual`,
-  `pear-wt-417-harness`, and `factory-e2e-demo` currently have one. Either add
-  the file to the routed repos, or — if hosted Cloud Factory takes its contract
-  from the deployed spec rather than a repo file — teach Chief to read that
-  spec. Blocking for `promote-issue`, `create-task`, `bootstrap`, and `status`.
+- **No Factory contract covers `relay`, `cloud`, or `relayfile` yet.** Chief
+  resolves `factory.config.json` nearest-first — target repo, then clone root —
+  and refuses to route when neither exists rather than assuming Linear. One
+  file at `/Users/khaliqgant/Projects/AgentWorkforce/factory.config.json` would
+  cover all three (verified: with it present, all three resolve `linear` while
+  `hoopsheet`'s own file still wins with `github`). Khaliq's call whether to add
+  it there, since it lives outside the chief repo. Until then `promote-issue`,
+  `create-task`, `bootstrap`, and `status` refuse for those repos.
 
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.

@@ -93,8 +93,12 @@ next. A surface is where a task is *expressed*; Factory is what turns any
 expressed task into an agent run. Chief works *with* Factory rather than owning
 dispatch, and must not assume the task arrived through Linear.
 
-**The dispatch contract lives in the target repository**, in its
-`factory.config.json`: `issueSource` selects the surface, `safety`
+**The dispatch contract lives in `factory.config.json`**, resolved nearest
+first: the target repository, then the clone root. A contract does not have to
+be per-repository — most repos share one surface and one gate, so a single file
+at the clone root covers them, and a repo only needs its own when it differs
+(as `hoopsheet` does, dispatching from GitHub). The file declares:
+`issueSource` selects the surface, `safety`
 (`requireLabel`, `requireTitlePrefix`, `requireTeamKey`) is the opt-in gate,
 `linear.states` names the states when the surface is Linear, and `mergePolicy`
 governs merge. Chief reads that file and does not restate it. `chief.config.json`
@@ -107,9 +111,9 @@ dispatched directly and lifecycle updates are written back as GitHub comments
 and labels, with no Linear record); and GitHub-mirror, where a `factory` label
 on a GitHub issue is mirrored into a `[factory]` Linear issue.
 
-When a repository has no `factory.config.json`, or when `issueSource` is unset,
-Chief refuses to route rather than assuming Linear. Assuming Linear is exactly
-the defect this replaced.
+When no contract covers a repository, or when `issueSource` is unset, Chief
+refuses to route rather than assuming Linear. Assuming Linear is exactly the
+defect this replaced.
 
 Two rules follow from surface-agnosticism, both learned the expensive way from
 the AR-448 duplicate (see `memory/learnings.md`):
