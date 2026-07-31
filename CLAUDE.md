@@ -93,13 +93,23 @@ next. A surface is where a task is *expressed*; Factory is what turns any
 expressed task into an agent run. Chief works *with* Factory rather than owning
 dispatch, and must not assume the task arrived through Linear.
 
-Linear is the surface Khaliq drives today, so `work.factory` in
-`chief.config.json` describes the Linear-shaped readiness contract Chief uses:
-the `[factory]` title prefix, `factory-ready` readiness label (or its canonical
-`factory` equivalent), `Ready for Agent` state, `AR` team, and a repository
-route. A recipe label is optional; without one, Factory uses the configured
-default recipe. Treat that block as *one surface's* dispatch contract, not as
-the definition of dispatchable work.
+**The dispatch contract lives in the target repository**, in its
+`factory.config.json`: `issueSource` selects the surface, `safety`
+(`requireLabel`, `requireTitlePrefix`, `requireTeamKey`) is the opt-in gate,
+`linear.states` names the states when the surface is Linear, and `mergePolicy`
+governs merge. Chief reads that file and does not restate it. `chief.config.json`
+carries only `recipes` — which recipe Chief selects — because that is Chief's
+choice, not the surface's.
+
+Three documented entry modes: Linear-native; GitHub-native
+(`issueSource: "github"`, where an open issue carrying the readiness label is
+dispatched directly and lifecycle updates are written back as GitHub comments
+and labels, with no Linear record); and GitHub-mirror, where a `factory` label
+on a GitHub issue is mirrored into a `[factory]` Linear issue.
+
+When a repository has no `factory.config.json`, or when `issueSource` is unset,
+Chief refuses to route rather than assuming Linear. Assuming Linear is exactly
+the defect this replaced.
 
 Two rules follow from surface-agnosticism, both learned the expensive way from
 the AR-448 duplicate (see `memory/learnings.md`):

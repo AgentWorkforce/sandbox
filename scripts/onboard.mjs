@@ -247,22 +247,16 @@ try {
       ],
       refreshBeforeSeconds: 600,
     },
-    work: existing?.work ?? {
-      humanSystem: "linear",
-      agentSystem: "github",
-      factory: {
-        execution: "cloud",
-        teamKey: "AR",
-        titlePrefix: "[factory]",
-        readinessState: "Ready for Agent",
-        readinessLabel: "factory-ready",
-        defaultRecipe: "single",
-        recipeLabels: {
-          single: "agent:single",
-          workflow: "agent:workflow",
-          team: "agent:team",
-        },
-        mergePolicy: "never",
+    // Only the recipe choice is Chief's. The surface (`issueSource`), the
+    // safety gate, and the merge policy belong to each target repository's
+    // `factory.config.json` — writing a Linear-shaped copy here is what made
+    // Chief assert a Linear-only world Factory never had.
+    recipes: existing?.recipes ?? {
+      default: "single",
+      labels: {
+        single: "agent:single",
+        workflow: "agent:workflow",
+        team: "agent:team",
       },
     },
   });
@@ -309,10 +303,10 @@ try {
   console.log("\nChief is ready.");
   console.log("Run `npm run chief` to attach.");
   console.log(
-    "A Factory task dispatches only when its Linear issue is in " +
-    `"${config.work.factory.readinessState}" with the ` +
-    `\`${config.work.factory.readinessLabel}\` label and a repository label; ` +
-    "merge remains human-gated.",
+    "Each repository declares how its work is dispatched in its own " +
+    "`factory.config.json`: `issueSource` picks the surface (a Linear issue " +
+    "in the configured ready state, or a labelled GitHub issue) and `safety` " +
+    "is the opt-in gate. Merge remains human-gated.",
   );
   if (!skipMount && skipServices) {
     console.log("Run `npm run senses` to keep the projections synchronized.");

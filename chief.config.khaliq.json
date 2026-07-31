@@ -29,22 +29,12 @@
     ],
     "refreshBeforeSeconds": 600
   },
-  "work": {
-    "humanSystem": "linear",
-    "agentSystem": "github",
-    "factory": {
-      "execution": "cloud",
-      "teamKey": "AR",
-      "titlePrefix": "[factory]",
-      "readinessState": "Ready for Agent",
-      "readinessLabel": "factory-ready",
-      "defaultRecipe": "single",
-      "recipeLabels": {
-        "single": "agent:single",
-        "workflow": "agent:workflow",
-        "team": "agent:team"
-      },
-      "mergePolicy": "never"
+  "recipes": {
+    "default": "single",
+    "labels": {
+      "single": "agent:single",
+      "workflow": "agent:workflow",
+      "team": "agent:team"
     }
   }
 }

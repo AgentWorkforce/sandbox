@@ -42,22 +42,22 @@ export function validateConfig(config) {
   if (!Array.isArray(config?.senses?.scopes) || config.senses.scopes.length === 0) {
     throw new Error("senses.scopes must contain at least one Relayfile scope");
   }
-  if (
-    !["linear", "relay"].includes(config?.work?.humanSystem) ||
-    config?.work?.agentSystem !== "github"
-  ) {
-    throw new Error(
-      "Chief requires Linear or Agent Relay for humans and GitHub for agents",
-    );
+  // No `work` validation here on purpose. Which surface a task arrives on,
+  // what makes it dispatchable, and whether merge is automatic are Factory's
+  // to declare, per repository, in that repository's `factory.config.json`.
+  // Chief previously restated them and pinned humanSystem to Linear, which
+  // made a GitHub-native repo like `hoopsheet` unrepresentable.
+  const recipes = config?.recipes;
+  if (!recipes || typeof recipes !== "object") {
+    throw new Error("recipes must define the Factory recipe Chief selects");
   }
-  if (
-    config?.work?.humanSystem === "linear" &&
-    (config?.work?.factory?.execution !== "cloud" ||
-      config?.work?.factory?.mergePolicy !== "never")
-  ) {
-    throw new Error(
-      "A Linear profile requires Cloud Factory execution and a never-auto-merge policy",
-    );
+  if (!["single", "workflow", "team"].includes(recipes.default)) {
+    throw new Error("recipes.default must be single, workflow, or team");
+  }
+  for (const recipe of ["single", "workflow", "team"]) {
+    if (typeof recipes.labels?.[recipe] !== "string" || !recipes.labels[recipe]) {
+      throw new Error(`recipes.labels.${recipe} must be a non-empty label name`);
+    }
   }
   return config;
 }

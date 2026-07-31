@@ -1,5 +1,15 @@
 # Open threads
 
+- **`relay`, `cloud`, and `relayfile` have no `factory.config.json`, so Chief
+  can no longer route work to them.** Once Chief reads Factory's contract from
+  the target repo instead of restating a Linear-shaped copy, a repo without
+  that file has no declared surface and Chief refuses rather than assuming
+  Linear. Only `factory`, `hoopsheet`, `pear`, `pear-residual`,
+  `pear-wt-417-harness`, and `factory-e2e-demo` currently have one. Either add
+  the file to the routed repos, or — if hosted Cloud Factory takes its contract
+  from the deployed spec rather than a repo file — teach Chief to read that
+  spec. Blocking for `promote-issue`, `create-task`, `bootstrap`, and `status`.
+
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.
 - RelayAuth delegated token mint currently returns an upstream error. Chief's

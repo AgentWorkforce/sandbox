@@ -2,27 +2,51 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Chief configuration",
   "type": "object",
-  "required": ["principal", "agent", "brainRoot", "workspace", "senses", "work"],
+  "required": [
+    "principal",
+    "agent",
+    "brainRoot",
+    "workspace",
+    "senses",
+    "recipes"
+  ],
   "properties": {
     "principal": {
       "type": "object",
-      "required": ["name", "timezone"],
+      "required": [
+        "name",
+        "timezone"
+      ],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "handle": { "type": "string" },
-        "timezone": { "type": "string", "minLength": 1 }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "handle": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "additionalProperties": false
     },
     "agent": {
       "type": "object",
-      "required": ["name", "displayName"],
+      "required": [
+        "name",
+        "displayName"
+      ],
       "properties": {
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
         },
-        "displayName": { "type": "string", "minLength": 1 }
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "additionalProperties": false
     },
@@ -32,28 +56,49 @@
     },
     "workspace": {
       "type": "object",
-      "required": ["name", "requireUnifiedDataPlaneId"],
+      "required": [
+        "name",
+        "requireUnifiedDataPlaneId"
+      ],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "requireUnifiedDataPlaneId": { "type": "boolean" }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requireUnifiedDataPlaneId": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": false
     },
     "senses": {
       "type": "object",
-      "required": ["localDir", "remotePaths", "scopes"],
+      "required": [
+        "localDir",
+        "remotePaths",
+        "scopes"
+      ],
       "properties": {
-        "localDir": { "type": "string", "minLength": 1 },
+        "localDir": {
+          "type": "string",
+          "minLength": 1
+        },
         "remotePaths": {
           "type": "array",
           "minItems": 1,
-          "items": { "type": "string", "pattern": "^/" },
+          "items": {
+            "type": "string",
+            "pattern": "^/"
+          },
           "uniqueItems": true
         },
         "scopes": {
           "type": "array",
           "minItems": 1,
-          "items": { "type": "string", "pattern": "^relayfile:fs:(read|write):" },
+          "items": {
+            "type": "string",
+            "pattern": "^relayfile:fs:(read|write):"
+          },
           "uniqueItems": true
         },
         "refreshBeforeSeconds": {
@@ -64,44 +109,41 @@
       },
       "additionalProperties": false
     },
-    "work": {
+    "recipes": {
       "type": "object",
-      "required": ["humanSystem", "agentSystem"],
+      "description": "Factory recipe selection. Chief chooses the recipe; the target repository's factory.config.json owns everything else about dispatch.",
+      "required": [
+        "default",
+        "labels"
+      ],
       "properties": {
-        "humanSystem": { "enum": ["linear", "relay"] },
-        "agentSystem": { "const": "github" },
-        "factory": {
+        "default": {
+          "enum": [
+            "single",
+            "workflow",
+            "team"
+          ]
+        },
+        "labels": {
           "type": "object",
           "required": [
-            "execution",
-            "teamKey",
-            "titlePrefix",
-            "readinessState",
-            "readinessLabel",
-            "defaultRecipe",
-            "recipeLabels",
-            "mergePolicy"
+            "single",
+            "workflow",
+            "team"
           ],
           "properties": {
-            "execution": { "const": "cloud" },
-            "teamKey": { "type": "string", "minLength": 1 },
-            "titlePrefix": { "type": "string", "minLength": 1 },
-            "readinessState": { "type": "string", "minLength": 1 },
-            "readinessLabel": { "type": "string", "minLength": 1 },
-            "defaultRecipe": {
-              "enum": ["single", "workflow", "team"]
+            "single": {
+              "type": "string",
+              "minLength": 1
             },
-            "recipeLabels": {
-              "type": "object",
-              "required": ["single", "workflow", "team"],
-              "properties": {
-                "single": { "type": "string", "minLength": 1 },
-                "workflow": { "type": "string", "minLength": 1 },
-                "team": { "type": "string", "minLength": 1 }
-              },
-              "additionalProperties": false
+            "workflow": {
+              "type": "string",
+              "minLength": 1
             },
-            "mergePolicy": { "const": "never" }
+            "team": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "additionalProperties": false
         }

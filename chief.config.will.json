@@ -24,8 +24,12 @@
     ],
     "refreshBeforeSeconds": 600
   },
-  "work": {
-    "humanSystem": "relay",
-    "agentSystem": "github"
+  "recipes": {
+    "default": "single",
+    "labels": {
+      "single": "agent:single",
+      "workflow": "agent:workflow",
+      "team": "agent:team"
+    }
   }
 }
