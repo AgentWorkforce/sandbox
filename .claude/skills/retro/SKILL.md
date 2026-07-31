@@ -5,7 +5,7 @@ description: Look back over a week, month, quarter, or custom range and synthesi
 
 # /retro [week|month|quarter|since <date>]
 
-1. **Resolve the brain:** read `chief.config.json`; every journal, memory, and
+1. **Resolve the brain:** read the active `teams.json`; every journal, memory, and
    workstream path below is relative to its `brainRoot`.
 2. **Resolve the range.** Default: trailing 7 days. `month`/`quarter` mean
    trailing 30/90 days unless a calendar period is named.

@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  readdirSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -12,14 +13,14 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
-  CONFIG_PATH,
+  TEAMS_PATH,
   REPO_ROOT,
   activeWorkspace,
   cloudRequest,
   cloudSession,
   execJson,
   publicWorkspace,
-  validateConfig,
+  deriveConfig,
 } from "./lib/chief-runtime.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -56,8 +57,18 @@ function run(command, commandArgs) {
 }
 
 function readExistingConfig() {
-  if (!existsSync(CONFIG_PATH)) return null;
-  return JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  // Prefer the active roster; fall back to the committed variant so a rerun on
+  // a fresh machine keeps the principal's existing choices.
+  for (const path of [TEAMS_PATH, ...variantRosters()]) {
+    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8"));
+  }
+  return null;
+}
+
+function variantRosters() {
+  return readdirSync(REPO_ROOT)
+    .filter((name) => /^teams\.[a-z0-9-]+\.json$/u.test(name))
+    .map((name) => join(REPO_ROOT, name));
 }
 
 function writeJsonAtomic(path, value) {
@@ -193,8 +204,7 @@ try {
   step(2, "Canonical workspace");
   const existing = readExistingConfig();
   const workspaceList = execJson("agent-relay", ["workspace", "list"]);
-  const workspaceDefault =
-    existing?.workspace?.name ?? workspaceList.active ?? workspaceList.workspaces?.[0];
+  const workspaceDefault = workspaceList.active ?? workspaceList.workspaces?.[0];
   if (!workspaceDefault) throw new Error("No Agent Relay workspace is available");
   if (!nonInteractive) {
     console.log(`Available: ${workspaceList.workspaces.join(", ")}`);
@@ -202,6 +212,11 @@ try {
   const workspaceName = await answer("Workspace", workspaceDefault);
   if (!workspaceList.workspaces.includes(workspaceName)) {
     throw new Error(`Unknown workspace "${workspaceName}"`);
+  }
+  // Chief does not record the choice: agent-relay owns which workspace is
+  // canonical for this machine, and Chief reads it back at every start.
+  if (workspaceName !== workspaceList.active) {
+    run("agent-relay", ["workspace", "switch", workspaceName]);
   }
 
   step(3, "Principal and resident Chief");
@@ -220,24 +235,20 @@ try {
       "UTC",
   );
   const profileSlug = slug(principalHandle);
-  const config = validateConfig({
-    $schema: "./schemas/chief-config.schema.json",
+  // One per-principal file. The roster already names the resident agent, so it
+  // also carries the principal's identity and the senses least-privilege
+  // declaration; everything else Chief needs is derived or owned elsewhere —
+  // brainRoot from the slug, the workspace from agent-relay, and the dispatch
+  // contract from factory.config.json.
+  const roster = {
+    $schema: "./schemas/chief-team.schema.json",
     principal: {
+      slug: profileSlug,
       name: principalName,
       handle: principalHandle,
       timezone,
     },
-    agent: {
-      name: existing?.agent?.name ?? `${profileSlug}-chief`,
-      displayName: existing?.agent?.displayName ?? "Chief",
-    },
-    brainRoot: existing?.brainRoot ?? `principals/${profileSlug}`,
-    workspace: {
-      name: workspaceName,
-      requireUnifiedDataPlaneId: true,
-    },
     senses: existing?.senses ?? {
-      localDir: "senses",
       remotePaths: ["/linear", "/github", "/digests"],
       scopes: [
         "relayfile:fs:read:/linear/**",
@@ -245,12 +256,11 @@ try {
         "relayfile:fs:read:/github/**",
         "relayfile:fs:read:/digests/**",
       ],
-      refreshBeforeSeconds: 600,
     },
     // Only the recipe choice is Chief's. The surface (`issueSource`), the
-    // safety gate, and the merge policy belong to each target repository's
-    // `factory.config.json` — writing a Linear-shaped copy here is what made
-    // Chief assert a Linear-only world Factory never had.
+    // safety gate, and the merge policy belong to `factory.config.json` —
+    // writing a Linear-shaped copy here is what made Chief assert a Linear-only
+    // world Factory never had.
     recipes: existing?.recipes ?? {
       default: "single",
       labels: {
@@ -259,19 +269,27 @@ try {
         team: "agent:team",
       },
     },
-  });
-  writeJsonAtomic(CONFIG_PATH, config);
+    team: existing?.team ?? `chief-${profileSlug}`,
+    autoSpawn: existing?.autoSpawn ?? true,
+    agents: existing?.agents ?? [{
+      name: `chief-${profileSlug}`,
+      cli: "claude",
+      role: "chief of staff",
+      task:
+        "Read CLAUDE.md and follow the session-start ritual under the brain " +
+        "resolved from the active roster (memory/, workstreams/, and the two " +
+        "newest journal dailies). You are the resident Chief: stay online, " +
+        "answer DMs, keep the active brain current, and never self-remove. " +
+        "Never merge without the principal's explicit approval.",
+    }],
+  };
+  const config = deriveConfig(roster);
+  const variantPath = join(REPO_ROOT, `teams.${config.principal.slug}.json`);
+  writeJsonAtomic(variantPath, roster);
+  writeJsonAtomic(TEAMS_PATH, roster);
+  console.log(`✓ Roster ${variantPath} (active copy at teams.json)`);
   starterBrain(config);
-  const teamsPath = join(REPO_ROOT, "teams.json");
-  const teamsVariant = join(
-    REPO_ROOT,
-    `teams.${config.brainRoot.split("/").pop()}.json`,
-  );
-  if (!existsSync(teamsPath) && existsSync(teamsVariant)) {
-    writeFileSync(teamsPath, readFileSync(teamsVariant));
-    console.log(`✓ Seeded teams.json from ${teamsVariant}`);
-  }
-  const workspace = activeWorkspace(config, { switchIfNeeded: true });
+  const workspace = activeWorkspace(config);
   console.log("✓ Workspace convergence verified");
   console.log(JSON.stringify(publicWorkspace(workspace), null, 2));
 

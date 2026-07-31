@@ -15,7 +15,7 @@ import {
 } from "./lib/chief-runtime.mjs";
 
 const config = loadConfig();
-activeWorkspace(config, { switchIfNeeded: true });
+activeWorkspace(config);
 
 function which(command) {
   return execFileSync("sh", ["-c", `command -v ${command}`], {

@@ -17,7 +17,7 @@ const PORT = 4780;
 const REPO_ROOT = join(HERE, '..', '..');
 const BRAIN_ROOT = join(
   REPO_ROOT,
-  JSON.parse(readFileSync(join(REPO_ROOT, 'chief.config.json'), 'utf8')).brainRoot,
+  `principals/${JSON.parse(readFileSync(join(REPO_ROOT, 'teams.json'), 'utf8')).principal.slug}`,
 );
 const WORKSTREAMS_DIR = join(BRAIN_ROOT, 'workstreams');
 const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };

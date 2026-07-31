@@ -29,7 +29,7 @@ let relayfileBase;
 let relayfileWorkspace;
 
 async function connect() {
-  workspace = activeWorkspace(config, { switchIfNeeded: true });
+  workspace = activeWorkspace(config);
   mount = await resolveFactoryMount();
   relayfileBase = mount.relayfileBaseUrl.replace(/\/+$/u, "");
   relayfileWorkspace = workspace.relayfileWorkspaceId;

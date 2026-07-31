@@ -52,7 +52,7 @@ npm run doctor
 npm run chief
 ```
 
-That attaches to the resident agent named by `chief.config.json`. You can also
+That attaches to the resident agent named by the active `teams.json`. You can also
 DM that name from any Agent Relay session in the same workspace. Onboarding
 rejects a workspace whose Relaycast, Relayfile, and RelayAuth identities have
 drifted. Restart-stable resident-agent identity is the first Factory task, with
@@ -101,7 +101,7 @@ same checks and make cross-repository team work auditable before dispatch.
 
 | Path | Purpose |
 |---|---|
-| `chief.config.json` | Active principal, workspace, scopes, and work policy |
+| `teams.<principal>.json` | The principal, the resident agent roster, senses scopes, and recipe choice |
 | `CLAUDE.md` | Chief's persona and operating manual |
 | `principals/<name>/` | Active principal's memory, journal, and workstreams |
 | `senses/` | Scoped Relayfile projection (gitignored) |
@@ -109,4 +109,4 @@ same checks and make cross-repository team work auditable before dispatch.
 | `scripts/` | Onboarding, doctor, mount supervisor, and attach commands |
 
 The historical root `memory/`, `journal/`, and `workstreams/` remain an earlier
-profile. The active brain is always the `brainRoot` in `chief.config.json`.
+profile. The active brain is always `principals/<slug>` for the active roster's principal.

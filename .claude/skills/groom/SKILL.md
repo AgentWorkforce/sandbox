@@ -7,7 +7,7 @@ description: Brain grooming pass — curate memory/ and workstreams/ so a fresh 
 
 Curate chief's standing notes so a fresh reader sees only what IS.
 
-Scope (resolve `brainRoot` from `chief.config.json` first): the brainRoot's
+Scope (resolve the brain from the active `teams.json` first): the brainRoot's
 `memory/*.md` and `workstreams/*.md`. NEVER its `journal/` (append-only
 history) and never files outside the chief repo.
 

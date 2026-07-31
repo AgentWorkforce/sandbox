@@ -6,7 +6,25 @@ import { fileURLToPath } from "node:url";
 
 const LIB_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(LIB_DIR, "../..");
-export const CONFIG_PATH = join(REPO_ROOT, "chief.config.json");
+
+/**
+ * The active roster. `teams.json` is a per-machine copy of the committed
+ * `teams.<principal>.json`, and it is the only thing that says which principal
+ * this machine runs.
+ *
+ * Chief used to keep a parallel `chief.config.json` beside it, which restated
+ * the agent name the broker already spawns from, a brainRoot the principal slug
+ * already implies, and a workspace name that agent-relay already resolves
+ * machine-globally. Every one of those was a second source of truth for a fact
+ * another system owned. What is genuinely local — the principal's identity and
+ * the senses least-privilege declaration — now lives in the roster itself.
+ */
+export const TEAMS_PATH = join(REPO_ROOT, "teams.json");
+
+/** Constants, not choices: nobody configures these differently. */
+const SENSES_LOCAL_DIR = "senses";
+const SENSES_REFRESH_BEFORE_SECONDS = 600;
+const CHIEF_ROLE = "chief of staff";
 
 function assertRelativeRepoPath(value, label) {
   if (typeof value !== "string" || value.length === 0) {
@@ -18,13 +36,49 @@ function assertRelativeRepoPath(value, label) {
   }
 }
 
+/**
+ * Derive Chief's runtime configuration from the active roster.
+ *
+ * Everything here is read from a fact the roster already states, or is a
+ * constant. Nothing is restated from another system: the workspace comes from
+ * `agent-relay workspace active`, and the Factory dispatch contract comes from
+ * `factory.config.json`.
+ */
+export function deriveConfig(roster) {
+  const slug = roster?.principal?.slug;
+  if (typeof slug !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(slug)) {
+    throw new Error(
+      "principal.slug must be a lowercase identifier; it names the brain " +
+      "directory under principals/",
+    );
+  }
+  const chief = roster.agents?.find((agent) => agent.role === CHIEF_ROLE);
+  if (!chief?.name) {
+    throw new Error(
+      `The roster has no agent with role "${CHIEF_ROLE}", so there is no ` +
+      "resident Chief to configure",
+    );
+  }
+  return validateConfig({
+    principal: { slug, ...roster.principal },
+    agent: { name: chief.name, displayName: "Chief" },
+    brainRoot: `principals/${slug}`,
+    senses: {
+      localDir: SENSES_LOCAL_DIR,
+      refreshBeforeSeconds: SENSES_REFRESH_BEFORE_SECONDS,
+      remotePaths: roster?.senses?.remotePaths,
+      scopes: roster?.senses?.scopes,
+    },
+    recipes: roster?.recipes,
+    roster,
+  });
+}
+
 export function validateConfig(config) {
   const requiredStrings = [
     ["principal.name", config?.principal?.name],
     ["principal.timezone", config?.principal?.timezone],
     ["agent.name", config?.agent?.name],
-    ["agent.displayName", config?.agent?.displayName],
-    ["workspace.name", config?.workspace?.name],
   ];
   for (const [label, value] of requiredStrings) {
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -63,7 +117,14 @@ export function validateConfig(config) {
 }
 
 export function loadConfig() {
-  return validateConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")));
+  if (!existsSync(TEAMS_PATH)) {
+    throw new Error(
+      `No active roster at ${TEAMS_PATH}. Copy the committed variant for this ` +
+      "machine's principal, e.g. `cp teams.khaliq.json teams.json`, or run " +
+      "`npm run setup`.",
+    );
+  }
+  return deriveConfig(JSON.parse(readFileSync(TEAMS_PATH, "utf8")));
 }
 
 export function execJson(command, args) {
@@ -75,20 +136,22 @@ export function execJson(command, args) {
   return JSON.parse(output);
 }
 
-export function activeWorkspace(config, { switchIfNeeded = false } = {}) {
-  let workspace = execJson("agent-relay", ["workspace", "active", "--json"]);
-  if (workspace.name !== config.workspace.name && switchIfNeeded) {
-    execFileSync("agent-relay", ["workspace", "switch", config.workspace.name], {
-      cwd: REPO_ROOT,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    workspace = execJson("agent-relay", ["workspace", "active", "--json"]);
-  }
-  if (workspace.name !== config.workspace.name) {
+/**
+ * The canonical workspace, as agent-relay resolves it machine-globally.
+ *
+ * Chief does not pin a workspace name. agent-relay owns which workspace is
+ * canonical for this machine, and Chief asserting a second name was the same
+ * duplicated-authority pattern that produced AR-448 — a start with no project
+ * pin fell through to minting a fresh workspace. What Chief still enforces is
+ * the invariant it genuinely cares about: one `rw_` identity across Relaycast,
+ * Relayfile, and RelayAuth.
+ */
+export function activeWorkspace(config) {
+  const workspace = execJson("agent-relay", ["workspace", "active", "--json"]);
+  if (!workspace?.name) {
     throw new Error(
-      `Chief expects Agent Relay workspace "${config.workspace.name}", ` +
-      `but "${workspace.name ?? "none"}" is active. Run: ` +
-      `agent-relay workspace switch ${config.workspace.name}`,
+      "agent-relay reports no active workspace. Run `agent-relay workspace " +
+      "switch <name>` to make one canonical for this machine.",
     );
   }
   assertWorkspaceConvergence(workspace, config);
@@ -107,10 +170,9 @@ export function assertWorkspaceConvergence(workspace, config) {
   if (missing.length > 0) {
     throw new Error(`Workspace is missing ${missing.join(", ")} identity`);
   }
-  if (
-    config.workspace.requireUnifiedDataPlaneId &&
-    new Set(Object.values(ids)).size !== 1
-  ) {
+  // Always enforced. A single data-plane identity is an invariant of a working
+  // Chief, not a per-principal preference — nothing would ever set it false.
+  if (new Set(Object.values(ids)).size !== 1) {
     throw new Error(
       "Workspace convergence invariant failed: Relaycast, Relayfile, and " +
       `RelayAuth resolve to different identities (${JSON.stringify(ids)})`,

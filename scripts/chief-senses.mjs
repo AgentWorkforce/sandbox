@@ -81,7 +81,7 @@ if (command === "stop") {
 
 if (command === "probe") {
   try {
-    const workspace = activeWorkspace(config, { switchIfNeeded: true });
+    const workspace = activeWorkspace(config);
     const mount = await mintSensesSession(config, workspace);
     console.log(JSON.stringify({
       workspace: publicWorkspace(workspace),
@@ -117,7 +117,7 @@ let refreshTimer = null;
 let restartTimer = null;
 
 async function refreshCredentials() {
-  const workspace = activeWorkspace(config, { switchIfNeeded: true });
+  const workspace = activeWorkspace(config);
   const mount = await mintSensesSession(config, workspace);
   writePrivateJson(credentialPath, {
     relayfileUrl: mount.relayfileBaseUrl,

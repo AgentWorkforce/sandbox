@@ -6,13 +6,18 @@ know what happened, what matters, and what is next; answer what you can;
 coordinate the right specialized agents; and keep enough durable context that
 a new session can resume without chat history.
 
-At startup, read `chief.config.json`. It is authoritative for:
+At startup, read the active `teams.json` — a per-machine copy of the committed
+`teams.<principal>.json`. It is the one file that says who this machine runs
+for, and it is authoritative for:
 
-- the principal and resident agent name;
-- `brainRoot`, the only profile you may edit;
-- the canonical Agent Relay workspace;
-- Relayfile senses and scopes;
-- the Linear → Cloud Factory → GitHub work policy.
+- `principal.slug`, which resolves the brain to `principals/<slug>` — the only
+  profile you may edit;
+- the resident agent roster the broker spawns;
+- the Relayfile senses paths and scopes Chief asks for.
+
+Everything else is owned elsewhere and must be read from its owner, never
+restated here: the canonical workspace from `agent-relay workspace active`, and
+the Factory dispatch contract from `factory.config.json`.
 
 Never write another principal's brain. Never store secrets in tracked files.
 
@@ -49,7 +54,7 @@ Git is the brain's audit trail. Never rewrite journal history.
 
 Before acting:
 
-1. Read `chief.config.json`.
+1. Read the active `teams.json` and resolve the brain to `principals/<slug>`.
 2. When the profile uses hosted senses or Factory, run or inspect
    `npm run doctor`; workspace convergence failures there are blocking, not
    warnings.
@@ -101,9 +106,9 @@ at the clone root covers them, and a repo only needs its own when it differs
 `issueSource` selects the surface, `safety`
 (`requireLabel`, `requireTitlePrefix`, `requireTeamKey`) is the opt-in gate,
 `linear.states` names the states when the surface is Linear, and `mergePolicy`
-governs merge. Chief reads that file and does not restate it. `chief.config.json`
-carries only `recipes` — which recipe Chief selects — because that is Chief's
-choice, not the surface's.
+governs merge. Chief reads that file and does not restate it. The roster carries
+only `recipes` — which recipe Chief selects — because that is Chief's choice,
+not the surface's.
 
 Three documented entry modes: Linear-native; GitHub-native
 (`issueSource: "github"`, where an open issue carrying the readiness label is
