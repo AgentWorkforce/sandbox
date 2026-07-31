@@ -27,6 +27,16 @@
   surface's fields either — the same work unit can arrive via Linear, Notion,
   or GitHub. The claim has to belong to the work unit, be written before agents
   spawn, and be projected back to whichever surface expressed it.
+- **Read the platform's own config before encoding a policy about it.** Chief
+  asserted a Linear-only work model for two days because `chief.config.json`
+  and `CLAUDE.md` said so, and Chief never opened a `factory.config.json` in
+  any target repo. One file read (`hoopsheet` sets `issueSource: "github"`)
+  would have falsified it. Repo-local docs describe intent; the owning
+  component's config describes capability, and capability wins.
+- **Treat contradicting evidence as falsifying, not as trivia.** Factory's run
+  list carried `source: "github"` in plain sight and Chief reported it twice as
+  a curiosity while continuing to assert Linear-only dispatch. When observed
+  data disagrees with the model being reported, stop and chase it.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking
