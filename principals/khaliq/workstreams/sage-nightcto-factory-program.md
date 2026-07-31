@@ -33,7 +33,7 @@ Ordered by what unblocks the most. Dependencies point at what must land first.
 | 1 | RelayAuth D1 capacity recovery (gated #2857) | Khaliq's explicit grant | Blocking. No Relayfile provider writeback, so no Linear checkpoints or fresh scoped credentials. |
 | 2 | Hosted Factory contract actually configured | 1 | `cloud-factory-brain` has empty `inputValues`/`inputSpecs` — no `repoByLabel`, no `defaultRepo`. Hosted dispatch has been riding on Chief's removed hardcoded defaults. |
 | 3 | Sage + NightCTO gated workloads | 2 | Config shape depends on which contract home applies (below). |
-| 4 | Mac mini execution nodes | 2, 3 | Two nodes online (`sf-mini` 11.1.1, `chief` 11.2.0), both advertising `spawn:codex`/`spawn:claude`, neither advertising repo tags or `workflow:run`. Placement is blocked twice over: `clonePaths` is hardcoded `{}` in the orchestrator (lines 431, 474), and repo-tag authoring via `factory.node.json` is explicitly out of scope in `dev-stack/fleet-node-bootstrap/README.md:116`. |
+| 4 | Mac mini execution nodes | 2, 3 | Two nodes online (`sf-mini` 11.1.1, `chief` 11.2.0), both advertising `spawn:codex`/`spawn:claude`, neither yet advertising repo tags or `workflow:run`. Remaining blocker is deploying and enrolling a node with the real config — **not** central `clonePaths`, see the correction below. |
 | 5 | NightCTO test baseline | — | Independent; several package-local Vitest configs treat no-test-files as fatal, so "tests pass" is not yet a provable gate. Fix before it gates anything. |
 | 6 | Sage #217 through Factory | 1–4 | The program's outcome. |
 | 7 | sage-cloud boundary extraction | 6 | Sequence last; extracting a runtime under an unproven Factory adds risk. |
@@ -89,6 +89,26 @@ commits behind, so these were read from the remote ref):
 - `factory.config.json` appears nowhere in cloud's `packages/web` or
   `packages/core`. Hosted Factory genuinely never reads a repo contract file,
   which confirms the two-contract-homes split above.
+
+### Correction: empty central `clonePaths` is by design
+
+Chief called `clonePaths: {}` (orchestrator lines 431, 474) a placement blocker.
+That was wrong, and the implementation agent's correction is the better
+reasoning. Placement is node-local: Cloud sends the *resolved repo* on
+`workflow:run`/spawn, and each eligible Mac owns its own `factory.node.json`
+`clonePaths` while advertising `repo:<owner/name>` plus `workflow:run`. No host
+name participates in routing, which is what makes the workers interchangeable.
+
+A central `clonePaths` map would be Cloud restating each machine's filesystem
+layout — the same duplicated-authority mistake as Chief's old `work.factory`
+block, one layer up. Empty is correct.
+
+Reported verification: the real `@agent-relay/factory/node` definition imported
+against generated Sage/NightCTO mappings, resolving tags `[factory,
+workspace:rw_test, repo:AgentWorkforce/sage, repo:AgentWorkforce/nightcto]` and
+capabilities `spawn:claude`, `spawn:codex`, `workflow:run`. Chief confirmed the
+`"./node"` export exists in `factory` `origin/main` `package.json:53` and that
+the P13 node-definition work is present, but did not reproduce the mapping run.
 
 ### Workspace-join failure on Cloud-backed dry runs
 
