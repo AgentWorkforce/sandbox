@@ -96,7 +96,11 @@ Distilled from six months of session history
   issues. A control whose presence is the evidence for its own
   sufficiency needs a known-positive test, not an audit that stops at
   finding it called. Fleet habit behind four same-day instances: asking
-  a narrow question and filing a broad answer. Corollary: caret-ranged
+  a narrow question and filing a broad answer. Operational inverse
+  (cmo): when the finding is a repeated string or claim, count it
+  across the whole surface before reporting — grep the diff, not the
+  file; fixing the one instance you read makes the pattern read as
+  resolved. Corollary: caret-ranged
   deps make exposure a property of each install, not of the release —
   pin exactly where a security boundary crosses packages (for
   reproducibility; a pin among all-leaking versions mitigates nothing).
