@@ -181,6 +181,13 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   bypassable from any branch.
 - recommendation: confirm khaliqgant; run the setup when the runbook
   lands.
+- reachability rider (cpo via head-of-ecosystem, 2026-08-02): a gate
+  enforced by withholding approval is only as good as the approver's
+  reachability — before naming khaliqgant sole approver, confirm with
+  Khaliq what turnaround he can carry (or pair the gate with an agreed
+  escalation for when he's unreachable). khaliqgant is verified live on
+  GitHub (authors PRs, receives review requests) and is the one identity
+  no agent can impersonate.
 
 ## RQ-11: Creator-partnerships material in cmo — yours? (FYI, non-blocking)
 - status: pending
