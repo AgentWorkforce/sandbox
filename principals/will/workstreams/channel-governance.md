@@ -3,7 +3,7 @@ status: active
 tldr: "Adaptive channel-membership rules go into the c2a protocol itself, with best practices and a periodic burn-informed review."
 card: "Channel Governance"
 owner: chief
-updated: 2026-07-30
+updated: 2026-08-02
 repos: [c2a, chief]
 ---
 # channel governance — adaptive rules in c2a
@@ -16,7 +16,11 @@ NOT passive dashboards/alerts — plus documented best practices for
 creating/using channels, plus a **periodic review** cadence (mechanism
 open; burn-data-informed is the natural candidate) to catch drift.
 
-**Now:** the fleet restart has landed; c2a recon not yet started.
+**Now:** interim discipline is in force ahead of the protocol work
+(Will, 2026-08-02): voice-class agents are @mention-only in channels;
+#general is reserved for truly company-wide notices (rare); routine
+updates go to dedicated narrow-membership workstream channels. Recorded
+in preferences; broadcast once; c2a recon not yet started.
 
 **Next:** (1) recon the c2a repo — what the protocol
 currently says about channels/membership; (2) proposal draft: protocol
