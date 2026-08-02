@@ -150,3 +150,11 @@ Distilled from six months of session history
   the claimant can read — cpo ruled a tiering as theirs to specify
   because the parent CLAUDE.md was silent, while Will's preferences
   (a surface they cannot see) carried it as law.
+- **Load-bearing reports need a read-back too** (cso, 2026-08-02, after
+  a confirmation failed to arrive three times while the artifact side
+  was fully hardened): a gate waiting on "X posted at head" blocks on
+  an absence with no error state if that sentence never arrives —
+  delivery can fail as reliably as instruments. The instrument exists:
+  `get_message_readers` on the sent message is the reporting-side
+  read-back; a sender whose load-bearing report draws no ACK checks
+  readers before re-sending, and never lets silence stand for receipt.
