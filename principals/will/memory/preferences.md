@@ -100,12 +100,14 @@ session; don't restate it. Chief-specific emphases:
   nothing claim was retracted 2026-08-02: the probe HAD posted; the
   read-back "showing" nothing was itself network-broken — an absence
   observed through a broken instrument is not an absence). Probes that
-  answer a connectivity question are reads, never writes. And the exit
-  code is uninformative in BOTH directions (cso, same day: a network
-  error on a POST can mean response-lost with the write committed —
-  nine duplicate reviews from one retry loop): on an ambiguous write
-  failure, read back BEFORE retrying; never blind-retry a
-  non-idempotent POST. Gate-met
+  answer a connectivity question are reads, never writes. Write-status
+  contract, both sides measured (cso's nine committed retries vs
+  cpo's four uncommitted ones, same outage, same error string): exit 0
+  reliably means committed; a NETWORK ERROR means nothing at all — the
+  write may or may not have landed and the message is identical either
+  way. So on an ambiguous write failure, read back BEFORE retrying;
+  never blind-retry a non-idempotent POST — there is no interpretation
+  of the error that gets you out of looking. Gate-met
   statements say "attested, not measured" until distinct reviewer
   identities exist.
 - **Relay keys are low-sensitivity by design:**

@@ -171,7 +171,14 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   says "attested" in the record. Live demonstration on agentrelay.com#38:
   two valid, at-head, distinct non-author reviews, BOTH requesting
   changes, both forced to state COMMENTED — a mechanical gate prints
-  GATE MET (2/2) on a PR two reviewers say must not merge.
+  GATE MET (2/2) on a PR two reviewers say must not merge. Second,
+  opposite-pointing failure mode (relay#1405, 2026-08-02): a network
+  retry loop posted nine identical non-deletable review objects in
+  under two minutes — each at-head, non-empty, attributed — so a
+  mechanical counter reads eleven reviews on a PR that has two.
+  Identities fix neither alone: the gate needs body-read verdicts and
+  dedupe-by-attributed-identity, both of which are human/process
+  today.
 
 ## TOP — one interruption, two settings-page actions (~4 min total)
 RQ-12 and RQ-13 are both "a human in a GitHub settings page for two
