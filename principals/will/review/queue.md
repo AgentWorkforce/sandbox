@@ -201,35 +201,30 @@ covered — the world-readable half is now closed either way.
   remains in force until you rule
 - date: 2026-08-02
 - from: cpo (ruling escalated as a change, with revert offered)
-- ask: cpo proposes tiering your two-review law: two reviews unchanged
-  for anything irreversible or production-reaching (publishes,
-  releases, pointer moves, deploys, migrations, credential/auth
-  surfaces, workflows reaching those); ONE review for reversible,
-  repo-confined changes (docs, charters, rosters, test wiring,
-  non-executing config). Author never reviews; attribution unchanged.
-  Their reasoning: your own gates-are-about-irreversibility principle
-  was never applied to the review gate itself, and the argument
-  survives the shortage ending — two scarce human attestations on a
-  comment change is uniformity mistaken for safety.
-- chief's recommendation: adopt, with TWO amendments. (1) Keep your
-  recorded "one may be a review bot" clause: on the two-review tier, a
-  distinct-login bot's review body may still serve as the second leg
-  (agent leg mandatory) — cpo's "bots never count" contradicts the law
-  as you set it. (2) cso's clause (2026-08-02, evidence: their own #38
-  blocking findings were docs-only and irreversible in effect):
-  user-facing published content — docs, hosted skills, advisories — is
-  production-reaching regardless of format and stays on the two-review
-  tier. The axis is "does the artifact leave the repo and get acted
-  on," not "can the commit be reverted" — a revert restores the file
-  but does not reach the reader who already acted. Internal notes,
-  charters, rosters, test wiring stay at one.
-- dissent on one tier line (cmo, 2026-08-02, argued against their own
-  interest — their cmo#5 would drop to one review): charter and roster
-  files are reversible as ARTIFACTS but not as EFFECTS — a recycled
-  seat re-adopts whatever its durable file says, so a wrong charter
-  propagates behavior before any revert lands (the relayfile
-  pull-cadence resurrection is the precedent). If you adopt, consider
-  keeping seat-charter/roster files on the two-review tier.
+- ask (AS AMENDED 2026-08-02 — cpo adopted cmo's and cso's objections
+  into the proposal; this is the current text, now durable in cpo's
+  charter at 06c44a2): TWO reviews for anything irreversible or
+  production-reaching (publishes, releases, pointer moves, deploys,
+  migrations, credential/auth surfaces, workflows reaching those),
+  PLUS files that instruct agents (CLAUDE.md/AGENTS.md, charters,
+  roster, skills) PLUS user-facing published content (docs, hosted
+  skills, advisories — cso's clause, folded in). ONE review only for
+  reversible, repo-confined changes not read as instruction: comments,
+  tests and test wiring, notes, non-executing config, descriptive
+  prose. Author never reviews; attribution unchanged. The governing
+  axis, in cmo's words cpo adopted: reversibility is a property of the
+  EFFECT, not the commit — ask "can I undo the consequences," not
+  "can I undo the change."
+- chief's recommendation: ADOPT AS AMENDED, with one remaining
+  amendment of mine — keep your recorded "one may be a review bot"
+  clause: on the two-review tier, a distinct-login bot's review body
+  may still serve as the second leg (agent leg mandatory; the body
+  must actually be read — a bot leg is countable only after its
+  verdict is read, since a green check can wear a blocking body).
+  cpo's original "bots never count" contradicts the law as you set it.
+  The earlier dissents (cmo's charter-effect argument, cso's
+  published-content clause) are RESOLVED — cpo adopted both into the
+  proposal above, each argued by a seat against its own interest.
 - on-decide: cpo reverts to flat-two on objection; on adoption the
   co-signed cmo + head-of-experiments supply board shows the true
   remaining two-review load.
