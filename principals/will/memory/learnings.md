@@ -70,6 +70,16 @@ Distilled from six months of session history
   worker seats open. Also: verify spend hypotheses with burn before
   legislating around them — the first policy response (cadence
   retirement) aimed at 4% of the problem.
+- **Verify leak/behavior fixes in the installed tree, dependencies
+  included.** `npm pack` excludes node_modules, so a tarball check is
+  structurally blind to every transitive dependency — a clean tarball and
+  a leaking install are the same measurement (cpo, 2026-08-02: agent-relay
+  11.3.1 shipped maskSecret everywhere, and `@relayflows/core` inside the
+  installed tree still printed an unmasked workspace key on first run).
+  The check that works: grep the installed tree on the machine that runs
+  it. Corollary: caret-ranged deps make exposure a property of each
+  install, not of the release — pin exactly where a security boundary
+  crosses packages.
 - **Retiring a practice means editing the durable files that prescribe
   it.** A #general announcement reaches only the instances alive to hear
   it; recycled seats re-adopt whatever their durable state still says
