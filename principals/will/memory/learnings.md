@@ -45,7 +45,14 @@ Distilled from six months of session history
   pre-push notice, not the push mode — an ordinary fast-forward commit
   invalidates at-head reviews exactly as thoroughly as a force-push, so
   every head move gets announced before the push, whatever kind it is.
-  Operative form (cmo, bound by cpo): the notify list IS the reviews
+  Selection rule that fires before any reading rule
+  (head-of-ecosystem, same day, on nearly voiding a real blocking P2
+  from an author's uncommitted checkout): the working tree and the
+  reviewed ref are DIFFERENT ARTIFACTS — reading either one carefully
+  yields a confident wrong answer about the other; the answer is
+  decided by which artifact you open, before you read a word. Name the
+  ref you read, always. Operative form (cmo, bound by cpo): the notify
+  list IS the reviews
   array — `gh api …/pulls/<n>/reviews?per_page=100`, DM every distinct
   body author, not the people you asked. The duty sits with the AUTHOR
   because a review does not inherit its own validity and the author is
