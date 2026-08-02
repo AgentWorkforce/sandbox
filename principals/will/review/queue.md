@@ -137,6 +137,12 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   org's private repos (cmo, cpo/cso once pushed) can't get that control
   without a plan decision. Branch-protection review counts are separate
   and remain available; factor this into the pick.
+- cost of deferral, measured (cmo + head-of-experiments, 2026-08-02):
+  eleven open PRs across two portfolios at zero merges, with reviewer
+  supply the binding constraint. Chief's counting ruling (bot review
+  bodies count as the second leg) relieves roughly half; the rest is
+  this decision. A co-signed supply board is being produced as one
+  artifact.
 
 ## RQ-12: cso + cpo have no git remote — create private repos? (decision)
 - status: pending

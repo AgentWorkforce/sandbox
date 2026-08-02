@@ -88,6 +88,13 @@ session; don't restate it. Chief-specific emphases:
   text — and the body verdict is authoritative over the GitHub state.
   A body that says blocking findings blocks. Review requests travel
   over Relay DMs; GitHub silently drops author==requestee requests.
+  Counting (chief ruling 2026-08-02, restating the law precisely): a
+  countable pair = one non-author, non-design-conflicted agent-seat
+  review (at-head, attributed, body-verdict) PLUS either a second such
+  agent review or a distinct-login bot's review OBJECT at the same head,
+  body read and body-authoritative, check rollup ignored. Two bots
+  never suffice; the agent leg is mandatory. Bots-count-zero was drift
+  that manufactured reviewer scarcity.
 - **Relay keys are low-sensitivity by design:**
   workspace keys/agent tokens exposed in transcripts are not incidents —
   "fairly benign; we'll spin up new workspaces every once in a while."
