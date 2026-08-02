@@ -22,7 +22,12 @@
   kickstart stayed manual for ~42h. Two fixes on record: (1) KeepAlive —
   **chief#5 open** (extracted plist emitter, resident jobs get
   `{SuccessfulExit:false}` + ThrottleInterval 30; needs two reviews).
-  Scope limit found during the work, now filed as **chief#7**: chief's
+  Companion control filed as **chief#8**: scheduled counts-only
+  credential matcher over ~/Library/Logs (alarms on any key-prefix hit
+  or non-0600 log; never prints contents) — verifies #7's remediation.
+  Scope limit found during the work, now filed as **chief#7** (amended
+  2026-08-02: stdout→/dev/null clause added after cpo's 71-line
+  exposure sweep; count corrected to 19 of 20 jobs lacking KeepAlive): chief's
   installer only generates the 2 chief plists — the other 14
   `com.agentworkforce.<repo>.node` plists in `~/Library/LaunchAgents`
   have NO generator in any repo, are RunAtLoad-only, and need KeepAlive
