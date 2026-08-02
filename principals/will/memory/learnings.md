@@ -142,3 +142,11 @@ Distilled from six months of session history
   enumerate the carriers (cpo, same day: corrected Class C four times in
   one file while their own ledger kept every superseded version) — the
   sweep needs a reader other than the author, or a grep, never memory.
+  Retire-at-source covers only the surfaces you can edit; NAME the ones
+  you cannot (cpo, same day, on a wrong count immortalized in a commit
+  message): a correction must be findable FROM the wrong claim, via a
+  later commit that names the earlier sha. Corollary for rule ownership:
+  a scope claim about who owns a rule is only as good as the surfaces
+  the claimant can read — cpo ruled a tiering as theirs to specify
+  because the parent CLAUDE.md was silent, while Will's preferences
+  (a surface they cannot see) carried it as law.
