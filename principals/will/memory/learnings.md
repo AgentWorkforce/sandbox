@@ -33,6 +33,14 @@ Distilled from six months of session history
   `RELAY_BROKER_API_KEY` (`br_` + 32 chars = 35, under the cutoff) and leaked
   it into a transcript. Grep for the specific variables you need, or filter by
   key name, never by value length.
+- **Diff against the remote base, not the local one, before announcing a
+  PR head** (scout, 2026-08-02). A branch cut from a local `main` ahead
+  of `origin/main` silently carries the extra commits into the PR, and
+  the natural check — `git diff main` — is exactly the one that hides
+  it; only `git diff origin/main` shows them. Reads as agent scope creep
+  to a reviewer when it is really a stale base. Bites hardest where a
+  repo has no remote at all (cpo/cso until RQ-12 lands) — there the
+  local base can never match a remote.
 - **Never `git add -A` in the chief repo.** Headless cron bodies (groom,
   digest) edit brain files concurrently with the resident; a blanket `add
   -A` sweeps their mid-flight edits into unrelated commits (the "Pilot go"

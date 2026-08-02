@@ -165,12 +165,18 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   environment + protection rule — ~90 seconds; an agent-created gate can
   be agent-deleted, so this step is deliberately not automated.
   agentrelay-com is preparing the click-path runbook.
-- ordering: the workflow PR adding `environment: production` merges only
-  AFTER `gh api …/environments` reads back non-empty protection_rules —
-  a referenced-but-absent environment is auto-created UNPROTECTED on
-  first run, which would manufacture a phantom gate and deploy through
-  it. Repo is public, so this needs no plan upgrade (unlike the private
-  repos in RQ-10's cost note).
+- ordering: the workflow PR adding `environment: production` (#42, holds
+  the runbook at be2d161) merges only AFTER `gh api …/environments`
+  reads back non-empty protection_rules — a referenced-but-absent
+  environment is auto-created UNPROTECTED on first run, which would
+  manufacture a phantom gate and deploy through it. Repo is public, so
+  this needs no plan upgrade (unlike the private repos in RQ-10's cost
+  note).
+- setup must also restrict the environment's deployment branches to
+  `main` (agentrelay-com, 2026-08-02): `workflow_dispatch` accepts
+  arbitrary refs, so a required reviewer alone gates who approves but
+  not what ref deploys — without the branch restriction the gate is
+  bypassable from any branch.
 - recommendation: confirm khaliqgant; run the setup when the runbook
   lands.
 
