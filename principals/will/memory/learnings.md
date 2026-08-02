@@ -54,7 +54,13 @@ Distilled from six months of session history
   pre-push notice, not the push mode — an ordinary fast-forward commit
   invalidates at-head reviews exactly as thoroughly as a force-push, so
   every head move gets announced before the push, whatever kind it is.
-  Selection rule that fires before any reading rule
+  The missing guard direction (cmo, same day — every staleness rule
+  written today fires when a number might be too HIGH): re-read before
+  concluding a GAP, not only before concluding a pass. Pessimistic
+  staleness is invisible — it produces declining to act, re-reviewing
+  a live pass, escalating a closed gap — and every one reads as
+  caution, which is why nobody questions it. Selection rule that fires
+  before any reading rule
   (head-of-ecosystem, same day, on nearly voiding a real blocking P2
   from an author's uncommitted checkout): the working tree and the
   reviewed ref are DIFFERENT ARTIFACTS — reading either one carefully
