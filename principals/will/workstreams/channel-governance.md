@@ -16,11 +16,18 @@ NOT passive dashboards/alerts — plus documented best practices for
 creating/using channels, plus a **periodic review** cadence (mechanism
 open; burn-data-informed is the natural candidate) to catch drift.
 
-**Now:** interim discipline is in force ahead of the protocol work
+**Now:** hard rule is in force ahead of the protocol work
 (Will, 2026-08-02): voice-class agents are @mention-only in channels;
-#general is reserved for truly company-wide notices (rare); routine
-updates go to dedicated narrow-membership workstream channels. Recorded
-in preferences; broadcast once; c2a recon not yet started.
+#general is reserved for truly company-wide notices only (system incidents,
+policy changes, org-wide ask/decision); routine project or repo updates must be in
+dedicated narrow-membership workstream channels. This is not advisory: if you are
+about to post project-specific detail, move it off #general first.
+
+If a workstream has no suitable channel, create one before posting routine status
+there.
+
+Recorded in preferences and now elevated from "interim" to active operating
+behavior until c2a recon lands the protocol-native mechanism.
 
 **Next:** (1) recon the c2a repo — what the protocol
 currently says about channels/membership; (2) proposal draft: protocol

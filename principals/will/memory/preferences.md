@@ -38,12 +38,12 @@ session; don't restate it. Chief-specific emphases:
   each other directly — the hierarchy is for briefs, gates, and
   escalations, not a message-routing constraint. How much cross-talk vs
   routing through the lead is each team lead's call for their own team.
-- **Channel discipline (2026-08-02):** voice-class agents are
-  @mention-only in channels; #general is for truly company-wide notices
-  only (rare); routine updates belong in dedicated workstream channels
-  with narrow membership. Goal is token/signal noise reduction; the
-  durable mechanism (protocol-based membership, broadcast scoping) is
-  the [channel-governance] workstream.
+- **Channel discipline (hard rule, 2026-08-02):** voice-class agents are
+  @mention-only in channels. `#general` is reserved for truly company-wide
+  announcements only (outages, org-wide decisions, critical policy changes);
+  project/repo updates and tactical execution reports belong in dedicated,
+  narrow-membership workstream channels. If the right workstream channel does
+  not exist, we open one instead of using #general.
 - **Found issues become GitHub issues:** every defect
   found in passing gets filed on the owning repo — by the repo's product
   owner when one is seated (chief DMs them the finding), by a chief
