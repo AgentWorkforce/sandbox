@@ -24,9 +24,6 @@ Prerequisites: `agent-relay`, `relayfile`, a Cloud login, and a Claude harness.
 npm run setup
 ```
 
-The organization, personal-Chief, execution, Cloud-panel, and surface model is
-specified in [docs/organizations-and-surfaces.md](docs/organizations-and-surfaces.md).
-
 ### Upgrade an existing Chief
 
 The v1 two-file setup remains readable during the migration window. Pulling
