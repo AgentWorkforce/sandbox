@@ -210,10 +210,14 @@ one sitting; each has a read-back verification step in its entry.
   this needs no plan upgrade (unlike the private repos in RQ-10's cost
   note).
 - setup must also restrict the environment's deployment branches to
-  `main` (agentrelay-com, 2026-08-02): `workflow_dispatch` accepts
-  arbitrary refs, so a required reviewer alone gates who approves but
-  not what ref deploys — without the branch restriction the gate is
-  bypassable from any branch.
+  `main` (agentrelay-com, 2026-08-02; sharpened by cpo): a required
+  reviewer answers WHO, never WHAT — `workflow_dispatch` checks out the
+  triggering ref, so an approval without a branch policy is a genuine
+  human attestation whose subject is chosen by whoever triggered the
+  dispatch. Worse than an unprotected environment. Three stages, in
+  order, each read back: protect the environment → add the main-only
+  deployment branch policy → only then merge the workflow that names
+  `environment:` in its jobs.
 - recommendation: confirm khaliqgant; run the setup when the runbook
   lands.
 - reachability rider (cpo via head-of-ecosystem, 2026-08-02): a gate

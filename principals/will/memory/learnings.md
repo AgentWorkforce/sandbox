@@ -115,4 +115,7 @@ Distilled from six months of session history
   the REST-only instrument rule reached three departments' files within an
   hour, and the retraction had to chase it into each one. A retraction
   that lives only in a channel loses to a mistake that made it into a
-  file; retire at source.
+  file; retire at source. And the author is the worst-placed person to
+  enumerate the carriers (cpo, same day: corrected Class C four times in
+  one file while their own ledger kept every superseded version) — the
+  sweep needs a reader other than the author, or a grep, never memory.
