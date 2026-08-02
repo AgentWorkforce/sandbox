@@ -102,7 +102,11 @@ Distilled from six months of session history
   masked that its pattern missed every `_live_`-format key the org
   issues. A control whose presence is the evidence for its own
   sufficiency needs a known-positive test, not an audit that stops at
-  finding it called. Fleet habit behind four same-day instances: asking
+  finding it called. Design rule from the same defect (cso's review,
+  cpo's phrasing): mask by STRUCTURE, never by enumeration — an
+  allowlist reproduces the original defect against every format it
+  does not know, while structural masking collapses unrecognised
+  shapes too. Fleet habit behind four same-day instances: asking
   a narrow question and filing a broad answer. Operational inverse
   (cmo): when the finding is a repeated string or claim, count it
   across the whole surface before reporting — grep the diff, not the

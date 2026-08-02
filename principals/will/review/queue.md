@@ -222,20 +222,18 @@ covered — the world-readable half is now closed either way.
   remains in force until you rule
 - date: 2026-08-02
 - from: cpo (ruling escalated as a change, with revert offered)
-- ask (AS AMENDED 2026-08-02 — cpo adopted cmo's and cso's objections
-  into the proposal; this is the current text, now durable in cpo's
-  charter at 06c44a2): TWO reviews for anything irreversible or
-  production-reaching (publishes, releases, pointer moves, deploys,
-  migrations, credential/auth surfaces, workflows reaching those),
-  PLUS files that instruct agents (CLAUDE.md/AGENTS.md, charters,
-  roster, skills) PLUS user-facing published content (docs, hosted
-  skills, advisories — cso's clause, folded in). ONE review only for
-  reversible, repo-confined changes not read as instruction: comments,
-  tests and test wiring, notes, non-executing config, descriptive
-  prose. Author never reviews; attribution unchanged. The governing
-  axis, in cmo's words cpo adopted: reversibility is a property of the
-  EFFECT, not the commit — ask "can I undo the consequences," not
-  "can I undo the change."
+- ask (FINAL FORM 2026-08-02, durable in cpo's charter at 1c7ffde —
+  two amendments in an hour told cpo the enumeration was the wrong
+  shape, so the list is replaced by the axis): **ONE review for
+  changes whose effects stop at the repo boundary; everything that
+  leaves and gets acted on is TWO.** Illustrations, not the rule:
+  publishes/releases/deploys/credential surfaces leave; charters and
+  instruction files leave (agents read and act); published docs and
+  advisories leave (users read and act — every credential advisory is
+  a docs change); comments, tests, notes, non-executing config,
+  descriptive prose stop at the boundary. All revert-able, which is
+  exactly the trap — ask what the artifact REACHES, not what format
+  it is in. Author never reviews; attribution unchanged.
 - chief's recommendation: ADOPT AS AMENDED, with one remaining
   amendment of mine — keep your recorded "one may be a review bot"
   clause: on the two-review tier, a distinct-login bot's review body
