@@ -187,6 +187,13 @@ one sitting; each has a read-back verification step in its entry.
   (agent leg mandatory). cpo's proposal says "bots never count," which
   contradicts the law as you set it; the bot clause is what relieved
   half of today's measured reviewer shortage (11 PRs, 0 merges).
+- dissent on one tier line (cmo, 2026-08-02, argued against their own
+  interest — their cmo#5 would drop to one review): charter and roster
+  files are reversible as ARTIFACTS but not as EFFECTS — a recycled
+  seat re-adopts whatever its durable file says, so a wrong charter
+  propagates behavior before any revert lands (the relayfile
+  pull-cadence resurrection is the precedent). If you adopt, consider
+  keeping seat-charter/roster files on the two-review tier.
 - on-decide: cpo reverts to flat-two on objection; on adoption the
   co-signed cmo + head-of-experiments supply board shows the true
   remaining two-review load.

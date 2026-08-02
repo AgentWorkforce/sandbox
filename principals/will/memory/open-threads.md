@@ -22,14 +22,15 @@
   kickstart stayed manual for ~42h. Two fixes on record: (1) KeepAlive —
   **chief#5 open** (extracted plist emitter, resident jobs get
   `{SuccessfulExit:false}` + ThrottleInterval 30; needs two reviews).
-  Scope limit found during the work: chief's installer only generates
-  the 2 chief plists — the other ~13 `com.agentworkforce.<repo>.node`
-  plists in `~/Library/LaunchAgents` have NO generator in any repo,
-  are RunAtLoad-only, and need the same two keys edited in place plus a
-  rolling reload at the next natural fleet boundary (bundle with the
-  scheduled periodic workspace refresh). Same boundary: boot out the
-  orphaned `com.agentworkforce.chief.restart` job — it exec's a dead
-  session-scoped scratchpad script (hence exit 127), no repo source.
+  Scope limit found during the work, now filed as **chief#7**: chief's
+  installer only generates the 2 chief plists — the other 14
+  `com.agentworkforce.<repo>.node` plists in `~/Library/LaunchAgents`
+  have NO generator in any repo, are RunAtLoad-only, and need KeepAlive
+  + throttle + a 0600 stderr log edited in place, plus the orphaned
+  `com.agentworkforce.chief.restart` bootout (dead scratchpad script,
+  exit 127). chief#5's amended head c2a88a6b also enforces
+  stderr-never-discarded for resident jobs (cpo's P2: KeepAlive with
+  discarded stderr = silent forever-respawn).
   (2) the watchdog needs a chief-independent escalation path (macOS
   notification / push to Will) when the page target is down. **The
   fleet boundary for the plist edits + chief.restart bootout has a
@@ -40,10 +41,15 @@
 - **Drive attach must self-heal (Will, 2026-08-02, via voice).** "Drive
   input stream is closed" after a broker/PTY restart currently requires
   a manual re-attach; Will wants end-to-end automatic recovery. Two
-  parts in flight: chief.sh auto-reattach loop (chief-repo PR, subagent
-  building — intentional Ctrl+] detach must not retrigger), and
-  platform attach session-resume filed with the relay lead (issue
-  number pending network). Done when Will's drive session survives a
+  parts: **chief#6 open** — chief.sh supervises the attach: abnormal
+  exit re-attaches with backoff (1s→10s cap, resets after 30s held);
+  intentional detach (Ctrl+C, exit 0 — the CLI's real contract; Ctrl+]
+  is delivery-hold toggle, OPERATING.md corrected) quits outright.
+  Known gap: the CLI exits 0 on two non-detach cases, including the
+  original "PTY input stream is closed" lingering state — those still
+  take one manual re-run; the CLI-side fix (non-zero exit when the
+  input stream dies under drive) is added to relay's attach
+  session-resume filing. Done when Will's drive session survives a
   chief-node restart without touching the keyboard.
 
 - **relayflows has no named owner** (cpo, 2026-08-02 — "that is the
