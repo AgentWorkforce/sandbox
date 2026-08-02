@@ -227,6 +227,12 @@ one sitting; each has a read-back verification step in its entry.
   (`git diff origin/main` before announcing a head) is unrunnable in a
   repo with no remote — the no-remote state disables a fleet safety
   rule, not just backup.
+- the *when* argument (cmo via cpo, 2026-08-02): the push window is a
+  resource currently being spent — today is the second consecutive day
+  where "can we reach the remote" answered "some of us, sometimes,"
+  and a disk-only repo has no margin the moment the window and the
+  disk fail together. The decision is cheap now and may not be
+  executable later.
 
 ## RQ-13: agentrelay.com production gate — confirm khaliqgant, run 90-sec setup (decision + tiny action)
 - status: pending
