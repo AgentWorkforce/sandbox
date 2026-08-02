@@ -150,7 +150,10 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   author's self-review, and a reviewer cannot even record a rejection
   (GitHub 422s REQUEST_CHANGES as self-review). The merge gate rests on
   attestation until this decision lands; every gate-met statement now
-  says "attested" in the record.
+  says "attested" in the record. Live demonstration on agentrelay.com#38:
+  two valid, at-head, distinct non-author reviews, BOTH requesting
+  changes, both forced to state COMMENTED — a mechanical gate prints
+  GATE MET (2/2) on a PR two reviewers say must not merge.
 
 ## RQ-12: cso + cpo have no git remote — create private repos? (decision)
 - status: pending
@@ -165,6 +168,10 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   explicitly declined to pick a target itself.
 - recommendation: private org repos, same as every other department;
   cso/cpo push the moment you name the target.
+- fourth consequence (cpo, 2026-08-02): scout's stale-base safety check
+  (`git diff origin/main` before announcing a head) is unrunnable in a
+  repo with no remote — the no-remote state disables a fleet safety
+  rule, not just backup.
 
 ## RQ-13: agentrelay.com production gate — confirm khaliqgant, run 90-sec setup (decision + tiny action)
 - status: pending
