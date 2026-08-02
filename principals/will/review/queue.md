@@ -223,7 +223,14 @@ the code's /dev/null fix). Chief contained at 12:44Z — all 17 now
 relay patch upgrade or 2026-08-09). Say the word to pull it earlier;
 cpo's position, on record: world-readable persistent disk files may be
 a different containment boundary than the transcript class your ruling
-covered — the world-readable half is now closed either way.
+covered — the world-readable half is now closed either way. Rotation
+scope BOUNDED (cso derivation, 2026-08-02, counts only): the 71 lines
+are THREE distinct rk_live_ workspace keys repeated across nodes —
+zero agent/node/observer/enrollment tokens anywhere — so the op is at
+most three workspace refreshes, and the boundary op starts with a
+liveness check of the three values against the active stores (a dead
+key needs no rotation; distinct-by-string could over- or under-count
+by one if a rotation already happened).
 
 ## RQ-14: tier the two-review law by irreversibility? (decision)
 - status: pending — flat-two (with the bot-body counting ruling)
