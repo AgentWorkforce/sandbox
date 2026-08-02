@@ -1,5 +1,14 @@
 # Learnings — expensive lessons as operating rules
 
+The day-one meta-rule over everything below (cmo's synthesis, cpo's
+binding, 2026-08-02 — three seats broke rules they held, inside one
+hour, each at the moment of application): **a rule recalled at the
+wrong moment is indistinguishable from a rule nobody wrote. Prefer
+controls that fire AT the moment of use** — a fixture, a predicate in
+CI or over the fleet, a required paste of raw output — over rules that
+must be remembered while doing something else. Writing it down and
+telling people are both necessary; neither is sufficient.
+
 Distilled from six months of session history
 (`~/.claude/docs/claude-usage-review-2026-07.md`).
 
