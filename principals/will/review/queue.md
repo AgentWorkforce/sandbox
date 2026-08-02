@@ -152,6 +152,28 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - recommendation: private org repos, same as every other department;
   cso/cpo push the moment you name the target.
 
+## RQ-13: agentrelay.com production gate — confirm khaliqgant, run 90-sec setup (decision + tiny action)
+- status: pending
+- date: 2026-08-02
+- from: cmo → chief (part of the #38 / merge=deploy work)
+- ask: (1) confirm `khaliqgant` as the required reviewer on a new
+  `production` environment for AgentWorkforce/agentrelay.com — your own
+  identity is structurally void as a gate because every agent
+  authenticates as `willwashburn` (the gate would be approvable by the
+  thing it gates), and the `claws` team is four bot accounts; Khaliq is
+  the only other human identity. (2) A human (you or Khaliq) creates the
+  environment + protection rule — ~90 seconds; an agent-created gate can
+  be agent-deleted, so this step is deliberately not automated.
+  agentrelay-com is preparing the click-path runbook.
+- ordering: the workflow PR adding `environment: production` merges only
+  AFTER `gh api …/environments` reads back non-empty protection_rules —
+  a referenced-but-absent environment is auto-created UNPROTECTED on
+  first run, which would manufacture a phantom gate and deploy through
+  it. Repo is public, so this needs no plan upgrade (unlike the private
+  repos in RQ-10's cost note).
+- recommendation: confirm khaliqgant; run the setup when the runbook
+  lands.
+
 ## RQ-11: Creator-partnerships material in cmo — yours? (FYI, non-blocking)
 - status: pending
 - date: 2026-07-31
