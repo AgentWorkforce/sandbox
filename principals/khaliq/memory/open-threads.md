@@ -1,5 +1,29 @@
 # Open threads
 
+- **Chief was handed a program on Khaliq's authority, relayed by an agent, and
+  is holding.** `sage-nightcto-factory-map-20260731` asked Chief to own the
+  Sage/NightCTO distributed-Factory program and relayed a fleet topology (Cloud
+  control plane, Mac mini execution nodes). Its verifiable claims check out, but
+  an agent asserting "Khaliq explicitly directs" is not the same as Khaliq
+  saying so, and this commits fleet-wide execution. Chief recorded the map
+  (`workstreams/sage-nightcto-factory-program.md`) and dispatches nothing until
+  Khaliq confirms directly. Trigger: ask him at the next exchange.
+- **The hosted Factory brain has no contract configured at all.**
+  `cloud-factory-brain` returns empty `inputValues` and `inputSpecs`, so
+  `spec.capabilities.factoryBrain.triage` has no `repoByLabel` or `defaultRepo`.
+  Hosted dispatch worked because Chief's hardcoded Linear defaults filled the
+  gap; removing them exposed it. This blocks any gated workload, Sage and
+  NightCTO included.
+
+- **No Factory contract covers `relay`, `cloud`, or `relayfile` yet.** Chief
+  resolves `factory.config.json` nearest-first — target repo, then clone root —
+  and refuses to route when neither exists rather than assuming Linear. One
+  file at `/Users/khaliqgant/Projects/AgentWorkforce/factory.config.json` would
+  cover all three (verified: with it present, all three resolve `linear` while
+  `hoopsheet`'s own file still wins with `github`). Khaliq's call whether to add
+  it there, since it lives outside the chief repo. Until then `promote-issue`,
+  `create-task`, `bootstrap`, and `status` refuse for those repos.
+
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.
 - RelayAuth delegated token mint currently returns an upstream error. Chief's
@@ -43,3 +67,41 @@
   and/or raise the connect timeout. Secondary: `.claude/settings.json` allows
   `mcp__relaycast__*`, not `mcp__agent-relay__*` — confirm which server name is
   canonical.
+- **AR-448 was implemented twice and both PRs are open.** Relay #1402
+  (`feat/ar-448-…`, khaliqgant, +959) and #1403 (`feature/ar-448-…`, kjgbot,
+  +522) are independent implementations of the same issue, and both edit
+  `packages/cli/src/cli/commands/workspace.ts` and its test, so they cannot
+  both merge cleanly. #1402 goes wider (broker lifecycle plus a cloud
+  convergence test); #1403 ships a `specs/durable-workspace-identity.md` and a
+  separate `durable-workspace-identity` lib. Two more open relay PRs sit in the
+  same code: #1412 (one broker-workspace precedence ladder) and #1413 (Cloud
+  workspace IDs discoverable from the CLI). Khaliq picks one lineage before any
+  of the four merges. **Root cause established 2026-07-31**, with the chain
+  evidenced end to end: Factory dispatched AR-448 at 22:56 and recorded the
+  claim only in its own hosted state store
+  (`factory-cloud-orchestrator.ts` dedupes on `stateStore.getIssue`, which no
+  other dispatcher can read); the writeback that moves the issue out of
+  `Ready for Agent` failed on the RelayAuth D1 outage and was treated as
+  non-fatal; AR-448 therefore still reads `stateId = Ready for Agent`,
+  `updatedAt 2026-07-30T20:41:32Z`, unchanged since creation; 77 minutes later
+  a second dispatcher took the still-ready issue and opened #1403.
+  **Remaining fix is cloud-side** — claim before spawning, not after, and abort
+  the dispatch when the claim write fails. Chief's half (a promote-time guard
+  that refuses to re-offer an issue with an open PR) is done.
+- **Workspace keys leak through observer links too.** `agent-relay node status`
+  prints `https://agentrelay.com/observer?key=rk_live_…` in plaintext — a
+  channel the 07-29 rotation batch did not cover. Relay PR #1405 (`fix(plugins):
+  stop exposing workspace keys in observer links`) is open and addresses it;
+  confirm it covers the CLI status path, not only plugin output.
+- **AR-448's Linear checkpoint is written but unposted.** Relay PR #1402 is
+  open (2026-07-31). The checkpoint body is staged at
+  `factory-tasks/ar-448-pr-opened-checkpoint.md` and
+  `npm run factory:comment -- AR-448 <body-file> [key]` now exists to post it,
+  but every attempt fails at `500 mount_session_failed` when minting a senses
+  session — the same RelayAuth capacity problem blocking fresh scoped
+  credentials. The comment command's writeback path (draft → receipt) has
+  therefore never executed against a live mount; only its argument and body
+  validation are verified. Trigger: once `npm run doctor` shows the mount
+  healthy, run
+  `npm run factory:comment -- AR-448 factory-tasks/ar-448-pr-opened-checkpoint.md ar-448-pr-1402-opened`,
+  confirm the receipt, then move AR-448 out of `Ready for Agent`.

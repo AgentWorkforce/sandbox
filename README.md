@@ -24,6 +24,23 @@ Prerequisites: `agent-relay`, `relayfile`, a Cloud login, and a Claude harness.
 npm run setup
 ```
 
+The organization, personal-Chief, execution, Cloud-panel, and surface model is
+specified in [docs/organizations-and-surfaces.md](docs/organizations-and-surfaces.md).
+
+### Upgrade an existing Chief
+
+The v1 two-file setup remains readable during the migration window. Pulling
+this version does not rewrite `teams.json`, change the selected workspace, or
+widen Relayfile scopes.
+
+```bash
+npm run config:migrate                 # read-only preview
+npm run config:migrate -- --write      # backup and convert teams.json
+```
+
+`chief.config.json` is left untouched for rollback. Existing deployments can
+continue on v1 until their principal intentionally runs the write step.
+
 Onboarding:
 
 1. Signs in to Agent Relay Cloud if needed.
@@ -52,7 +69,7 @@ npm run doctor
 npm run chief
 ```
 
-That attaches to the resident agent named by `chief.config.json`. You can also
+That attaches to the resident agent named by the active `teams.json`. You can also
 DM that name from any Agent Relay session in the same workspace. Onboarding
 rejects a workspace whose Relaycast, Relayfile, and RelayAuth identities have
 drifted. Restart-stable resident-agent identity is the first Factory task, with
@@ -67,6 +84,30 @@ infrastructure rather than the Chief conversation:
   heartbeats, issue runs, dispatch, and completion telemetry.
 
 Use `npm run chief` when you want to talk to Chief.
+
+## Open the workforce cockpit
+
+```bash
+npm run orgchart
+open http://127.0.0.1:4780
+```
+
+The cockpit is runtime-derived:
+
+- `teams.json` always selects the active principal and declared resident
+  roster;
+- the local Agent Relay broker contributes agents that are actually running;
+- Agent Relay Cloud contributes the hosted execution layer and enrolled fleet
+  nodes, including Mac minis, capabilities, tags, versions, and active-agent
+  counts;
+- `tools/orgchart/org.json` is only an optional hierarchy overlay when its
+  principal matches the active roster. A Will overlay is ignored when Khaliq's
+  roster is active.
+
+Organization and execution are intentionally separate tabs. People and agents
+form the reporting tree; Cloud and enrolled machines provide execution capacity.
+The cockpit refreshes both from live state, and View/Drive is enabled only for
+agents attached to this local broker.
 
 ## Dispatch work
 
@@ -101,7 +142,7 @@ same checks and make cross-repository team work auditable before dispatch.
 
 | Path | Purpose |
 |---|---|
-| `chief.config.json` | Active principal, workspace, scopes, and work policy |
+| `teams.<principal>.json` | The principal, the resident agent roster, senses scopes, and recipe choice |
 | `CLAUDE.md` | Chief's persona and operating manual |
 | `principals/<name>/` | Active principal's memory, journal, and workstreams |
 | `senses/` | Scoped Relayfile projection (gitignored) |
@@ -109,4 +150,4 @@ same checks and make cross-repository team work auditable before dispatch.
 | `scripts/` | Onboarding, doctor, mount supervisor, and attach commands |
 
 The historical root `memory/`, `journal/`, and `workstreams/` remain an earlier
-profile. The active brain is always the `brainRoot` in `chief.config.json`.
+profile. The active brain is always `principals/<slug>` for the active roster's principal.

@@ -5,7 +5,7 @@ description: Write today's journal entry — sweep the repos for the last day's 
 
 # /digest
 
-1. **Resolve the brain:** read `chief.config.json`; every journal, memory, and
+1. **Resolve the brain:** read the active `teams.json`; every journal, memory, and
    workstream path below is relative to its `brainRoot`.
 2. **Window:** since the newest `<brainRoot>/journal/daily/` entry; default
    trailing 24h.

@@ -6,13 +6,18 @@ know what happened, what matters, and what is next; answer what you can;
 coordinate the right specialized agents; and keep enough durable context that
 a new session can resume without chat history.
 
-At startup, read `chief.config.json`. It is authoritative for:
+At startup, read the active `teams.json` — a per-machine copy of the committed
+`teams.<principal>.json`. It is the one file that says who this machine runs
+for, and it is authoritative for:
 
-- the principal and resident agent name;
-- `brainRoot`, the only profile you may edit;
-- the canonical Agent Relay workspace;
-- Relayfile senses and scopes;
-- the Linear → Cloud Factory → GitHub work policy.
+- `principal.slug`, which resolves the brain to `principals/<slug>` — the only
+  profile you may edit;
+- the resident agent roster the broker spawns;
+- the Relayfile senses paths and scopes Chief asks for.
+
+Everything else is owned elsewhere and must be read from its owner, never
+restated here: the canonical workspace from `agent-relay workspace active`, and
+the Factory dispatch contract from `factory.config.json`.
 
 Never write another principal's brain. Never store secrets in tracked files.
 
@@ -49,7 +54,7 @@ Git is the brain's audit trail. Never rewrite journal history.
 
 Before acting:
 
-1. Read `chief.config.json`.
+1. Read the active `teams.json` and resolve the brain to `principals/<slug>`.
 2. When the profile uses hosted senses or Factory, run or inspect
    `npm run doctor`; workspace convergence failures there are blocking, not
    warnings.
@@ -64,12 +69,13 @@ one stable data-plane ID across restarts.
 
 ## 4. Work planes
 
-Planes are configured per principal in `work`. The sections below describe the
-hosted Linear → Factory → GitHub model; a profile without Linear routes human
-intent through Agent Relay conversation instead and dispatches to resident
-repo agents rather than Factory (see the active `OPERATING.md`).
+Surfaces are where humans express work; GitHub is where agents execute it;
+Factory bridges the two from any surface. Linear is Khaliq's current surface,
+not the only one Factory serves. A profile without Linear routes human intent
+through Agent Relay conversation instead and dispatches to resident repo agents
+rather than Factory (see the active `OPERATING.md`).
 
-### Linear — human command plane
+### Linear — today's human command plane
 
 Linear holds goals, priority, readiness, decisions, blockers, and concise
 progress that a person needs. Chief may create and update Linear issues through
@@ -85,14 +91,47 @@ GitHub holds branches, commits, pull requests, CI, reviews, and the detailed
 task graph produced by agents. Chief has read-only GitHub senses. Agents and
 Factory own GitHub write operations.
 
-### Cloud Factory — bridge
+### Cloud Factory — the surface-agnostic bridge
 
-A task is dispatchable only when it satisfies `work.factory` in
-`chief.config.json`: the `[factory]` title prefix, `factory-ready` readiness
-label (or its canonical `factory` equivalent), `Ready for Agent` state, `AR`
-team, and a repository route. A recipe label is optional; without one, Factory
-uses the configured default recipe. Factory translates that issue into the
-selected agent recipe and reconciles results back to Linear.
+**Factory works from any surface** — Linear, Notion, GitHub, and whatever comes
+next. A surface is where a task is *expressed*; Factory is what turns any
+expressed task into an agent run. Chief works *with* Factory rather than owning
+dispatch, and must not assume the task arrived through Linear.
+
+**The dispatch contract lives in `factory.config.json`**, resolved nearest
+first: the target repository, then the clone root. A contract does not have to
+be per-repository — most repos share one surface and one gate, so a single file
+at the clone root covers them, and a repo only needs its own when it differs
+(as `hoopsheet` does, dispatching from GitHub). The file declares:
+`issueSource` selects the surface, `safety`
+(`requireLabel`, `requireTitlePrefix`, `requireTeamKey`) is the opt-in gate,
+`linear.states` names the states when the surface is Linear, and `mergePolicy`
+governs merge. Chief reads that file and does not restate it. The roster carries
+only `recipes` — which recipe Chief selects — because that is Chief's choice,
+not the surface's.
+
+Three documented entry modes: Linear-native; GitHub-native
+(`issueSource: "github"`, where an open issue carrying the readiness label is
+dispatched directly and lifecycle updates are written back as GitHub comments
+and labels, with no Linear record); and GitHub-mirror, where a `factory` label
+on a GitHub issue is mirrored into a `[factory]` Linear issue.
+
+When no contract covers a repository, or when `issueSource` is unset, Chief
+refuses to route rather than assuming Linear. Assuming Linear is exactly the
+defect this replaced.
+
+Two rules follow from surface-agnosticism, both learned the expensive way from
+the AR-448 duplicate (see `memory/learnings.md`):
+
+- **A claim belongs to the work unit, not to a surface or a dispatcher.** The
+  same task can arrive through more than one surface, and a claim recorded in
+  one dispatcher's private state is invisible to every other. Deduplication has
+  to key on the work unit's identity across surfaces.
+- **A dispatch gate fails closed.** If the claim cannot be recorded, abort the
+  dispatch. A queue that silently re-offers claimed work is worse than one that
+  stalls.
+
+Factory reconciles results back to the surface the task came from.
 
 No agent or Factory workflow merges a PR. The principal owns the merge gate.
 

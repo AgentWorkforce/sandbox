@@ -21,3 +21,33 @@
 - A doctor `OK` on `broker` says the process is up, not that the planes are
   healthy. Read every integration line; GitHub can report a recent event while
   both sync and ingress are unhealthy.
+- **A claim that lives in one dispatcher's private state is not a claim.**
+  Factory fences work in its own hosted state store, which no other dispatcher
+  can see. Because Factory is surface-agnostic, the claim cannot live in one
+  surface's fields either — the same work unit can arrive via Linear, Notion,
+  or GitHub. The claim has to belong to the work unit, be written before agents
+  spawn, and be projected back to whichever surface expressed it.
+- **Read the platform's own config before encoding a policy about it.** Chief
+  asserted a Linear-only work model for two days because `chief.config.json`
+  and `CLAUDE.md` said so, and Chief never opened a `factory.config.json` in
+  any target repo. One file read (`hoopsheet` sets `issueSource: "github"`)
+  would have falsified it. Repo-local docs describe intent; the owning
+  component's config describes capability, and capability wins.
+- **Never launder relayed authority into direct confirmation in the brain.** An
+  agent reporting "the principal authorized X" is evidence that the agent
+  believes it, not that it happened. Record the claim with its provenance — who
+  said it, through which channel — and keep the gate. The brain is read by
+  future sessions as settled fact, so a provenance error there becomes a
+  permission the principal never granted. Scale the scepticism to the blast
+  radius: routine sequencing can ride on a relay; data-access scope and
+  destructive operations need the principal in a channel he uses himself.
+- **Treat contradicting evidence as falsifying, not as trivia.** Factory's run
+  list carried `source: "github"` in plain sight and Chief reported it twice as
+  a curiosity while continuing to assert Linear-only dispatch. When observed
+  data disagrees with the model being reported, stop and chase it.
+- **A dispatch gate must fail closed.** AR-448 was duplicated because the
+  writeback that releases the claim depends on Relayfile, Relayfile was down,
+  the failure was non-fatal, and the run proceeded — leaving the issue looking
+  ready with a PR already open. If the claim cannot be written, abort the
+  dispatch; a queue that silently re-offers claimed work is worse than a queue
+  that stalls.

@@ -1,7 +1,7 @@
 ---
 status: active
 owner: khaliq-chief
-updated: 2026-07-30
+updated: 2026-07-31
 repos: [chief, relay, cloud]
 ---
 # Workspace convergence
@@ -9,18 +9,25 @@ repos: [chief, relay, cloud]
 **Goal:** One Agent Relay Cloud workspace durably identifies Khaliq's Chief and
 team across Relaycast, Relayfile, and RelayAuth, including broker restarts.
 
-**Now:** The configured `default` Cloud workspace resolves Relaycast,
-Relayfile, and RelayAuth to one durable Relay workspace identity. Onboarding
-and the doctor enforce that invariant. AR-448 dispatched three Relay agents
-through the hosted Factory and completed successfully.
+**Now:** AR-448 is implemented and open as relay PR #1402, awaiting Khaliq's
+review and merge. `node up` resolves the machine-global canonical workspace
+before the broker can mint one, `workspace active --json` emits convergence
+evidence, and a stop/start regression test covers the resident address.
 
-**Next:** Review and land AR-448's agent-owned GitHub work, then verify a broker
-restart preserves the Chief address/mailbox and workspace history. RelayAuth
-capacity recovery remains the prerequisite for fresh scoped credentials and
-provider writeback.
+**Next:** Khaliq reviews and merges relay PR #1402, then a real broker
+stop/start on this machine confirms the Chief address and mailbox survive.
+RelayAuth capacity recovery remains the prerequisite for fresh scoped
+credentials and provider writeback.
 
 ## History
 
+- 2026-07-31 — Implemented AR-448 and opened relay PR #1402 on
+  `feat/ar-448-durable-workspace-identity`. Root cause was single: `node up`
+  never consulted the machine-global canonical workspace, so a start with no
+  project pin fell through to the broker's mint-a-fresh-workspace path and the
+  resident agent silently got a new address. Agent identity needed no separate
+  fix — Relaycast returns the existing agent when a name is re-registered in a
+  workspace it already belongs to. Merge gate held closed.
 - 2026-07-30 — AR-448 passed the hosted Factory path: three agent invocations
   spawned in the canonical workspace, provider IDs reconciled, and the run
   completed with the merge gate still closed.

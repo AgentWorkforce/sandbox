@@ -5,7 +5,7 @@ description: Forward-looking status board — read workstreams/, verify freshnes
 
 # /status [workstream]
 
-1. Read `chief.config.json` and resolve `brainRoot`.
+1. Read the active `teams.json`; the brain is `principals/<principal.slug>`.
 2. Read every `<brainRoot>/workstreams/*.md` (or just the named one). Order: active,
    blocked, parked; done only on request.
 3. **Verify before reporting.** Any file with `updated` older than 7 days —

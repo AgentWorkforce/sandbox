@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   activeWorkspace,
   cloudRequest,
@@ -11,13 +12,28 @@ import {
   mintSensesSession,
   REPO_ROOT,
 } from "./lib/chief-runtime.mjs";
+import {
+  requireFactoryContract,
+  requireIssueSource,
+} from "./lib/factory-contract.mjs";
 
 const command = process.argv[2] ?? "status";
 const config = loadConfig();
-const workspace = activeWorkspace(config, { switchIfNeeded: true });
-const mount = await resolveFactoryMount();
-const relayfileBase = mount.relayfileBaseUrl.replace(/\/+$/u, "");
-const relayfileWorkspace = workspace.relayfileWorkspaceId;
+// Resolved by `connect()` inside the try below, not at module load: a failure
+// to reach the workspace or mint a mount session is an operational error that
+// belongs in the same friendly handler as everything else, not an unhandled
+// rejection printed as a Node stack trace.
+let workspace;
+let mount;
+let relayfileBase;
+let relayfileWorkspace;
+
+async function connect() {
+  workspace = activeWorkspace(config);
+  mount = await resolveFactoryMount();
+  relayfileBase = mount.relayfileBaseUrl.replace(/\/+$/u, "");
+  relayfileWorkspace = workspace.relayfileWorkspaceId;
+}
 
 async function resolveFactoryMount() {
   const cachePath = resolve(
@@ -230,21 +246,67 @@ async function waitForCreateReceipt(remotePath, timeoutMs = 60_000) {
   );
 }
 
-async function resolveTeam() {
+/** Sibling checkouts of this repo — where target repositories live. */
+const CLONE_ROOT = dirname(REPO_ROOT);
+
+/**
+ * The dispatch contract for a set of routed repositories.
+ *
+ * Every routed repo must agree on the surface: a single Linear issue cannot
+ * simultaneously be the record for a repo that dispatches from GitHub. When
+ * they disagree, that is a routing mistake worth stopping on rather than
+ * quietly using the first one.
+ */
+function resolveContract(repoNames) {
+  const contracts = repoNames.map((repoName) =>
+    requireFactoryContract(repoName, { cloneRoot: CLONE_ROOT })
+  );
+  const sources = new Set(contracts.map((contract) => requireIssueSource(contract)));
+  if (sources.size > 1) {
+    throw new Error(
+      `Routed repositories disagree on issueSource (${[...sources].join(", ")}): ` +
+      contracts.map((c) => `${c.repo}=${c.issueSource}`).join(", ") +
+      ". One task cannot be expressed on two surfaces at once; route them " +
+      "separately.",
+    );
+  }
+  return { ...contracts[0], issueSource: [...sources][0], contracts };
+}
+
+/**
+ * Chief's Linear-shaped commands only make sense when the routed repositories
+ * take their work from Linear. A GitHub-native repo has no Linear record to
+ * promote — its readiness signal is a label on the GitHub issue itself.
+ */
+function requireLinearSurface(contract, commandName) {
+  if (contract.issueSource === "linear") return contract;
+  throw new Error(
+    `${contract.repo} dispatches from ${contract.issueSource} ` +
+    `(${contract.path}), so \`${commandName}\` does not apply — there is no ` +
+    "Linear record to promote. Add the " +
+    `\`${contract.safety.requireLabel}\` label to the GitHub issue instead; ` +
+    "Factory writes lifecycle updates back as GitHub comments and labels.",
+  );
+}
+
+async function resolveTeam(contract) {
+  const teamKey = contract.safety.requireTeamKey;
+  if (!teamKey) {
+    throw new Error(
+      `${contract.path} does not set safety.requireTeamKey, which Linear ` +
+      "dispatch requires.",
+    );
+  }
   const rows = await readRemoteJson("/linear/teams/_index.json");
   for (const row of rows) {
     const team = await readRemoteJson(`/linear/teams/${row.id}.json`);
     const record = team.payload ?? team;
-    if (record.key === config.work.factory.teamKey) return record;
-    if (
-      !record.key &&
-      config.work.factory.teamKey === "AR" &&
-      record.name === "Agent Relay"
-    ) {
+    if (record.key === teamKey) return record;
+    if (!record.key && teamKey === "AR" && record.name === "Agent Relay") {
       return record;
     }
   }
-  throw new Error(`Linear team ${config.work.factory.teamKey} was not found`);
+  throw new Error(`Linear team ${teamKey} was not found`);
 }
 
 async function findLabel(names) {
@@ -273,7 +335,7 @@ const RECIPE_LABEL_DEFINITIONS = {
 };
 
 async function ensureRecipeLabel(team, recipe) {
-  const name = config.work.factory.recipeLabels[recipe];
+  const name = config.recipes.labels[recipe];
   if (!name) return null;
   const existing = await findLabel([name]);
   if (existing?.id) return existing;
@@ -299,30 +361,26 @@ async function ensureRecipeLabel(team, recipe) {
   return { id, name };
 }
 
-async function resolveReadyState() {
+async function resolveReadyState(contract) {
   const states = await readRemoteJson("/linear/states/_index.json");
-  const state = states.find(
-    (candidate) => candidate.title === config.work.factory.readinessState,
-  );
+  const state = states.find((candidate) => candidate.title === contract.readyState);
   if (!state) {
-    throw new Error(
-      `Linear state ${config.work.factory.readinessState} was not found`,
-    );
+    throw new Error(`Linear state ${contract.readyState} was not found`);
   }
   return state;
 }
 
-async function bootstrap() {
-  const team = await resolveTeam();
-  const state = await resolveReadyState();
+async function bootstrap(contract) {
+  const team = await resolveTeam(contract);
+  const state = await resolveReadyState(contract);
   const readinessLabel = await findLabel([
-    config.work.factory.readinessLabel,
+    contract.safety.requireLabel,
     "factory-ready",
     "factory",
   ]);
   if (!readinessLabel) {
     throw new Error(
-      "No Factory readiness label exists. Create `factory-ready` or `factory` " +
+      `No Factory readiness label exists. Create \`${contract.safety.requireLabel}\` ` +
       "in Linear, then rerun onboarding.",
     );
   }
@@ -330,11 +388,13 @@ async function bootstrap() {
   if (!deployment) {
     throw new Error("cloud-factory-brain is not active in this workspace");
   }
-  console.log(`✓ Linear team ${config.work.factory.teamKey}`);
+  console.log(`✓ Factory contract ${contract.path}`);
+  console.log(`✓ Issue source ${contract.issueSource}`);
+  console.log(`✓ Linear team ${contract.safety.requireTeamKey}`);
   console.log(`✓ Linear state ${state.title}`);
   console.log(`✓ Linear label ${readinessLabel.name}`);
   console.log("✓ Hosted Cloud Factory brain active");
-  return { team, state, readinessLabel, deployment };
+  return { team, state, readinessLabel, deployment, contract };
 }
 
 async function factoryDeployment() {
@@ -348,8 +408,9 @@ async function factoryDeployment() {
   ) ?? null;
 }
 
-async function status() {
-  const { team, state, readinessLabel, deployment } = await bootstrap();
+async function status(repoNames) {
+  const contract = requireLinearSurface(resolveContract(repoNames), "status");
+  const { team, state, readinessLabel, deployment } = await bootstrap(contract);
   console.log(JSON.stringify({
     ready: true,
     workspace: {
@@ -357,23 +418,32 @@ async function status() {
       cloudWorkspaceId: workspace.cloudWorkspaceId,
       dataPlaneWorkspaceId: workspace.relaycastWorkspaceId,
     },
+    factory: {
+      contract: contract.path,
+      issueSource: contract.issueSource,
+      repos: repoNames,
+    },
     linear: {
-      team: { id: team.id, key: config.work.factory.teamKey, name: team.name },
+      team: { id: team.id, key: contract.safety.requireTeamKey, name: team.name },
       readinessState: { id: state.id, name: state.title },
       readinessLabel: { id: readinessLabel.id, name: readinessLabel.name },
-      defaultRecipe: config.work.factory.defaultRecipe,
+      defaultRecipe: config.recipes.default,
     },
     deployment: {
       agentId: deployment.agentId,
       name: deployment.deployedName,
       status: deployment.status,
     },
-    mergePolicy: config.work.factory.mergePolicy,
+    mergePolicy: contract.mergePolicy,
   }, null, 2));
 }
 
 async function createWorkspaceConvergenceTask() {
-  const { team, state, readinessLabel, deployment } = await bootstrap();
+  const contract = requireLinearSurface(
+    resolveContract(["relay"]),
+    "dispatch-workspace-task",
+  );
+  const { team, state, readinessLabel, deployment } = await bootstrap(contract);
   const repoLabel = await readRemoteJson("/linear/labels/by-name/relay.json");
   const repoLabelRecord = repoLabel?.payload ?? repoLabel;
   if (!repoLabelRecord?.id) throw new Error("Linear repository label relay was not found");
@@ -450,7 +520,7 @@ async function createWorkspaceConvergenceTask() {
       agentId: deployment.agentId,
       name: deployment.deployedName,
     },
-    mergePolicy: config.work.factory.mergePolicy,
+    mergePolicy: contract.mergePolicy,
   }, null, 2));
 }
 
@@ -489,8 +559,86 @@ async function waitForIssuePromotion(
   );
 }
 
-async function promoteExistingIssue(issueKey, repoNames, recipe) {
-  const { team, state, readinessLabel } = await bootstrap();
+/**
+ * Open pull requests that already reference this Linear key, across the repos
+ * the issue routes to.
+ *
+ * An issue sitting in `Ready for Agent` means "nobody is working on this". An
+ * open PR says otherwise. AR-448 proved the gap: Factory dispatched it and
+ * recorded the claim only in its own hosted state store, the writeback that
+ * would have moved the issue out of `Ready for Agent` failed on the RelayAuth
+ * outage, and 77 minutes later a second dispatcher took the still-ready issue
+ * and opened a competing PR against the same files.
+ *
+ * This guard is deliberately narrow: it reads a Linear key and searches GitHub
+ * PRs, so it only covers the Linear-expressed, GitHub-executed path Chief
+ * promotes. Factory is surface-agnostic, so the general fix is a Factory-owned
+ * claim on the work unit itself — this only stops Chief from re-offering work
+ * that GitHub can already prove is claimed.
+ */
+async function findOpenPullRequestsForIssue(issueKey, repoNames) {
+  const found = [];
+  for (const repoName of repoNames) {
+    const repo = repoName.includes("/") ? repoName : `AgentWorkforce/${repoName}`;
+    const result = spawnSync("gh", [
+      "pr",
+      "list",
+      "--repo",
+      repo,
+      "--state",
+      "open",
+      "--search",
+      issueKey,
+      "--json",
+      "number,title,headRefName,author,url",
+    ], { encoding: "utf8", timeout: 60_000 });
+    if (result.status !== 0) {
+      // An unreachable GitHub is not proof the issue is unclaimed. Say so and
+      // let the caller decide rather than silently promoting into a race.
+      throw new Error(
+        `Cannot verify whether ${issueKey} is already claimed: ` +
+        `\`gh pr list --repo ${repo}\` failed ` +
+        `(${(result.stderr || result.error?.message || "unknown error").trim()}). ` +
+        "Re-run once GitHub is reachable, or pass --allow-claimed to override.",
+      );
+    }
+    for (const pr of JSON.parse(result.stdout || "[]")) {
+      found.push({ repo, ...pr, author: pr.author?.login ?? null });
+    }
+  }
+  return found;
+}
+
+async function assertUnclaimed(issueKey, repoNames, { allowClaimed }) {
+  const open = await findOpenPullRequestsForIssue(issueKey, repoNames);
+  if (open.length === 0) return;
+  const summary = open
+    .map((pr) => `${pr.repo}#${pr.number} (${pr.author ?? "unknown"}) ${pr.title}`)
+    .join("; ");
+  if (allowClaimed) {
+    console.warn(
+      `Warning: ${issueKey} already has ${open.length} open pull request(s) ` +
+      `— ${summary}. Promoting anyway because --allow-claimed was passed.`,
+    );
+    return;
+  }
+  throw new Error(
+    `${issueKey} already has ${open.length} open pull request(s): ${summary}. ` +
+    "Promoting it back to Ready for Agent would re-offer claimed work to a " +
+    "second dispatcher. Close or merge the existing PR first, or pass " +
+    "--allow-claimed if the duplicate is intentional.",
+  );
+}
+
+async function promoteExistingIssue(issueKey, repoNames, recipe, options = {}) {
+  const contract = requireLinearSurface(
+    resolveContract(repoNames),
+    "promote-issue",
+  );
+  await assertUnclaimed(issueKey, repoNames, {
+    allowClaimed: Boolean(options.allowClaimed),
+  });
+  const { team, state, readinessLabel } = await bootstrap(contract);
   const value = await readRemoteJson(
     `/linear/issues/by-id/${issueKey}.json`,
     { allowNotFound: true },
@@ -508,7 +656,7 @@ async function promoteExistingIssue(issueKey, repoNames, recipe) {
     }
     routeLabels.push(label);
   }
-  const recipeName = recipe ?? config.work.factory.defaultRecipe;
+  const recipeName = recipe ?? config.recipes.default;
   const recipeLabel = await ensureRecipeLabel(team, recipeName);
 
   const currentLabels = (issue.labels ?? []).map((label) =>
@@ -528,10 +676,10 @@ async function promoteExistingIssue(issueKey, repoNames, recipe) {
     )
     .map((label) => label.id);
   const title = issue.title.toLowerCase().startsWith(
-    config.work.factory.titlePrefix.toLowerCase(),
+    contract.safety.requireTitlePrefix.toLowerCase(),
   )
     ? issue.title
-    : `${config.work.factory.titlePrefix} ${issue.title}`;
+    : `${contract.safety.requireTitlePrefix} ${issue.title}`;
   const alreadyReady =
     issue.stateId === state.id &&
     title === issue.title &&
@@ -560,7 +708,7 @@ async function promoteExistingIssue(issueKey, repoNames, recipe) {
   const promoted = await waitForIssuePromotion(
     issue.identifier ?? issueKey,
     state.id,
-    config.work.factory.titlePrefix,
+    contract.safety.requireTitlePrefix,
     desiredLabels.map((label) => label.name),
   );
   console.log(JSON.stringify({
@@ -577,7 +725,7 @@ async function promoteExistingIssue(issueKey, repoNames, recipe) {
     },
     repos: repoNames,
     recipe: recipeName,
-    mergePolicy: config.work.factory.mergePolicy,
+    mergePolicy: contract.mergePolicy,
   }, null, 2));
 }
 
@@ -591,12 +739,16 @@ async function createFactoryTaskFromSpec(specPath) {
   if (!Array.isArray(spec.repos) || spec.repos.length === 0) {
     throw new Error("Factory task spec requires at least one repository label");
   }
-  const recipe = spec.recipe ?? config.work.factory.defaultRecipe;
+  const recipe = spec.recipe ?? config.recipes.default;
   if (!["single", "workflow", "team"].includes(recipe)) {
     throw new Error(`Unsupported Factory recipe ${recipe}`);
   }
 
-  const { team, state, readinessLabel, deployment } = await bootstrap();
+  const contract = requireLinearSurface(
+    resolveContract(spec.repos),
+    "create-task",
+  );
+  const { team, state, readinessLabel, deployment } = await bootstrap(contract);
   const routeLabels = [];
   for (const repoName of spec.repos) {
     const label = await findLabel([repoName]);
@@ -608,10 +760,10 @@ async function createFactoryTaskFromSpec(specPath) {
   const recipeLabel = await ensureRecipeLabel(team, recipe);
 
   const title = spec.title.toLowerCase().startsWith(
-    config.work.factory.titlePrefix.toLowerCase(),
+    contract.safety.requireTitlePrefix.toLowerCase(),
   )
     ? spec.title
-    : `${config.work.factory.titlePrefix} ${spec.title}`;
+    : `${contract.safety.requireTitlePrefix} ${spec.title}`;
   const existingIssues = await readRemoteJson("/linear/issues/_index.json");
   const existing = existingIssues.find((issue) => issue.title === title);
   if (existing) {
@@ -659,50 +811,205 @@ async function createFactoryTaskFromSpec(specPath) {
       agentId: deployment.agentId,
       name: deployment.deployedName,
     },
-    mergePolicy: config.work.factory.mergePolicy,
+    mergePolicy: contract.mergePolicy,
   }, null, 2));
 }
 
-try {
+async function readCommentBody(source) {
+  if (source === "-") {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  return readFileSync(resolve(source), "utf8");
+}
+
+/**
+ * Ask the mount which field carries a comment's text. The adapter advertises a
+ * create example per writable resource; reading it beats hard-coding a guess
+ * that silently posts an empty comment if the contract ever moves.
+ */
+async function resolveCommentBodyField(issueId) {
+  const candidates = [
+    `/discovery/linear/issues/${issueId}/comments/.create.example.json`,
+    `discovery/linear/issues/${issueId}/comments/.create.example.json`,
+  ];
+  for (const path of candidates) {
+    const example = await readRemoteJson(path, { allowNotFound: true });
+    const record = example?.payload ?? example;
+    if (!record || typeof record !== "object") continue;
+    const field = ["body", "content", "bodyData"].find((name) =>
+      Object.hasOwn(record, name)
+    );
+    if (field) return field;
+  }
+  // The documented default. A wrong guess here fails loudly at the provider
+  // rather than posting a blank comment.
+  return "body";
+}
+
+async function commentOnIssue(issueKey, body, idempotencyKey) {
+  const value = await readRemoteJson(
+    `/linear/issues/by-id/${issueKey}.json`,
+    { allowNotFound: true },
+  );
+  const issue = value?.payload ?? value;
+  if (!issue?.id) {
+    throw new Error(`Linear issue ${issueKey} was not found`);
+  }
+
+  // Default the idempotency key to the body's digest so a retried checkpoint
+  // reuses its draft instead of double-posting.
+  const key = aliasSlug(
+    idempotencyKey ?? createHash("sha256").update(body).digest("hex").slice(0, 16),
+  );
+  const draftPath = `/linear/issues/${issue.id}/comments/chief-comment-${key}.json`;
+
+  const existingReceipt = createReceipt(
+    await readRemoteJson(draftPath, { allowNotFound: true }),
+  );
+  if (existingReceipt) {
+    console.log(JSON.stringify({
+      posted: false,
+      reason: "receipt_exists",
+      issue: { key: issue.identifier ?? issueKey, url: issue.url },
+      comment: existingReceipt,
+    }, null, 2));
+    return;
+  }
+
+  const bodyField = await resolveCommentBodyField(issue.id);
+  await writeCreateDraft(draftPath, { [bodyField]: body });
+  const receipt = await waitForCreateReceipt(draftPath);
+  console.log(JSON.stringify({
+    posted: true,
+    issue: {
+      id: issue.id,
+      key: issue.identifier ?? issueKey,
+      title: issue.title,
+      url: issue.url,
+    },
+    comment: receipt,
+    idempotencyKey: key,
+  }, null, 2));
+}
+
+const COMMANDS = new Set([
+  "bootstrap",
+  "status",
+  "dispatch-workspace-task",
+  "promote-issue",
+  "create-task",
+  "comment",
+]);
+
+const USAGE =
+  "Usage: node scripts/factory-control.mjs " +
+  "bootstrap <repo[,repo]>|status <repo[,repo]>|dispatch-workspace-task|" +
+  "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team] " +
+  "[--allow-claimed]|" +
+  "create-task <task-spec.json>|" +
+  "comment <LINEAR-KEY> <body-file|-> [idempotency-key]";
+
+/**
+ * Repository routes are required wherever a dispatch contract is needed:
+ * `issueSource`, the safety gate, and the merge policy all live in the target
+ * repository's `factory.config.json`, so there is no repo-independent answer.
+ */
+function requireRepoNames(argvIndex, commandName) {
+  const repoNames = (process.argv[argvIndex] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (repoNames.length === 0) {
+    throw new Error(
+      `Usage: node scripts/factory-control.mjs ${commandName} <repo[,repo]>. ` +
+      "Factory's dispatch contract is per repository, so this command needs " +
+      "to know which one.",
+    );
+  }
+  return repoNames;
+}
+
+/**
+ * Validate argv and return the work to run. Parsing before connecting means a
+ * usage mistake reports the usage, not whatever the workspace round-trip
+ * happened to fail with.
+ */
+async function planCommand() {
+  if (!COMMANDS.has(command)) {
+    throw new Error(USAGE);
+  }
   if (command === "bootstrap") {
-    await bootstrap();
-  } else if (command === "status") {
-    await status();
-  } else if (command === "dispatch-workspace-task") {
-    await createWorkspaceConvergenceTask();
-  } else if (command === "promote-issue") {
-    const issueKey = process.argv[3];
-    const repoNames = (process.argv[4] ?? "")
+    const repoNames = requireRepoNames(3, "bootstrap");
+    return () =>
+      bootstrap(requireLinearSurface(resolveContract(repoNames), "bootstrap"));
+  }
+  if (command === "status") return () => status(requireRepoNames(3, "status"));
+  if (command === "dispatch-workspace-task") {
+    return () => createWorkspaceConvergenceTask();
+  }
+  if (command === "promote-issue") {
+    const positional = process.argv.slice(3).filter((value) =>
+      value !== "--allow-claimed"
+    );
+    const allowClaimed = process.argv.includes("--allow-claimed");
+    const issueKey = positional[0];
+    const repoNames = (positional[1] ?? "")
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    const recipe = process.argv[5];
+    const recipe = positional[2];
     if (!issueKey || repoNames.length === 0) {
       throw new Error(
         "Usage: node scripts/factory-control.mjs promote-issue " +
-        "<LINEAR-KEY> <repo[,repo]> [single|workflow|team]",
+        "<LINEAR-KEY> <repo[,repo]> [single|workflow|team] [--allow-claimed]",
       );
     }
     if (recipe && !["single", "workflow", "team"].includes(recipe)) {
       throw new Error(`Unsupported Factory recipe ${recipe}`);
     }
-    await promoteExistingIssue(issueKey, repoNames, recipe);
-  } else if (command === "create-task") {
+    return () => promoteExistingIssue(issueKey, repoNames, recipe, { allowClaimed });
+  }
+  if (command === "create-task") {
     const specPath = process.argv[3];
     if (!specPath) {
       throw new Error(
         "Usage: node scripts/factory-control.mjs create-task <task-spec.json>",
       );
     }
-    await createFactoryTaskFromSpec(specPath);
-  } else {
+    return () => createFactoryTaskFromSpec(specPath);
+  }
+  const issueKey = process.argv[3];
+  const bodySource = process.argv[4];
+  const idempotencyKey = process.argv[5];
+  if (!issueKey || !bodySource) {
     throw new Error(
-      "Usage: node scripts/factory-control.mjs " +
-      "bootstrap|status|dispatch-workspace-task|" +
-      "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team]|" +
-      "create-task <task-spec.json>",
+      "Usage: node scripts/factory-control.mjs comment " +
+      "<LINEAR-KEY> <body-file|-> [idempotency-key]",
     );
   }
+  // Read the body now: an unreadable file or an empty checkpoint should fail
+  // before anything is posted, not after the workspace round-trip.
+  const body = (await readCommentBody(bodySource)).trim();
+  if (!body) {
+    throw new Error(`Refusing to post an empty comment from ${bodySource}`);
+  }
+  return () => commentOnIssue(issueKey, body, idempotencyKey);
+}
+
+try {
+  const run = await planCommand();
+  try {
+    await connect();
+  } catch (error) {
+    throw new Error(
+      `Cannot reach the Agent Relay workspace: ${error.message}. ` +
+      "Senses and Linear writeback are unavailable until this recovers; " +
+      "check `npm run doctor`.",
+    );
+  }
+  await run();
 } catch (error) {
   console.error(`Factory control stopped: ${error.message}`);
   process.exitCode = 1;

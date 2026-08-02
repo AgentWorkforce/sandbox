@@ -5,7 +5,7 @@
 # CLAUDE_CODE_CHILD_SESSION from a harness-spawned shell disables transcript
 # persistence in spawned agents).
 cd "$(dirname "$0")/.." || exit 1
-CHIEF_NAME="$(node -p 'require("./chief.config.json").agent.name')" || exit 1
+CHIEF_NAME="$(node -p 'require("./teams.json").agents.find(function(a){return a.role==="chief of staff"}).name')" || exit 1
 HAS_VOICE="$(node -p '(require("./teams.json").agents||[]).some(a=>a.name==="voice")?"1":""' 2>/dev/null)"
 
 if [ "$1" = "brain" ]; then
