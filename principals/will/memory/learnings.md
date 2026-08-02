@@ -192,6 +192,13 @@ Distilled from six months of session history
   a fresh instance of the author. Proposals carry an explicit
   non-operative banner naming the pending decision; deferring a ruling
   upward does not un-write the file.
+- **Never batch a commit with a message that cites its SHA** (cmo,
+  2026-08-02, after fabricating a ref twice under a rule against it):
+  co-issuing makes the violation unavoidable regardless of intent —
+  the ref must be pasted from output that does not exist yet. Cite a
+  SHA only from returned output, and note the detection asymmetry: a
+  fabricated ref in a status message fails only if someone resolves
+  it, and nobody resolves SHAs in status messages.
 - **Load-bearing reports need a read-back too** (cso, 2026-08-02, after
   a confirmation failed to arrive three times while the artifact side
   was fully hardened): a gate waiting on "X posted at head" blocks on
