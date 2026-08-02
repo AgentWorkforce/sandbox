@@ -280,12 +280,17 @@ covered — the world-readable half is now closed either way.
   the only other human identity. (2) A human (you or Khaliq) creates the
   environment + protection rule — an agent-created gate can be
   agent-deleted, so this step is deliberately not automated. The
-  click-path runbook is in #42. Honest expectation (cmo, 2026-08-02):
-  the branch_policy step will work (verified free elsewhere in this
-  org); the required-reviewer step has NO existing instance anywhere in
-  the org, public or private, so the attempt IS the experiment — if the
-  UI refuses, stop and report; the refusal is the finding, and the
-  public-at-$0 vs plan-upgrade trade (RQ-10 cost note) becomes live.
+  click-path runbook is in #42. Expectations, updated (cmo sweep +
+  agentrelay-com docs read, 2026-08-02): branch_policy verified free
+  (org positive instance); required reviewers on a PUBLIC Free repo
+  settled AVAILABLE by GitHub's official docs — agentrelay.com
+  qualifies — though no org instance exists yet, so keep the
+  stop-and-report step (a refusal now would be a bug, not an unknown).
+  FOURTH mandatory step: disable admin bypass and read back
+  `can_admins_bypass == false` — it is ON by default, the REST PUT
+  does not expose it (UI only), and an admin-bypassable gate is void
+  here because every agent holds the admin identity. The private-repo
+  tier question stays open only for private repos (RQ-10 cost note).
 - ordering: the workflow PR adding `environment: production` (#42, holds
   the runbook at 9611723a — reviewer, prevent-self-review, main-only
   deployment policy, each with an API read-back, plus the
