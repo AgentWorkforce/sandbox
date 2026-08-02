@@ -23,10 +23,11 @@
   get `KeepAlive` (SuccessfulExit=false + throttle) via install.mjs —
   chief-repo PR queued; (2) the watchdog needs a chief-independent
   escalation path (macOS notification / push to Will) when the page
-  target is down. Root cause of the outage itself — `node up` dies on
-  telemetry DNS failure (`ENOTFOUND i.agentrelay.com`, unhandled PostHog
-  flush rejection) — filed with the relay lead 2026-08-02, issue number
-  pending.
+  target is down. Root cause of the outage itself — DNS outage →
+  Relaycast registration transport error treated as fatal by
+  `connect_relay` (the PostHog ENOTFOUND stack is a secondary symptom) —
+  filed as **relay#1416** 2026-08-02 with node self-recovery and the
+  telemetry-never-fatal invariant in scope.
 
 - **Broker restarts can leave nodes alive-but-deaf, not frozen.** Hosted→
   broker inbound delivery can die on restart while everything looks healthy
