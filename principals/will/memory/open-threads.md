@@ -35,7 +35,15 @@
   `com.agentworkforce.chief.restart` bootout (dead scratchpad script,
   exit 127). chief#5's amended head c2a88a6b also enforces
   stderr-never-discarded for resident jobs (cpo's P2: KeepAlive with
-  discarded stderr = silent forever-respawn).
+  discarded stderr = silent forever-respawn). --spawn drift settled
+  from source (broker-lifecycle.js:1235): an absent flag falls back to
+  teams.json autoSpawn, chief's is true, so the emitter's flagless
+  form is correct-by-config; precondition for any future reinstall of
+  any node job — verify that repo's teams.json carries autoSpawn:true
+  before dropping --spawn (chief#7's in-place edits never touch
+  ProgramArguments, so department jobs keep their flag). In the window
+  before the boundary the fleet is compensated, not covered: watchdog
+  sweep + chief kickstart, with the chief-down page path the residual.
   (2) the watchdog needs a chief-independent escalation path (macOS
   notification / push to Will) when the page target is down. **The
   fleet boundary for the plist edits + chief.restart bootout has a
