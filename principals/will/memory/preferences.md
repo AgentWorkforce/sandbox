@@ -107,7 +107,12 @@ session; don't restate it. Chief-specific emphases:
   write may or may not have landed and the message is identical either
   way. So on an ambiguous write failure, read back BEFORE retrying;
   never blind-retry a non-idempotent POST — there is no interpretation
-  of the error that gets you out of looking. Gate-met
+  of the error that gets you out of looking. And an author supplies
+  NEITHER the attribution line nor the disposition (cpo, 2026-08-02):
+  under the shared login the disposition string IS the verdict, so an
+  author drafting it — even accurately quoting the reviewer's prior
+  position — makes the review report what the author expected; the
+  reviewer writes their own current verdict, always. Gate-met
   statements say "attested, not measured" until distinct reviewer
   identities exist.
 - **Relay keys are low-sensitivity by design:**

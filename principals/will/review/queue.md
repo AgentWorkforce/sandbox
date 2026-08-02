@@ -184,6 +184,15 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   Identities fix neither alone: the gate needs body-read verdicts and
   dedupe-by-attributed-identity, both of which are human/process
   today.
+- SEPARATE and NOT resolved by this decision (head-of-experiments via
+  cpo — do not mark it done when identities land): our agents are
+  countable and indistinguishable; bots are distinguishable and
+  uncountable — so a mechanical gate can only ever confidently count
+  the reviews it must EXCLUDE. Per-agent identities fix the first
+  clause and leave the second exactly where it is; notesnumber#18/#19
+  (two distinct real bot logins, every mechanical clause passing,
+  countable zero) will still read as two-distinct-reviewers to any
+  counter after identities ship.
 
 ## TOP — one interruption, two settings-page actions (~4 min total)
 RQ-12 and RQ-13 are both "a human in a GitHub settings page for two
