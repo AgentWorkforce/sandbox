@@ -147,12 +147,20 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   current plan, `environment:` must NEVER be attached to that repo's
   workflows — a referenced environment auto-creates unprotected, and
   there it would be permanent, not a sequencing step.
-- cost of deferral, measured (cmo + head-of-experiments, 2026-08-02):
-  eleven open PRs across two portfolios at zero merges, with reviewer
-  supply the binding constraint. Chief's counting ruling (bot review
-  bodies count as the second leg) relieves roughly half; the rest is
-  this decision. A co-signed supply board is being produced as one
-  artifact.
+- cost of deferral, CORRECTED (cmo retraction, 2026-08-02): the earlier
+  "reviewer supply is the binding constraint" was inference — measured,
+  capacity existed (four cross-portfolio review asks accepted in twenty
+  minutes); what was missing was permission to reach across portfolios,
+  fixed by one ruling at no cost. The measured binding constraints on
+  the ~16 open / 0 merged state are: (1) head churn — six review
+  objects destroyed in ninety minutes by two *correct* fixes, only
+  controlled by the pre-push-notice convention; (2) scope — nothing
+  records what a review looked at (relayfile#390 reads 2/2 at head
+  while the wider coverage died with earlier heads); (3) the silent
+  author==requestee request drop. The identity decision here fixes (3)
+  outright and makes (1)/(2) auditable. A three-portfolio board (with
+  RQ-14's tiered load applied, not the raw count) is incoming from
+  head-of-ecosystem.
 - the sharpest form of the problem (cso via cpo, 2026-08-02): under one
   shared login, "zero valid reviews at head" is measurable by exclusion,
   but "two valid reviews from distinct agents" is attested, never
