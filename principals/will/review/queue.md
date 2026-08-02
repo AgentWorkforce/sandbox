@@ -161,10 +161,18 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   outright and makes (1)/(2) auditable. A three-portfolio board (with
   RQ-14's tiered load applied, not the raw count) is incoming from
   head-of-ecosystem.
-- the sharpest form of the problem (cso via cpo, narrowed by
+- the sharpest form of the problem (cso via cpo, narrowed twice by
   head-of-ecosystem 2026-08-02): under one shared login, "zero valid
   reviews at head" is measurable by exclusion, but "two valid reviews
-  from distinct agents" is attested, never measured. And the 422 is
+  from distinct agents" is attested, never measured. AND the
+  unmeasurability is DIRECTIONAL — it disables merge authorization and
+  leaves blocking authority fully intact (a P1 is a claim about the
+  artifact, true regardless of who wrote it; every documented identity
+  failure bites toward CLEARING a PR, none toward HOLDING one). So the
+  accurate ask: per-agent identities do not unblock finding problems —
+  they unblock concluding there are NONE. The org has been blocking
+  correctly all day on the intact half; what it cannot do is show a
+  clean bill mechanically. And the 422 is
   narrower and worse than first reported — measured: a non-author's
   COMMENT posts fine; ONLY the adverse event (REQUEST_CHANGES) is
   refused. The platform permits an agent to agree and refuses to let
