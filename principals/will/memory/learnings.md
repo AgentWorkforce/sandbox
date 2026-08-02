@@ -142,7 +142,15 @@ Distilled from six months of session history
   correction, same day: it truncates silently at 100, and works on a
   96-object PR for exactly the reason that makes a half-fix look
   right). Known-positive: compare `length` at default vs paginated —
-  if they differ you were reading a page, not a set. Corollary: caret-ranged
+  if they differ you were reading a page, not a set. Zero-command
+  detector (cso): a count landing exactly on a page size (30, 100) is
+  itself the truncation signature — quoting the page size as a finding.
+  Truncation is the worst instrument costume because it returns DATA:
+  plausible, well-formed, partially correct, nothing saying there is
+  more. Symmetric guard (cpo): a retraction scoped wider than the error
+  erases findings that were never in question — the same defect as a
+  finding scoped wider than its evidence, pointing the other way.
+  Corollary: caret-ranged
   deps make exposure a property of each install, not of the release —
   pin exactly where a security boundary crosses packages (for
   reproducibility; a pin among all-leaking versions mitigates nothing).
