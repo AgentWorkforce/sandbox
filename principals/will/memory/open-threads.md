@@ -19,11 +19,19 @@
   counterpoint: the 07-31→08-02 outage was a REAL BROKER_DOWN×15 —
   detection worked, but **paging failed while chief was down** (06:13Z
   page `ok:false`; the only page target was itself a casualty), so
-  kickstart stayed manual for ~42h. Two fixes on record: (1) node plists
-  get `KeepAlive` (SuccessfulExit=false + throttle) via install.mjs —
-  chief-repo PR queued; (2) the watchdog needs a chief-independent
-  escalation path (macOS notification / push to Will) when the page
-  target is down. Root cause of the outage itself — DNS outage →
+  kickstart stayed manual for ~42h. Two fixes on record: (1) KeepAlive —
+  **chief#5 open** (extracted plist emitter, resident jobs get
+  `{SuccessfulExit:false}` + ThrottleInterval 30; needs two reviews).
+  Scope limit found during the work: chief's installer only generates
+  the 2 chief plists — the other ~13 `com.agentworkforce.<repo>.node`
+  plists in `~/Library/LaunchAgents` have NO generator in any repo,
+  are RunAtLoad-only, and need the same two keys edited in place plus a
+  rolling reload at the next natural fleet boundary (bundle with the
+  scheduled periodic workspace refresh). Same boundary: boot out the
+  orphaned `com.agentworkforce.chief.restart` job — it exec's a dead
+  session-scoped scratchpad script (hence exit 127), no repo source.
+  (2) the watchdog needs a chief-independent escalation path (macOS
+  notification / push to Will) when the page target is down. Root cause of the outage itself — DNS outage →
   Relaycast registration transport error treated as fatal by
   `connect_relay` (the PostHog ENOTFOUND stack is a secondary symptom) —
   filed as **relay#1416** 2026-08-02 with node self-recovery and the
