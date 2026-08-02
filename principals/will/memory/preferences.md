@@ -94,7 +94,13 @@ session; don't restate it. Chief-specific emphases:
   agent review or a distinct-login bot's review OBJECT at the same head,
   body read and body-authoritative, check rollup ignored. Two bots
   never suffice; the agent leg is mandatory. Bots-count-zero was drift
-  that manufactured reviewer scarcity. A review is confirmed only by
+  that manufactured reviewer scarcity. Explicit exclusion
+  (head-of-experiments, 2026-08-02, from reading the bodies): a
+  non-empty body is not a verdict — boilerplate with no stated verdict
+  is not a leg, and a bot leg counts only for what its body actually
+  concludes (notesnumber#18's "no issues" = valid second leg;
+  #19's "3 issues" = blocking, not one-agent-away; identical on every
+  mechanical property). A review is confirmed only by
   reading its object back via REST at the named ref — because heads
   move under reviews, not because exit codes lie (cpo's exit-0-posts-
   nothing claim was retracted 2026-08-02: the probe HAD posted; the
