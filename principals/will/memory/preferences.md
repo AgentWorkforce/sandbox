@@ -80,7 +80,14 @@ session; don't restate it. Chief-specific emphases:
   Structural gap: agents share one gh identity, so GitHub-enforced
   required-reviews can't distinguish them — process-enforced until
   distinct reviewer identities exist (kjgbot/Miya precedent in cloud;
-  follow-up with Will).
+  follow-up with Will). Chief's implementation ruling (2026-08-02): the
+  shared identity also forces every reviewer's severity to record as
+  COMMENT (GitHub 422s REQUEST_CHANGES on your own PR), so a review
+  counts iff it is (a) an object at the exact current head, (b)
+  seat-attributed in the body, (c) with a verdict stated in the body
+  text — and the body verdict is authoritative over the GitHub state.
+  A body that says blocking findings blocks. Review requests travel
+  over Relay DMs; GitHub silently drops author==requestee requests.
 - **Relay keys are low-sensitivity by design:**
   workspace keys/agent tokens exposed in transcripts are not incidents —
   "fairly benign; we'll spin up new workspaces every once in a while."
