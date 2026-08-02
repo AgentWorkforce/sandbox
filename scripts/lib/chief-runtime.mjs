@@ -20,11 +20,20 @@ export const REPO_ROOT = resolve(LIB_DIR, "../..");
  * the senses least-privilege declaration — now lives in the roster itself.
  */
 export const TEAMS_PATH = join(REPO_ROOT, "teams.json");
+export const LEGACY_CONFIG_PATH = join(REPO_ROOT, "chief.config.json");
 
 /** Constants, not choices: nobody configures these differently. */
 const SENSES_LOCAL_DIR = "senses";
 const SENSES_REFRESH_BEFORE_SECONDS = 600;
 const CHIEF_ROLE = "chief of staff";
+export const DEFAULT_RECIPES = Object.freeze({
+  default: "single",
+  labels: Object.freeze({
+    single: "agent:single",
+    workflow: "agent:workflow",
+    team: "agent:team",
+  }),
+});
 
 function assertRelativeRepoPath(value, label) {
   if (typeof value !== "string" || value.length === 0) {
@@ -44,15 +53,86 @@ function assertRelativeRepoPath(value, label) {
  * `agent-relay workspace active`, and the Factory dispatch contract comes from
  * `factory.config.json`.
  */
-export function deriveConfig(roster) {
-  const slug = roster?.principal?.slug;
+function principalSlugFromBrainRoot(brainRoot) {
+  if (typeof brainRoot !== "string") return null;
+  const match = /^principals\/([a-z0-9][a-z0-9-]*)$/u.exec(brainRoot);
+  return match?.[1] ?? null;
+}
+
+function recipesFromLegacyConfig(legacyConfig) {
+  const factory = legacyConfig?.work?.factory;
+  if (!factory) return DEFAULT_RECIPES;
+  return {
+    default: factory.defaultRecipe,
+    labels: factory.recipeLabels,
+  };
+}
+
+/**
+ * Convert the v1 two-file configuration into the v2 roster shape without
+ * widening scopes, changing agent names, or changing the selected workspace.
+ * This pure function is shared by the compatibility reader and the explicit
+ * migration command.
+ */
+export function migrateLegacyRoster(roster, legacyConfig) {
+  if (roster?.principal) return roster;
+  if (!legacyConfig) {
+    throw new Error(
+      `Legacy teams.json requires ${LEGACY_CONFIG_PATH}. Keep both files in ` +
+      "place or run `npm run config:migrate -- --write` before upgrading.",
+    );
+  }
+  const principalSlug = principalSlugFromBrainRoot(legacyConfig.brainRoot);
+  if (!principalSlug) {
+    throw new Error(
+      "Legacy brainRoot must have the form principals/<principal-slug> before migration",
+    );
+  }
+  const chief = roster?.agents?.find(
+    (agent) => agent.name === legacyConfig?.agent?.name,
+  ) ?? roster?.agents?.find((agent) => agent.role === CHIEF_ROLE);
+  if (!chief) {
+    throw new Error(
+      `Legacy roster does not contain resident Chief ${legacyConfig?.agent?.name ?? ""}`.trim(),
+    );
+  }
+  return {
+    $schema: "./schemas/chief-team.schema.json",
+    principal: {
+      slug: principalSlug,
+      ...legacyConfig.principal,
+    },
+    senses: {
+      remotePaths: legacyConfig.senses?.remotePaths,
+      scopes: legacyConfig.senses?.scopes,
+    },
+    recipes: recipesFromLegacyConfig(legacyConfig),
+    workspace: {
+      name: legacyConfig.workspace?.name,
+      requireUnifiedDataPlaneId:
+        legacyConfig.workspace?.requireUnifiedDataPlaneId ?? true,
+    },
+    team: roster.team,
+    autoSpawn: roster.autoSpawn,
+    agents: roster.agents,
+  };
+}
+
+export function deriveConfig(roster, { legacyConfig = null } = {}) {
+  const legacy = !roster?.principal;
+  const normalizedRoster = migrateLegacyRoster(roster, legacyConfig);
+  const workspacePolicy = legacyConfig?.workspace ?? normalizedRoster?.workspace;
+  const slug = normalizedRoster?.principal?.slug;
   if (typeof slug !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(slug)) {
     throw new Error(
       "principal.slug must be a lowercase identifier; it names the brain " +
       "directory under principals/",
     );
   }
-  const chief = roster.agents?.find((agent) => agent.role === CHIEF_ROLE);
+  const configuredAgentName = legacyConfig?.agent?.name;
+  const chief = normalizedRoster.agents?.find(
+    (agent) => configuredAgentName && agent.name === configuredAgentName,
+  ) ?? normalizedRoster.agents?.find((agent) => agent.role === CHIEF_ROLE);
   if (!chief?.name) {
     throw new Error(
       `The roster has no agent with role "${CHIEF_ROLE}", so there is no ` +
@@ -60,17 +140,32 @@ export function deriveConfig(roster) {
     );
   }
   return validateConfig({
-    principal: { slug, ...roster.principal },
-    agent: { name: chief.name, displayName: "Chief" },
-    brainRoot: `principals/${slug}`,
-    senses: {
-      localDir: SENSES_LOCAL_DIR,
-      refreshBeforeSeconds: SENSES_REFRESH_BEFORE_SECONDS,
-      remotePaths: roster?.senses?.remotePaths,
-      scopes: roster?.senses?.scopes,
+    principal: { slug, ...normalizedRoster.principal },
+    agent: {
+      name: chief.name,
+      displayName: legacyConfig?.agent?.displayName ?? "Chief",
     },
-    recipes: roster?.recipes,
-    roster,
+    brainRoot: legacyConfig?.brainRoot ?? `principals/${slug}`,
+    workspace: workspacePolicy
+      ? {
+          expectedName: workspacePolicy.name ?? null,
+          requireUnifiedDataPlaneId:
+            workspacePolicy.requireUnifiedDataPlaneId ?? true,
+        }
+      : {
+          expectedName: null,
+          requireUnifiedDataPlaneId: true,
+        },
+    senses: {
+      localDir: legacyConfig?.senses?.localDir ?? SENSES_LOCAL_DIR,
+      refreshBeforeSeconds:
+        legacyConfig?.senses?.refreshBeforeSeconds ?? SENSES_REFRESH_BEFORE_SECONDS,
+      remotePaths: normalizedRoster?.senses?.remotePaths,
+      scopes: normalizedRoster?.senses?.scopes,
+    },
+    recipes: normalizedRoster?.recipes,
+    roster: normalizedRoster,
+    configVersion: legacy ? 1 : 2,
   });
 }
 
@@ -116,15 +211,22 @@ export function validateConfig(config) {
   return config;
 }
 
-export function loadConfig() {
-  if (!existsSync(TEAMS_PATH)) {
+export function loadConfig({
+  teamsPath = TEAMS_PATH,
+  legacyConfigPath = LEGACY_CONFIG_PATH,
+} = {}) {
+  if (!existsSync(teamsPath)) {
     throw new Error(
-      `No active roster at ${TEAMS_PATH}. Copy the committed variant for this ` +
+      `No active roster at ${teamsPath}. Copy the committed variant for this ` +
       "machine's principal, e.g. `cp teams.khaliq.json teams.json`, or run " +
       "`npm run setup`.",
     );
   }
-  return deriveConfig(JSON.parse(readFileSync(TEAMS_PATH, "utf8")));
+  const roster = JSON.parse(readFileSync(teamsPath, "utf8"));
+  const legacyConfig = !roster?.principal && existsSync(legacyConfigPath)
+    ? JSON.parse(readFileSync(legacyConfigPath, "utf8"))
+    : null;
+  return deriveConfig(roster, { legacyConfig });
 }
 
 export function execJson(command, args) {
@@ -139,12 +241,13 @@ export function execJson(command, args) {
 /**
  * The canonical workspace, as agent-relay resolves it machine-globally.
  *
- * Chief does not pin a workspace name. agent-relay owns which workspace is
+ * A v2 Chief does not pin a workspace name. agent-relay owns which workspace is
  * canonical for this machine, and Chief asserting a second name was the same
  * duplicated-authority pattern that produced AR-448 — a start with no project
  * pin fell through to minting a fresh workspace. What Chief still enforces is
  * the invariant it genuinely cares about: one `rw_` identity across Relaycast,
- * Relayfile, and RelayAuth.
+ * Relayfile, and RelayAuth. A migrated v1 roster can temporarily preserve its
+ * explicit workspace policy so an upgrade does not change behavior.
  */
 export function activeWorkspace(config) {
   const workspace = execJson("agent-relay", ["workspace", "active", "--json"]);
@@ -159,6 +262,14 @@ export function activeWorkspace(config) {
 }
 
 export function assertWorkspaceConvergence(workspace, config) {
+  const expectedName = config?.workspace?.expectedName;
+  if (expectedName && workspace?.name !== expectedName) {
+    throw new Error(
+      `Chief expects Agent Relay workspace "${expectedName}", but ` +
+      `"${workspace?.name ?? "none"}" is active. Run: ` +
+      `agent-relay workspace switch ${expectedName}`,
+    );
+  }
   const ids = {
     relaycast: workspace.relaycastWorkspaceId,
     relayfile: workspace.relayfileWorkspaceId,
@@ -170,9 +281,13 @@ export function assertWorkspaceConvergence(workspace, config) {
   if (missing.length > 0) {
     throw new Error(`Workspace is missing ${missing.join(", ")} identity`);
   }
-  // Always enforced. A single data-plane identity is an invariant of a working
-  // Chief, not a per-principal preference — nothing would ever set it false.
-  if (new Set(Object.values(ids)).size !== 1) {
+  // v2 rosters enforce one durable data-plane identity. During the one-release
+  // compatibility window, a v1 config keeps its explicit setting so pulling
+  // this change cannot take Will's existing Chief offline.
+  if (
+    config?.workspace?.requireUnifiedDataPlaneId !== false &&
+    new Set(Object.values(ids)).size !== 1
+  ) {
     throw new Error(
       "Workspace convergence invariant failed: Relaycast, Relayfile, and " +
       `RelayAuth resolve to different identities (${JSON.stringify(ids)})`,

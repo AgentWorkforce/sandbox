@@ -103,6 +103,24 @@
       },
       "additionalProperties": false
     },
+    "workspace": {
+      "type": "object",
+      "description": "Optional v1 compatibility policy. New installations let Agent Relay own the active workspace and require converged data-plane IDs.",
+      "required": [
+        "name",
+        "requireUnifiedDataPlaneId"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requireUnifiedDataPlaneId": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "team": {
       "type": "string",
       "minLength": 1

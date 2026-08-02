@@ -102,6 +102,23 @@
   }
   .card.principal .title { color: color-mix(in srgb, var(--bg) 62%, transparent); }
 
+  .execution-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px;
+  }
+  .execution-card {
+    align-items: flex-start;
+    min-height: 120px;
+  }
+  .execution-card .id { display: grid; gap: 5px; }
+  .execution-detail { color: var(--muted); font-size: 12px; }
+  .capabilities { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+  .capability {
+    padding: 2px 6px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); font-size: 10.5px;
+  }
+
   button.view {
     flex: none;
     font: inherit; font-size: 12.5px; font-weight: 550;
@@ -382,6 +399,7 @@
     <p class="sub">Live node health across the workforce. Click <strong>View</strong> to open a terminal attached to an agent.</p>
     <nav class="tabs">
       <button class="tab active" id="tabOrg" type="button">Org</button>
+      <button class="tab" id="tabExecution" type="button">Execution</button>
       <button class="tab" id="tabProjects" type="button">Projects</button>
       <button class="tab" id="tabReview" type="button">Review<span class="badge" id="reviewBadge" hidden>0</span></button>
     </nav>
@@ -398,6 +416,11 @@
     <ul class="tree" id="tree"></ul>
 
     <footer>View is read-only · Drive takes the wheel (your keystrokes go to the agent) · <code>Ctrl+]</code> detaches; queued messages flush on detach</footer>
+  </section>
+
+  <section id="executionView" hidden>
+    <p class="sub" style="margin: 0 0 14px">Cloud and enrolled machines are execution capacity. They run agents but do not sit in the reporting hierarchy.</p>
+    <div class="execution-grid" id="execution"></div>
   </section>
 
   <section id="projectsView" hidden>
@@ -438,10 +461,13 @@
 const NOT_ATTACHABLE = new Set(['unseated', 'pending-spawn']);
 let org = null;
 let status = {};
+let executionLayers = [];
 
 function dotClass(agent) {
   if (agent.status === 'unseated') return 'none';
   if (agent.status === 'parked' || agent.status === 'pending-spawn') return 'hold';
+  if (agent.live === true) return 'up';
+  if (agent.live === false) return '';
   return status[agent.repo]?.up ? 'up' : '';
 }
 
@@ -449,6 +475,9 @@ function metaText(agent) {
   if (agent.status === 'unseated') return 'unseated';
   if (agent.status === 'pending-spawn') return 'pending spawn';
   if (agent.status === 'parked') return 'parked';
+  if (agent.live === true) {
+    return [agent.currentState || 'online', agent.runtime].filter(Boolean).join(' · ');
+  }
   const s = status[agent.repo];
   if (!s) return '';
   if (!s.up) return 'down';
@@ -478,7 +507,7 @@ function card(agent, extraClass) {
   meta.dataset.metaFor = agent.name;
   meta.textContent = metaText(agent);
 
-  const disabled = NOT_ATTACHABLE.has(agent.status);
+  const disabled = agent.attachable === false || NOT_ATTACHABLE.has(agent.status);
   const disabledTitle = disabled ? `${agent.name} is ${agent.status.replace('-', ' ')}` : '';
 
   const viewBtn = document.createElement('button');
@@ -549,6 +578,46 @@ function render() {
   tree.append(root);
 }
 
+function executionCard(layer) {
+  const el = document.createElement('div');
+  el.className = 'card execution-card';
+
+  const dot = document.createElement('span');
+  dot.className = `dot ${layer.live ? 'up' : ''}`;
+
+  const id = document.createElement('div');
+  id.className = 'id';
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = layer.name;
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = layer.title;
+  const detail = document.createElement('div');
+  detail.className = 'execution-detail';
+  if (layer.kind === 'cloud') {
+    detail.textContent = layer.detail || layer.status;
+  } else {
+    const agentCount = `${layer.activeAgents || 0} active agent${layer.activeAgents === 1 ? '' : 's'}`;
+    detail.textContent = [layer.status, agentCount, layer.version].filter(Boolean).join(' · ');
+  }
+  const capabilities = document.createElement('div');
+  capabilities.className = 'capabilities';
+  for (const value of [...(layer.tags || []), ...(layer.capabilities || [])]) {
+    const chip = document.createElement('span');
+    chip.className = 'capability';
+    chip.textContent = value;
+    capabilities.append(chip);
+  }
+  id.append(name, title, detail, capabilities);
+  el.append(dot, id);
+  return el;
+}
+
+function renderExecution() {
+  document.getElementById('execution').replaceChildren(...executionLayers.map(executionCard));
+}
+
 // querySelectorAll, not querySelector: an agent can appear both in the Org
 // tree and in a project's Agents section at once, and both copies need to
 // stay in sync with live status.
@@ -593,8 +662,16 @@ async function attach(name, mode, btn) {
 
 async function poll() {
   try {
-    status = await (await fetch('/api/status')).json();
-    refreshDots();
+    const [runtimeResponse, statusResponse] = await Promise.all([
+      fetch('/api/runtime'),
+      fetch('/api/status'),
+    ]);
+    const runtime = await runtimeResponse.json();
+    status = await statusResponse.json();
+    org = runtime.org;
+    executionLayers = runtime.executionLayers || [];
+    render();
+    renderExecution();
   } catch { /* keep the last known state on a transient failure */ }
 }
 
@@ -1233,9 +1310,11 @@ let currentTab = 'org';
 function showTab(tab) {
   currentTab = tab;
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
+  document.getElementById('tabExecution').classList.toggle('active', tab === 'execution');
   document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
   document.getElementById('tabReview').classList.toggle('active', tab === 'review');
   document.getElementById('orgView').hidden = tab !== 'org';
+  document.getElementById('executionView').hidden = tab !== 'execution';
   document.getElementById('projectsView').hidden = tab !== 'projects';
   document.getElementById('reviewView').hidden = tab !== 'review';
   if (tab === 'projects') loadProjects();
@@ -1243,6 +1322,7 @@ function showTab(tab) {
 }
 
 document.getElementById('tabOrg').addEventListener('click', () => navigate('/org'));
+document.getElementById('tabExecution').addEventListener('click', () => navigate('/execution'));
 document.getElementById('tabProjects').addEventListener('click', () => navigate(buildProjectsHash()));
 document.getElementById('tabReview').addEventListener('click', () => navigate('/review'));
 document.getElementById('sortActivity').addEventListener('click', () => setProjectSort('activity'));
@@ -1311,6 +1391,7 @@ function buildProjectsHash() {
 
 function canonicalHash() {
   if (currentTab === 'review') return '/review';
+  if (currentTab === 'execution') return '/execution';
   if (currentTab === 'projects') return buildProjectsHash();
   return '/org';
 }
@@ -1338,6 +1419,9 @@ function applyRoute() {
   if (section === 'review') {
     selectedProject = null;
     showTab('review');
+  } else if (section === 'execution') {
+    selectedProject = null;
+    showTab('execution');
   } else if (section === 'projects') {
     const view = params.get('view');
     if (VIEW_MODES.has(view)) projectView = view;
@@ -1355,8 +1439,6 @@ function applyRoute() {
 }
 
 (async () => {
-  org = await (await fetch('/org.json')).json();
-  render();
   await poll();
   setInterval(poll, 10000);
   // Prime Projects and Review regardless of which tab the hash lands on —

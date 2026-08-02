@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   TEAMS_PATH,
+  LEGACY_CONFIG_PATH,
   REPO_ROOT,
   activeWorkspace,
   cloudRequest,
@@ -21,6 +22,7 @@ import {
   execJson,
   publicWorkspace,
   deriveConfig,
+  migrateLegacyRoster,
 } from "./lib/chief-runtime.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -60,7 +62,13 @@ function readExistingConfig() {
   // Prefer the active roster; fall back to the committed variant so a rerun on
   // a fresh machine keeps the principal's existing choices.
   for (const path of [TEAMS_PATH, ...variantRosters()]) {
-    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8"));
+    if (!existsSync(path)) continue;
+    const roster = JSON.parse(readFileSync(path, "utf8"));
+    if (roster?.principal) return roster;
+    const legacyConfig = existsSync(LEGACY_CONFIG_PATH)
+      ? JSON.parse(readFileSync(LEGACY_CONFIG_PATH, "utf8"))
+      : null;
+    return migrateLegacyRoster(roster, legacyConfig);
   }
   return null;
 }
@@ -69,6 +77,15 @@ function variantRosters() {
   return readdirSync(REPO_ROOT)
     .filter((name) => /^teams\.[a-z0-9-]+\.json$/u.test(name))
     .map((name) => join(REPO_ROOT, name));
+}
+
+function integrationProviders(roster) {
+  const providers = new Set();
+  for (const remotePath of roster?.senses?.remotePaths ?? []) {
+    const provider = /^\/([a-z0-9-]+)(?:\/|$)/u.exec(remotePath)?.[1];
+    if (provider && provider !== "digests") providers.add(provider);
+  }
+  return [...providers];
 }
 
 function writeJsonAtomic(path, value) {
@@ -269,6 +286,10 @@ try {
         team: "agent:team",
       },
     },
+    // Present only while preserving a v1 deployment's explicit behavior.
+    // New installs leave workspace selection to Agent Relay and require
+    // converged data-plane IDs in deriveConfig().
+    ...(existing?.workspace ? { workspace: existing.workspace } : {}),
     team: existing?.team ?? `chief-${profileSlug}`,
     autoSpawn: existing?.autoSpawn ?? true,
     agents: existing?.agents ?? [{
@@ -294,7 +315,7 @@ try {
   console.log(JSON.stringify(publicWorkspace(workspace), null, 2));
 
   step(4, "Human and agent work systems");
-  await ensureIntegrations(session, workspace, ["linear", "github"]);
+  await ensureIntegrations(session, workspace, integrationProviders(roster));
   run(process.execPath, [join(REPO_ROOT, "scripts/factory-control.mjs"), "bootstrap"]);
   console.log("✓ Factory readiness gate and hosted brain verified");
 

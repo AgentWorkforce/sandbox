@@ -4,10 +4,11 @@
 // Localhost only, no dependencies.
 import { createServer } from 'node:http';
 import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join } from 'node:path';
+import { loadConfig } from '../../scripts/lib/chief-runtime.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1';
@@ -15,11 +16,9 @@ const PORT = 4780;
 
 // Read-only: this server never writes outside its own directory.
 const REPO_ROOT = join(HERE, '..', '..');
-const BRAIN_ROOT = join(
-  REPO_ROOT,
-  `principals/${JSON.parse(readFileSync(join(REPO_ROOT, 'teams.json'), 'utf8')).principal.slug}`,
-);
-const WORKSTREAMS_DIR = join(BRAIN_ROOT, 'workstreams');
+const activeTeam = () => loadConfig().roster;
+const brainRoot = () => join(REPO_ROOT, `principals/${activeTeam().principal.slug}`);
+const workstreamsDir = () => join(brainRoot(), 'workstreams');
 const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };
 
 // Sibling repos referenced by workstream frontmatter `repos:` live one level
@@ -32,16 +31,29 @@ const GIT_LOG_DELIM = '\x1f';
 // it and relays verdict clicks back to chief as a DM — it never edits the
 // file directly.
 const CHIEF_REPO = join(HERE, '..', '..');
-const REVIEW_QUEUE_PATH = join(BRAIN_ROOT, 'review', 'queue.md');
 const REVIEW_CACHE_TTL_MS = 30_000;
 const REVIEW_STATE_DIR = join(HERE, '.state');
 const REVIEW_STATE_FILE = join(REVIEW_STATE_DIR, 'review-seen.json');
 const REVIEW_VERDICTS = new Set(['approve', 'reject', 'discuss']);
 
-// Terminal.app inherits a minimal env, so the attach command carries its own
-// PATH — the agent-relay shim is a node script and needs node beside it.
-const RELAY_BIN_DIR = '/Users/will/.nvm/versions/node/v22.22.2/bin';
-const RELAY_BIN = join(RELAY_BIN_DIR, 'agent-relay');
+// Terminal.app inherits a minimal env, so resolve the active agent-relay shim
+// once and carry both its directory and the current node binary directory into
+// attach shells. AGENT_RELAY_BIN remains an explicit operator override.
+function resolveRelayBin() {
+  if (process.env.AGENT_RELAY_BIN) return process.env.AGENT_RELAY_BIN;
+  try {
+    return execFileSync('/usr/bin/which', ['agent-relay'], {
+      encoding: 'utf8',
+      env: process.env,
+    }).trim();
+  } catch {
+    return 'agent-relay';
+  }
+}
+
+const RELAY_BIN = resolveRelayBin();
+const RELAY_BIN_DIR = dirname(RELAY_BIN);
+const NODE_BIN_DIR = dirname(process.execPath);
 const GHOSTTY_APP = '/Applications/Ghostty.app';
 
 const NOT_ATTACHABLE = {
@@ -49,8 +61,207 @@ const NOT_ATTACHABLE = {
   'pending-spawn': 'has not been spawned yet — spawn it before attaching.',
 };
 
+const RUNTIME_CACHE_TTL_MS = 5_000;
+let runtimeCache = null;
+
+function slugify(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+// Agent Relay may append a human update notice after its JSON payload. Parse
+// the first complete JSON object/array instead of assuming stdout is only JSON.
+function parseFirstJson(text) {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '{' && text[start] !== '[') continue;
+    const stack = [];
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') {
+        quoted = true;
+        continue;
+      }
+      if (char === '{' || char === '[') stack.push(char);
+      else if (char === '}' || char === ']') {
+        const expected = char === '}' ? '{' : '[';
+        if (stack.pop() !== expected) break;
+        if (stack.length === 0) {
+          try {
+            return JSON.parse(text.slice(start, index + 1));
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  throw new Error('Agent Relay command did not return JSON');
+}
+
+function overlayMatchesPrincipal(overlay, principal) {
+  if (!overlay?.principal) return false;
+  const overlaySlug = overlay.principal.slug || slugify(overlay.principal.name);
+  return overlaySlug === principal.slug;
+}
+
+function inferLiveTitle(agent) {
+  if (agent.name?.toLowerCase().includes('chief')) return 'Chief of Staff';
+  if (agent.team) return `${agent.team} agent`;
+  return `${agent.cli || agent.runtime || 'Relay'} agent`;
+}
+
+function buildRuntimeOrg(config, overlay, liveAgents = []) {
+  const principal = { ...config.principal };
+  const declared = new Map();
+
+  // org.json is now an optional, same-principal hierarchy overlay. It keeps
+  // Will's richer department tree when Will's roster is active, but can never
+  // replace the principal selected by teams.json.
+  if (overlayMatchesPrincipal(overlay, principal)) {
+    for (const agent of overlay.agents ?? []) {
+      const reportsTo = agent.reportsTo === overlay.principal.name
+        ? principal.name
+        : agent.reportsTo;
+      declared.set(agent.name, {
+        ...agent,
+        reportsTo: reportsTo || principal.name,
+        source: 'org-overlay',
+      });
+    }
+  }
+
+  const rosterChief = config.agents.find((agent) => agent.role === 'chief of staff')?.name;
+  const liveChief = liveAgents.find((agent) => agent.name === rosterChief)?.name
+    || liveAgents.find((agent) => agent.name?.toLowerCase().includes('chief'))?.name;
+  for (const agent of config.agents) {
+    const current = declared.get(agent.name) ?? {};
+    declared.set(agent.name, {
+      ...current,
+      name: agent.name,
+      title: agent.title || current.title || agent.role,
+      reportsTo: agent.reportsTo || current.reportsTo || principal.name,
+      repo: agent.repo || current.repo || REPO_ROOT,
+      status: current.status === 'unseated' ? 'unseated' : 'pending-spawn',
+      attachable: false,
+      source: 'teams.json',
+    });
+  }
+
+  for (const live of liveAgents) {
+    const current = declared.get(live.name) ?? {};
+    const looksLikeChief = live.name?.toLowerCase().includes('chief');
+    declared.set(live.name, {
+      ...current,
+      name: live.name,
+      title: current.title || inferLiveTitle(live),
+      reportsTo: current.reportsTo || (looksLikeChief ? principal.name : liveChief || rosterChief || principal.name),
+      repo: current.repo || REPO_ROOT,
+      status: 'resident',
+      attachable: true,
+      live: true,
+      currentState: live.current_state || 'online',
+      lastActivityMs: live.last_activity_ms ?? null,
+      cli: live.cli ?? null,
+      runtime: live.runtime_kind || live.runtime || null,
+      source: current.source ? `${current.source}+live` : 'live-broker',
+    });
+  }
+
+  return { principal, agents: [...declared.values()] };
+}
+
+function executionLayersFromFleet(fleet, error = null) {
+  const cloudOnline = !error;
+  const layers = [{
+    id: 'agent-relay-cloud',
+    name: 'Agent Relay Cloud',
+    title: 'Hosted workflows and Factory execution',
+    kind: 'cloud',
+    status: cloudOnline ? 'online' : 'unavailable',
+    live: cloudOnline,
+    capabilities: ['factory:control-plane', 'workflow:hosted'],
+    detail: error ? error.message : 'Workspace control plane reachable',
+  }];
+
+  for (const node of fleet?.nodes ?? []) {
+    layers.push({
+      id: node.id,
+      name: node.name,
+      title: 'Fleet execution node',
+      kind: 'fleet-node',
+      status: node.status,
+      live: node.live === true && node.status === 'online',
+      capabilities: (node.capabilities ?? []).map((capability) => capability.name),
+      tags: node.tags ?? [],
+      activeAgents: node.activeAgents ?? 0,
+      maxAgents: node.maxAgents ?? 0,
+      handlersLive: node.handlersLive === true,
+      version: node.version ?? '',
+      lastHeartbeatAt: node.lastHeartbeatAt ?? null,
+    });
+  }
+  return layers;
+}
+
+function capture(bin, args) {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, {
+      cwd: REPO_ROOT,
+      env: childEnv(),
+      timeout: 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr?.trim() || err.message));
+      else resolve(stdout);
+    });
+  });
+}
+
+async function readOrgOverlay() {
+  try {
+    return JSON.parse(await readFile(join(HERE, 'org.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function loadRuntime() {
+  const now = Date.now();
+  if (runtimeCache && runtimeCache.expires > now) return runtimeCache.promise;
+  const promise = (async () => {
+    const config = activeTeam();
+    const [overlay, localResult, fleetResult] = await Promise.all([
+      readOrgOverlay(),
+      capture(RELAY_BIN, ['node', 'agent', 'list'])
+        .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
+        .catch((error) => ({ value: [], error })),
+      capture(RELAY_BIN, ['fleet', 'nodes'])
+        .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
+        .catch((error) => ({ value: { nodes: [] }, error })),
+    ]);
+    return {
+      org: buildRuntimeOrg(config, overlay, Array.isArray(localResult.value) ? localResult.value : []),
+      executionLayers: executionLayersFromFleet(fleetResult.value, fleetResult.error),
+      warnings: [localResult.error, fleetResult.error].filter(Boolean).map((error) => error.message),
+    };
+  })();
+  runtimeCache = { expires: now + RUNTIME_CACHE_TTL_MS, promise };
+  return promise;
+}
+
 async function loadOrg() {
-  return JSON.parse(await readFile(join(HERE, 'org.json'), 'utf8'));
+  return (await loadRuntime()).org;
 }
 
 // Splits a workstream file into its frontmatter (status/owner/updated/repos)
@@ -215,9 +426,10 @@ function matchAgents(repos, owner, agents) {
 }
 
 async function loadProjects(agents) {
-  const files = (await readdir(WORKSTREAMS_DIR)).filter((f) => f.endsWith('.md')).sort();
+  const directory = workstreamsDir();
+  const files = (await readdir(directory)).filter((f) => f.endsWith('.md')).sort();
   const projects = await Promise.all(files.map(async (file) => {
-    const raw = await readFile(join(WORKSTREAMS_DIR, file), 'utf8');
+    const raw = await readFile(join(directory, file), 'utf8');
     const { meta, body } = parseFrontmatter(raw);
     const goal = extractField(body, 'Goal');
     const repos = meta.repos ?? [];
@@ -390,7 +602,7 @@ async function loadReviewQueue() {
   const promise = (async () => {
     let raw;
     try {
-      raw = await readFile(REVIEW_QUEUE_PATH, 'utf8');
+      raw = await readFile(join(brainRoot(), 'review', 'queue.md'), 'utf8');
     } catch {
       return [];
     }
@@ -423,10 +635,17 @@ async function sendToChief(text) {
   const conn = await chiefConnection();
   if (!conn) return { ok: false };
   try {
+    const config = activeTeam();
+    const configuredChief = config.agents.find((agent) => agent.role === 'chief of staff')?.name;
+    const runtime = await loadRuntime();
+    const recipient = runtime.org.agents.find((agent) => agent.name === configuredChief && agent.live)?.name
+      || runtime.org.agents.find((agent) => agent.live && agent.title === 'Chief of Staff')?.name
+      || configuredChief;
+    if (!recipient) return { ok: false };
     const res = await fetch(`http://127.0.0.1:${conn.port}/api/send`, {
       method: 'POST',
       headers: { 'X-API-Key': conn.api_key, 'content-type': 'application/json' },
-      body: JSON.stringify({ to: 'chief', from: 'review-dashboard', message: text }),
+      body: JSON.stringify({ to: recipient, from: 'review-dashboard', message: text }),
       signal: AbortSignal.timeout(15000),
     });
     return { ok: res.ok, status: res.status };
@@ -477,7 +696,7 @@ function attachCommand(agent, mode) {
   const attach = `${shellQuote(RELAY_BIN)} node agent attach ${shellQuote(agent.name)}${driveFlag}`;
   return [
     `unset ${CONNECTION_ENV.join(' ')}`,
-    `export PATH=${shellQuote(RELAY_BIN_DIR)}:"$PATH"`,
+    `export PATH=${shellQuote(RELAY_BIN_DIR)}:${shellQuote(NODE_BIN_DIR)}:"$PATH"`,
     `cd ${shellQuote(agent.repo)} || exit 1`,
     // Hold the window open on failure — otherwise it closes before the error is readable.
     `${attach} || { printf '\\n[attach exited %s — press Enter to close]\\n' "$?"; read -r _; }`,
@@ -541,8 +760,15 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/org.json') {
-      const json = await readFile(join(HERE, 'org.json'), 'utf8');
-      return send(res, 200, json);
+      return send(res, 200, await loadOrg());
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/runtime') {
+      return send(res, 200, await loadRuntime());
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/execution') {
+      return send(res, 200, (await loadRuntime()).executionLayers);
     }
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
@@ -570,7 +796,7 @@ const server = createServer(async (req, res) => {
       const items = await loadReviewQueue();
       const item = items.find((i) => i.id === id);
       if (!item) return send(res, 404, { ok: false, error: `Unknown review item: ${id}` });
-      const text = `[review] Will clicked ${verdict.toUpperCase()} on ${item.id}: ${item.title}`;
+      const text = `[review] ${activeTeam().principal.name} clicked ${verdict.toUpperCase()} on ${item.id}: ${item.title}`;
       const result = await sendToChief(text);
       if (!result.ok) return send(res, 502, { ok: false, error: 'Could not reach chief over the broker' });
       return send(res, 200, { ok: true, message: 'Sent to chief — it executes and clears the item' });
@@ -584,6 +810,9 @@ const server = createServer(async (req, res) => {
       const org = await loadOrg();
       const agent = org.agents.find((a) => a.name === name);
       if (!agent) return send(res, 404, { ok: false, error: `Unknown agent: ${name}` });
+      if (agent.attachable === false) {
+        return send(res, 409, { ok: false, error: `${agent.name} is not running on this local broker.` });
+      }
       if (NOT_ATTACHABLE[agent.status]) {
         return send(res, 409, { ok: false, error: `${agent.name} ${NOT_ATTACHABLE[agent.status]}` });
       }
@@ -616,4 +845,10 @@ if (isMain) {
   });
 }
 
-export { parseReviewQueue, handleReviewNotifications };
+export {
+  buildRuntimeOrg,
+  executionLayersFromFleet,
+  handleReviewNotifications,
+  parseFirstJson,
+  parseReviewQueue,
+};
