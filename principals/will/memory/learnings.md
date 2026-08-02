@@ -156,10 +156,14 @@ Distilled from six months of session history
   more. Symmetric guard (cpo): a retraction scoped wider than the error
   erases findings that were never in question — the same defect as a
   finding scoped wider than its evidence, pointing the other way.
-  Corollary: caret-ranged
-  deps make exposure a property of each install, not of the release —
-  pin exactly where a security boundary crosses packages (for
-  reproducibility; a pin among all-leaking versions mitigates nothing).
+  Corollary, in cso's split form (adopted by cpo): a pin records WHICH
+  version you have; it does not make that version safe. Pin regardless
+  — even a known-bad pin beats resolving off PATH, because a version
+  nothing records is a version nobody can reconcile (the 1.0.4-vs-1.0.5
+  "disagreement" resolved only because five of six trees were pinned).
+  Prescribe a version FLOOR only when a clean target exists; among
+  all-leaking versions a floor mitigates nothing and must never be
+  filed as a fix.
 - **Retiring a practice means editing the durable files that prescribe
   it.** A #general announcement reaches only the instances alive to hear
   it; recycled seats re-adopt whatever their durable state still says
