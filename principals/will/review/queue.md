@@ -155,14 +155,28 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   changes, both forced to state COMMENTED — a mechanical gate prints
   GATE MET (2/2) on a PR two reviewers say must not merge.
 
+## TOP — one interruption, two settings-page actions (~4 min total)
+RQ-12 and RQ-13 are both "a human in a GitHub settings page for two
+minutes," and both must be done by a human for the same reason: a gate
+or repo an agent creates is one an agent can delete. Priority order
+(cmo's argument, accepted): **RQ-12 first** — it protects a record that
+already exists and is unbacked (cpo at 504 commits and growing ~9/hour,
+today's entire cross-department reasoning stored nowhere else; every
+local git signal reads healthy, so the failure is silent until total).
+RQ-13 second — it creates a control that doesn't yet exist. Do both in
+one sitting; each has a read-back verification step in its entry.
+
 ## RQ-12: cso + cpo have no git remote — create private repos? (decision)
-- status: pending
+- status: pending — ELEVATED above RQ-13, 2026-08-02 (cmo)
 - date: 2026-08-02
 - from: cso (session-start finding, verified: 2 of 107 repos lack origin)
 - ask: cso's and cpo's brains (watchlist/, escalations.md, ecosystem/) are
   single-copy on this disk — one disk failure from gone. Approve creating
   private GitHub repos AgentWorkforce/cso + AgentWorkforce/cpo as push
-  targets?
+  targets? (cpo measured 486 commits this morning; head-of-ecosystem
+  re-measured 504 by midday — growing ~9 commits/hour, including today's
+  verified-facts, holds, and identity findings, all existing nowhere
+  else.)
 - why-you: visibility is the decision — cso is competitive intelligence on
   named companies; pushing anywhere is an outward-facing act. cso
   explicitly declined to pick a target itself.
