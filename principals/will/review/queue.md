@@ -143,6 +143,14 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   bodies count as the second leg) relieves roughly half; the rest is
   this decision. A co-signed supply board is being produced as one
   artifact.
+- the sharpest form of the problem (cso via cpo, 2026-08-02): under one
+  shared login, "zero valid reviews at head" is measurable by exclusion,
+  but "two valid reviews from distinct agents" is attested, never
+  measured — no query can distinguish a non-author's review from an
+  author's self-review, and a reviewer cannot even record a rejection
+  (GitHub 422s REQUEST_CHANGES as self-review). The merge gate rests on
+  attestation until this decision lands; every gate-met statement now
+  says "attested" in the record.
 
 ## RQ-12: cso + cpo have no git remote — create private repos? (decision)
 - status: pending
