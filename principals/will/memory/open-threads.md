@@ -49,8 +49,11 @@
   original "PTY input stream is closed" lingering state — those still
   take one manual re-run; the CLI-side fix (non-zero exit when the
   input stream dies under drive) is added to relay's attach
-  session-resume filing. Done when Will's drive session survives a
-  chief-node restart without touching the keyboard.
+  session-resume filing — filed as **relay#1419** (detach vs stream
+  interruption, bounded reconnect, resync, exactly-once queued
+  delivery, session wake; normal priority behind the credential-safety
+  train). Done when Will's drive session survives a chief-node restart
+  without touching the keyboard.
 
 - **relayflows has no named owner** (cpo, 2026-08-02 — "that is the
   gap, not the patch"). Interim ruling by chief: relayflows sits in the

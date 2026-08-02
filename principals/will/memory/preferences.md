@@ -100,7 +100,12 @@ session; don't restate it. Chief-specific emphases:
   nothing claim was retracted 2026-08-02: the probe HAD posted; the
   read-back "showing" nothing was itself network-broken — an absence
   observed through a broken instrument is not an absence). Probes that
-  answer a connectivity question are reads, never writes. Gate-met
+  answer a connectivity question are reads, never writes. And the exit
+  code is uninformative in BOTH directions (cso, same day: a network
+  error on a POST can mean response-lost with the write committed —
+  nine duplicate reviews from one retry loop): on an ambiguous write
+  failure, read back BEFORE retrying; never blind-retry a
+  non-idempotent POST. Gate-met
   statements say "attested, not measured" until distinct reviewer
   identities exist.
 - **Relay keys are low-sensitivity by design:**
