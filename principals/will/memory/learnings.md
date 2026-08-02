@@ -86,4 +86,9 @@ Distilled from six months of session history
   (relayfile's fresh instance resumed the retired 15-min pull cadence 12h
   after retirement). Every retirement ships with a sweep of the files that
   encode the practice — agreed and written are different states, and only
-  one survives a recycle.
+  one survives a recycle. Same rule for wrong findings (cmo, 2026-08-02):
+  writing a finding to a file makes it durable whether or not it is true —
+  the REST-only instrument rule reached three departments' files within an
+  hour, and the retraction had to chase it into each one. A retraction
+  that lives only in a channel loses to a mistake that made it into a
+  file; retire at source.
