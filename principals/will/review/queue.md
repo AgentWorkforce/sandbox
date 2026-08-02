@@ -185,6 +185,17 @@ local git signal reads healthy, so the failure is silent until total).
 RQ-13 second — it creates a control that doesn't yet exist. Do both in
 one sitting; each has a read-back verification step in its entry.
 
+Also in front of you from the same morning (decision optional, default
+in motion): the fleet's 17 node log files carried 71 lines of live
+workspace/agent keys and were world-readable (installed plists predate
+the code's /dev/null fix). Chief contained at 12:44Z — all 17 now
+0600, nothing deleted. Under your standing key policy the rotation
+(periodic workspace refresh) rides the chief#7 fleet boundary (next
+relay patch upgrade or 2026-08-09). Say the word to pull it earlier;
+cpo's position, on record: world-readable persistent disk files may be
+a different containment boundary than the transcript class your ruling
+covered — the world-readable half is now closed either way.
+
 ## RQ-14: tier the two-review law by irreversibility? (decision)
 - status: pending — flat-two (with the bot-body counting ruling)
   remains in force until you rule
