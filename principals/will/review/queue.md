@@ -132,13 +132,15 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - recommendation: 2-3 bot accounts (reviewer pool) + branch protection
   requiring 2 approvals on main across the org's repos; also advances
   the mergedBy-attribution problem (relay#1388 family).
-- cost note, REVISED (cpo verification, 2026-08-02): environment
-  required-reviewer rules are free on public repos. The "private repos
-  need Enterprise" claim is UNVERIFIED — org plan is Free; notesnumber
-  (private) shows an environment with branch_policy but NO
-  required_reviewers option; the actual ladder (Free vs Team vs
-  Enterprise) must be read from GitHub's plans docs before any money
-  moves. Also on the table, priced at $0: making a repo public buys the
+- cost note, REVISED TWICE (cpo + cmo measurements, 2026-08-02):
+  branch_policy is VERIFIED free on private repos (notesnumber has one,
+  org plan Free). Required reviewers: ZERO instances exist anywhere in
+  the org — public repos included (relay is public with four
+  environments, no protection rules on any) — so both the "free on
+  public" and "needs Enterprise on private" claims are inferences with
+  no known-positive; the first attempt to add one is the experiment,
+  and a refusal is a finding, not a botched runbook. The plans-docs
+  read still precedes any money moving. Also on the table, priced at $0: making a repo public buys the
   full mechanical gate — but publishing is irreversible where paying is
   not, so both options go to you together or the choice is rigged.
   BINDING meanwhile (cpo): where the protection cannot exist on the
@@ -244,9 +246,14 @@ one sitting; each has a read-back verification step in its entry.
   authenticates as `willwashburn` (the gate would be approvable by the
   thing it gates), and the `claws` team is four bot accounts; Khaliq is
   the only other human identity. (2) A human (you or Khaliq) creates the
-  environment + protection rule — ~90 seconds; an agent-created gate can
-  be agent-deleted, so this step is deliberately not automated.
-  agentrelay-com is preparing the click-path runbook.
+  environment + protection rule — an agent-created gate can be
+  agent-deleted, so this step is deliberately not automated. The
+  click-path runbook is in #42. Honest expectation (cmo, 2026-08-02):
+  the branch_policy step will work (verified free elsewhere in this
+  org); the required-reviewer step has NO existing instance anywhere in
+  the org, public or private, so the attempt IS the experiment — if the
+  UI refuses, stop and report; the refusal is the finding, and the
+  public-at-$0 vs plan-upgrade trade (RQ-10 cost note) becomes live.
 - ordering: the workflow PR adding `environment: production` (#42, holds
   the runbook at d17fd465 — includes reviewer, prevent-self-review, and
   main-only deployment policy, each with an API read-back) merges only
