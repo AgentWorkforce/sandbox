@@ -94,12 +94,15 @@ session; don't restate it. Chief-specific emphases:
   agent review or a distinct-login bot's review OBJECT at the same head,
   body read and body-authoritative, check rollup ignored. Two bots
   never suffice; the agent leg is mandatory. Bots-count-zero was drift
-  that manufactured reviewer scarcity. A review exists only once its
-  object reads back via REST at the named ref — `gh pr review` exits 0
-  on total network failure with nothing posted (cpo, measured during
-  the 2026-08-02 outage), so the read-back is the only evidence, and
-  gate-met statements say "attested, not measured" until distinct
-  reviewer identities exist.
+  that manufactured reviewer scarcity. A review is confirmed only by
+  reading its object back via REST at the named ref — because heads
+  move under reviews, not because exit codes lie (cpo's exit-0-posts-
+  nothing claim was retracted 2026-08-02: the probe HAD posted; the
+  read-back "showing" nothing was itself network-broken — an absence
+  observed through a broken instrument is not an absence). Probes that
+  answer a connectivity question are reads, never writes. Gate-met
+  statements say "attested, not measured" until distinct reviewer
+  identities exist.
 - **Relay keys are low-sensitivity by design:**
   workspace keys/agent tokens exposed in transcripts are not incidents —
   "fairly benign; we'll spin up new workspaces every once in a while."
