@@ -169,6 +169,15 @@ Distilled from six months of session history
   the claimant can read — cpo ruled a tiering as theirs to specify
   because the parent CLAUDE.md was silent, while Will's preferences
   (a surface they cannot see) carried it as law.
+- **A rule written to a durable file states its STATUS** (cpo,
+  2026-08-02, after writing the RQ-14 tiering proposal into their
+  charter in the same voice as law — caught by agentrelay-com, not by
+  the author or by chief): durable and operative are different
+  properties, and a file that cannot distinguish them teaches a
+  successor a proposal as law — the reader most likely to be misled is
+  a fresh instance of the author. Proposals carry an explicit
+  non-operative banner naming the pending decision; deferring a ruling
+  upward does not un-write the file.
 - **Load-bearing reports need a read-back too** (cso, 2026-08-02, after
   a confirmation failed to arrive three times while the artifact side
   was fully hardened): a gate waiting on "X posted at head" blocks on
