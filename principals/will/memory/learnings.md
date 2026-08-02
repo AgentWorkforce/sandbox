@@ -40,7 +40,11 @@ Distilled from six months of session history
   it; only `git diff origin/main` shows them. Reads as agent scope creep
   to a reviewer when it is really a stale base. Bites hardest where a
   repo has no remote at all (cpo/cso until RQ-12 lands) — there the
-  local base can never match a remote.
+  local base can never match a remote. Companion rule
+  (head-of-ecosystem, same day): what protects a reviewer is the
+  pre-push notice, not the push mode — an ordinary fast-forward commit
+  invalidates at-head reviews exactly as thoroughly as a force-push, so
+  every head move gets announced before the push, whatever kind it is.
 - **Never `git add -A` in the chief repo.** Headless cron bodies (groom,
   digest) edit brain files concurrently with the resident; a blanket `add
   -A` sweeps their mid-flight edits into unrelated commits (the "Pilot go"
