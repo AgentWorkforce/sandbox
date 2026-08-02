@@ -37,6 +37,15 @@
   objection): the fleet upgrade to the next relay patch release (the
   #1416/#1405 train), or 2026-08-09, whichever comes first.**
 
+- **Drive attach must self-heal (Will, 2026-08-02, via voice).** "Drive
+  input stream is closed" after a broker/PTY restart currently requires
+  a manual re-attach; Will wants end-to-end automatic recovery. Two
+  parts in flight: chief.sh auto-reattach loop (chief-repo PR, subagent
+  building — intentional Ctrl+] detach must not retrigger), and
+  platform attach session-resume filed with the relay lead (issue
+  number pending network). Done when Will's drive session survives a
+  chief-node restart without touching the keyboard.
+
 - **relayflows has no named owner** (cpo, 2026-08-02 — "that is the
   gap, not the patch"). Interim ruling by chief: relayflows sits in the
   relay lead's portfolio (they filed #25/#26/#27 and own the fix train)
