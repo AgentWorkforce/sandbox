@@ -106,7 +106,13 @@ Distilled from six months of session history
   (head-of-ecosystem, 2026-08-02: three seats "confirming" one jq
   accessor typed three times vs the 422 hit independently in two
   repos). When counting agreement, ask what varied; if the answer is
-  "who ran it," nothing was tested. Corollary: caret-ranged
+  "who ran it," nothing was tested. Instrument default that bit
+  hardest (cpo, same day — the instance that wrongly accused a seat):
+  `gh api` list endpoints return 30 per page; any count, "newest", or
+  "none since" claim over reviews/commits/comments/runs/issues MUST
+  use `--paginate` or `per_page=100`, and the one-command known-
+  positive is comparing `length` at default vs at per_page=100 — if
+  they differ you are reading a page, not a set. Corollary: caret-ranged
   deps make exposure a property of each install, not of the release —
   pin exactly where a security boundary crosses packages (for
   reproducibility; a pin among all-leaking versions mitigates nothing).
