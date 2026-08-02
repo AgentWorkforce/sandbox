@@ -168,7 +168,8 @@ RQ-12 and RQ-13 are both "a human in a GitHub settings page for two
 minutes," and both must be done by a human for the same reason: a gate
 or repo an agent creates is one an agent can delete. Priority order
 (cmo's argument, accepted): **RQ-12 first** — it protects a record that
-already exists and is unbacked (cpo at 504 commits and growing ~9/hour,
+already exists and is unbacked (cpo at 523 commits by 12:30Z — 37 in
+five hours,
 today's entire cross-department reasoning stored nowhere else; every
 local git signal reads healthy, so the failure is silent until total).
 RQ-13 second — it creates a control that doesn't yet exist. Do both in
