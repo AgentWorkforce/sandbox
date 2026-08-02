@@ -77,9 +77,17 @@ Distilled from six months of session history
   11.3.1 shipped maskSecret everywhere, and `@relayflows/core` inside the
   installed tree still printed an unmasked workspace key on first run).
   The check that works: grep the installed tree on the machine that runs
-  it. Corollary: caret-ranged deps make exposure a property of each
-  install, not of the release — pin exactly where a security boundary
-  crosses packages.
+  it. Second clause (head-of-ecosystem, same day): **an absence
+  established by symbol name is not an absence** — the "missing"
+  redaction boundary existed as `scrubSecrets`, and its presence then
+  masked that its pattern missed every `_live_`-format key the org
+  issues. A control whose presence is the evidence for its own
+  sufficiency needs a known-positive test, not an audit that stops at
+  finding it called. Fleet habit behind four same-day instances: asking
+  a narrow question and filing a broad answer. Corollary: caret-ranged
+  deps make exposure a property of each install, not of the release —
+  pin exactly where a security boundary crosses packages (for
+  reproducibility; a pin among all-leaking versions mitigates nothing).
 - **Retiring a practice means editing the durable files that prescribe
   it.** A #general announcement reaches only the instances alive to hear
   it; recycled seats re-adopt whatever their durable state still says
