@@ -23,7 +23,9 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   optional second.
 
 ## RQ-2: GitHub integration reconnect on rw_7ccfea89 (unblock)
-- status: pending
+- status: pending — exact steps sent to Will via voice 2026-08-02 (login →
+  `workspace join rw_7ccfea89` → `integration connect github` → verify;
+  full command sequence in the voice thread)
 - date: 2026-07-29
 - from: burn → cpo → chief
 - ask: repair/reconnect the GitHub relayfile integration on the "Default"
@@ -130,6 +132,20 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - recommendation: 2-3 bot accounts (reviewer pool) + branch protection
   requiring 2 approvals on main across the org's repos; also advances
   the mergedBy-attribution problem (relay#1388 family).
+
+## RQ-12: cso + cpo have no git remote — create private repos? (decision)
+- status: pending
+- date: 2026-08-02
+- from: cso (session-start finding, verified: 2 of 107 repos lack origin)
+- ask: cso's and cpo's brains (watchlist/, escalations.md, ecosystem/) are
+  single-copy on this disk — one disk failure from gone. Approve creating
+  private GitHub repos AgentWorkforce/cso + AgentWorkforce/cpo as push
+  targets?
+- why-you: visibility is the decision — cso is competitive intelligence on
+  named companies; pushing anywhere is an outward-facing act. cso
+  explicitly declined to pick a target itself.
+- recommendation: private org repos, same as every other department;
+  cso/cpo push the moment you name the target.
 
 ## RQ-11: Creator-partnerships material in cmo — yours? (FYI, non-blocking)
 - status: pending

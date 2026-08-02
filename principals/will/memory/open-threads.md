@@ -15,7 +15,18 @@
   a confirming re-scan before recommending kickstarts. Sharper gap, from
   cpo (escalations.md, 69b95aa): none of the four 07-30 seat deaths
   tripped it, and the restart cleared the roster — the evidence of the
-  detection gap is destroyed while the gap itself persists.
+  detection gap is destroyed while the gap itself persists. 2026-08-02
+  counterpoint: the 07-31→08-02 outage was a REAL BROKER_DOWN×15 —
+  detection worked, but **paging failed while chief was down** (06:13Z
+  page `ok:false`; the only page target was itself a casualty), so
+  kickstart stayed manual for ~42h. Two fixes on record: (1) node plists
+  get `KeepAlive` (SuccessfulExit=false + throttle) via install.mjs —
+  chief-repo PR queued; (2) the watchdog needs a chief-independent
+  escalation path (macOS notification / push to Will) when the page
+  target is down. Root cause of the outage itself — `node up` dies on
+  telemetry DNS failure (`ENOTFOUND i.agentrelay.com`, unhandled PostHog
+  flush rejection) — filed with the relay lead 2026-08-02, issue number
+  pending.
 
 - **Broker restarts can leave nodes alive-but-deaf, not frozen.** Hosted→
   broker inbound delivery can die on restart while everything looks healthy
