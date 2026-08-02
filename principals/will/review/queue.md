@@ -166,7 +166,9 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
   be agent-deleted, so this step is deliberately not automated.
   agentrelay-com is preparing the click-path runbook.
 - ordering: the workflow PR adding `environment: production` (#42, holds
-  the runbook at be2d161) merges only AFTER `gh api …/environments`
+  the runbook at d17fd465 — includes reviewer, prevent-self-review, and
+  main-only deployment policy, each with an API read-back) merges only
+  AFTER `gh api …/environments`
   reads back non-empty protection_rules — a referenced-but-absent
   environment is auto-created UNPROTECTED on first run, which would
   manufacture a phantom gate and deploy through it. Repo is public, so
