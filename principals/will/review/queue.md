@@ -132,6 +132,11 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - recommendation: 2-3 bot accounts (reviewer pool) + branch protection
   requiring 2 approvals on main across the org's repos; also advances
   the mergedBy-attribution problem (relay#1388 family).
+- cost note (cmo, 2026-08-02): environment required-reviewer rules are
+  free on public repos but need GitHub Enterprise on private ones — the
+  org's private repos (cmo, cpo/cso once pushed) can't get that control
+  without a plan decision. Branch-protection review counts are separate
+  and remain available; factor this into the pick.
 
 ## RQ-12: cso + cpo have no git remote — create private repos? (decision)
 - status: pending
