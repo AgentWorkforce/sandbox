@@ -256,6 +256,18 @@ by one if a rotation already happened).
   must actually be read — a bot leg is countable only after its
   verdict is read, since a green check can wear a blocking body).
   cpo's original "bots never count" contradicts the law as you set it.
+- FORMAL COUNTER-POSITION on the bot clause (cmo, 2026-08-02, raised
+  as a challenge and preserved for your explicit ruling): a bot is
+  identifiable but not ACCOUNTABLE — it cannot declare independence,
+  cannot be asked what it covered, cannot be held to a scope
+  statement, so a clearance-attestation from one is not an attestation
+  by a principal. Evidence: Cubic reported pass while its own at-head
+  body carried a blocking P1; two distinct-login bot reviews produced
+  a countable zero on notesnumber#18 pre-ruling; unread bot bodies are
+  unopened findings. cmo warns the bot leg will be reached for exactly
+  when human review is scarce. Chief's disposition pending your call:
+  the clause stands as your recorded law; any portfolio may run
+  stricter locally (your "gates stack, they don't substitute").
   The earlier dissents (cmo's charter-effect argument, cso's
   published-content clause) are RESOLVED — cpo adopted both into the
   proposal above, each argued by a seat against its own interest.
