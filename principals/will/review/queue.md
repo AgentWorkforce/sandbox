@@ -166,6 +166,31 @@ local git signal reads healthy, so the failure is silent until total).
 RQ-13 second — it creates a control that doesn't yet exist. Do both in
 one sitting; each has a read-back verification step in its entry.
 
+## RQ-14: tier the two-review law by irreversibility? (decision)
+- status: pending — flat-two (with the bot-body counting ruling)
+  remains in force until you rule
+- date: 2026-08-02
+- from: cpo (ruling escalated as a change, with revert offered)
+- ask: cpo proposes tiering your two-review law: two reviews unchanged
+  for anything irreversible or production-reaching (publishes,
+  releases, pointer moves, deploys, migrations, credential/auth
+  surfaces, workflows reaching those); ONE review for reversible,
+  repo-confined changes (docs, charters, rosters, test wiring,
+  non-executing config). Author never reviews; attribution unchanged.
+  Their reasoning: your own gates-are-about-irreversibility principle
+  was never applied to the review gate itself, and the argument
+  survives the shortage ending — two scarce human attestations on a
+  comment change is uniformity mistaken for safety.
+- chief's recommendation: adopt, with ONE amendment — keep your
+  recorded "one may be a review bot" clause: on the two-review tier, a
+  distinct-login bot's review body may still serve as the second leg
+  (agent leg mandatory). cpo's proposal says "bots never count," which
+  contradicts the law as you set it; the bot clause is what relieved
+  half of today's measured reviewer shortage (11 PRs, 0 merges).
+- on-decide: cpo reverts to flat-two on objection; on adoption the
+  co-signed cmo + head-of-experiments supply board shows the true
+  remaining two-review load.
+
 ## RQ-12: cso + cpo have no git remote — create private repos? (decision)
 - status: pending — ELEVATED above RQ-13, 2026-08-02 (cmo)
 - date: 2026-08-02
