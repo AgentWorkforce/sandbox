@@ -137,9 +137,12 @@ Distilled from six months of session history
   hardest (cpo, same day — the instance that wrongly accused a seat):
   `gh api` list endpoints return 30 per page; any count, "newest", or
   "none since" claim over reviews/commits/comments/runs/issues MUST
-  use `--paginate` or `per_page=100`, and the one-command known-
-  positive is comparing `length` at default vs at per_page=100 — if
-  they differ you are reading a page, not a set. Corollary: caret-ranged
+  use `--paginate` — which follows Link headers to exhaustion.
+  `per_page=100` is an efficiency flag, NOT a correctness one (cmo's
+  correction, same day: it truncates silently at 100, and works on a
+  96-object PR for exactly the reason that makes a half-fix look
+  right). Known-positive: compare `length` at default vs paginated —
+  if they differ you were reading a page, not a set. Corollary: caret-ranged
   deps make exposure a property of each install, not of the release —
   pin exactly where a security boundary crosses packages (for
   reproducibility; a pin among all-leaking versions mitigates nothing).
