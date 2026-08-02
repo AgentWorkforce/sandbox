@@ -280,8 +280,9 @@ covered — the world-readable half is now closed either way.
   UI refuses, stop and report; the refusal is the finding, and the
   public-at-$0 vs plan-upgrade trade (RQ-10 cost note) becomes live.
 - ordering: the workflow PR adding `environment: production` (#42, holds
-  the runbook at d17fd465 — includes reviewer, prevent-self-review, and
-  main-only deployment policy, each with an API read-back) merges only
+  the runbook at 9611723a — reviewer, prevent-self-review, main-only
+  deployment policy, each with an API read-back, plus the
+  required-reviewer-may-refuse caveat) merges only
   AFTER `gh api …/environments`
   reads back non-empty protection_rules — a referenced-but-absent
   environment is auto-created UNPROTECTED on first run, which would
