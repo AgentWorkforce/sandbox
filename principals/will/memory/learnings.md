@@ -100,7 +100,13 @@ Distilled from six months of session history
   (cmo): when the finding is a repeated string or claim, count it
   across the whole surface before reporting — grep the diff, not the
   file; fixing the one instance you read makes the pattern read as
-  resolved. Corollary: caret-ranged
+  resolved. And corroboration is real only when the parties differ in
+  CONSTRUCTION — different artifact, different method, neither holding
+  the other's result — never when they differ only in operator
+  (head-of-ecosystem, 2026-08-02: three seats "confirming" one jq
+  accessor typed three times vs the 422 hit independently in two
+  repos). When counting agreement, ask what varied; if the answer is
+  "who ran it," nothing was tested. Corollary: caret-ranged
   deps make exposure a property of each install, not of the release —
   pin exactly where a security boundary crosses packages (for
   reproducibility; a pin among all-leaking versions mitigates nothing).

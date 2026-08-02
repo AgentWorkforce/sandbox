@@ -132,11 +132,19 @@ cleared. Statuses: pending → cleared(approved | rejected | answered).
 - recommendation: 2-3 bot accounts (reviewer pool) + branch protection
   requiring 2 approvals on main across the org's repos; also advances
   the mergedBy-attribution problem (relay#1388 family).
-- cost note (cmo, 2026-08-02): environment required-reviewer rules are
-  free on public repos but need GitHub Enterprise on private ones — the
-  org's private repos (cmo, cpo/cso once pushed) can't get that control
-  without a plan decision. Branch-protection review counts are separate
-  and remain available; factor this into the pick.
+- cost note, REVISED (cpo verification, 2026-08-02): environment
+  required-reviewer rules are free on public repos. The "private repos
+  need Enterprise" claim is UNVERIFIED — org plan is Free; notesnumber
+  (private) shows an environment with branch_policy but NO
+  required_reviewers option; the actual ladder (Free vs Team vs
+  Enterprise) must be read from GitHub's plans docs before any money
+  moves. Also on the table, priced at $0: making a repo public buys the
+  full mechanical gate — but publishing is irreversible where paying is
+  not, so both options go to you together or the choice is rigged.
+  BINDING meanwhile (cpo): where the protection cannot exist on the
+  current plan, `environment:` must NEVER be attached to that repo's
+  workflows — a referenced environment auto-creates unprotected, and
+  there it would be permanent, not a sequencing step.
 - cost of deferral, measured (cmo + head-of-experiments, 2026-08-02):
   eleven open PRs across two portfolios at zero merges, with reviewer
   supply the binding constraint. Chief's counting ruling (bot review
