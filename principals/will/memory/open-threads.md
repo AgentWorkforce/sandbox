@@ -31,7 +31,16 @@
   orphaned `com.agentworkforce.chief.restart` job — it exec's a dead
   session-scoped scratchpad script (hence exit 127), no repo source.
   (2) the watchdog needs a chief-independent escalation path (macOS
-  notification / push to Will) when the page target is down. Root cause of the outage itself — DNS outage →
+  notification / push to Will) when the page target is down. **The
+  fleet boundary for the plist edits + chief.restart bootout has a
+  trigger and a clock (set 2026-08-02, per cpo's unclocked-boundary
+  objection): the fleet upgrade to the next relay patch release (the
+  #1416/#1405 train), or 2026-08-09, whichever comes first.**
+
+- **relayflows has no named owner** (cpo, 2026-08-02 — "that is the
+  gap, not the patch"). Interim ruling by chief: relayflows sits in the
+  relay lead's portfolio (they filed #25/#26/#27 and own the fix train)
+  until a dedicated seat exists. Revisit when the Class C train ships. Root cause of the outage itself — DNS outage →
   Relaycast registration transport error treated as fatal by
   `connect_relay` (the PostHog ENOTFOUND stack is a secondary symptom) —
   filed as **relay#1416** 2026-08-02 with node self-recovery and the
