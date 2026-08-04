@@ -1,17 +1,17 @@
 /**
- * Factory's dispatch contract, read from the target repository.
+ * Factory's dispatch contract, owned by Chief.
  *
- * Chief does not define what makes work dispatchable. Factory does, and it
- * publishes that per repository in `factory.config.json` at the repo root:
+ * Chief does not define what makes work dispatchable. Factory does, and Chief
+ * keeps the active contract at its own repo root as `factory.config.json`:
  * `issueSource` selects the surface, `safety` carries the opt-in gate, and
- * `linear.states` names the states used when the surface is Linear.
+ * `linear.states` names the states used when the surface is Linear. Factory
+ * must be started with that exact file via `--config`; it performs no search.
  *
  * Chief used to keep its own `work.factory` block describing a Linear-only
  * world — a title prefix, a team key, a readiness state. That was a
- * reimplementation of this file, and it was wrong: `hoopsheet` dispatches with
- * `issueSource: "github"`, where the readiness signal is a label on a GitHub
- * issue and there is no Linear record at all. Read the owning component's
- * config; do not restate it.
+ * reimplementation of this file, and it was wrong: a GitHub-native contract
+ * uses a label on a GitHub issue and has no Linear record at all. Read the
+ * owning component's config; do not restate it.
  *
  * @see AgentWorkforce/factory README, "Tell it what to work on"
  */
@@ -29,8 +29,8 @@ const DEFAULT_READY_STATE = "Ready for Agent";
 
 /**
  * Where a repository is checked out. Factory configs carry their own
- * `repos.cloneRoot`, but Chief needs a root to find the config in the first
- * place, so the caller supplies one and the file may confirm it.
+ * `repos.cloneRoot`; the caller supplies Chief's runtime root and the active
+ * contract may confirm it.
  */
 export function repoPath(repoName, cloneRoot) {
   const bare = repoName.includes("/") ? repoName.split("/").pop() : repoName;
@@ -38,33 +38,62 @@ export function repoPath(repoName, cloneRoot) {
 }
 
 /**
- * Load and normalize a repository's Factory contract.
- *
- * Returns null when the repository has no `factory.config.json` — that is a
- * meaningful answer ("this repo is not Factory-enabled"), not an error, and the
- * caller decides whether that should block.
+ * Build the per-machine active contract written by onboarding. The committed
+ * `factory.<principal>.config.json` variant carries the same content; only its
+ * absolute clone root makes the split necessary.
  */
-/**
- * Where a repository's contract may be declared, nearest first.
- *
- * A contract does not have to be per-repository. Most repos in a workspace
- * share one surface and one safety gate, so a single `factory.config.json` at
- * the clone root covers them all; a repo only needs its own file when it
- * differs — as `hoopsheet` does by dispatching from GitHub. Nearest wins.
- */
-export function contractSearchPaths(repoName, cloneRoot) {
-  return [
-    join(repoPath(repoName, cloneRoot), FACTORY_CONFIG_FILENAME),
-    join(resolve(cloneRoot), FACTORY_CONFIG_FILENAME),
-  ];
+export function createFactoryContract(
+  config,
+  { cloneRoot, workspaceId, repos = {} } = {},
+) {
+  if (typeof cloneRoot !== "string" || cloneRoot.length === 0) {
+    throw new Error("cloneRoot is required to generate the Factory contract");
+  }
+  return {
+    // Omitted until workspace convergence resolves a cloud record; Factory's
+    // schema treats it as optional and the node config supplies it otherwise.
+    ...(workspaceId ? { workspaceId } : {}),
+    issueSource: "github",
+    repos: {
+      ...repos,
+      org: repos.org ?? "AgentWorkforce",
+      cloneRoot: resolve(cloneRoot),
+    },
+    safety: {
+      requireLabel: "factory",
+      requireTitlePrefix: "[factory]",
+    },
+    recipes: config.recipes,
+    mergePolicy: "never",
+    babysitter: { enabled: true },
+    terminalState: "human-review",
+  };
 }
 
-export function loadFactoryContract(repoName, { cloneRoot }) {
+/** Resolve the one active contract path supplied by Chief's runtime. */
+export function resolveFactoryConfigPath(configPath) {
+  if (typeof configPath !== "string" || configPath.length === 0) {
+    throw new Error(
+      "Factory config path is unset. Chief must pass its repo-owned " +
+      "factory.config.json explicitly; Factory does not discover contracts.",
+    );
+  }
+  return resolve(configPath);
+}
+
+/**
+ * Load and normalize Chief's one active Factory contract for a routed repo.
+ *
+ * Returns null only when that exact file is absent. A target repo's cwd and
+ * any sibling `factory.config.json` files have no effect.
+ */
+export function loadFactoryContract(repoName, { cloneRoot, configPath } = {}) {
+  if (typeof cloneRoot !== "string" || cloneRoot.length === 0) {
+    throw new Error("cloneRoot is required to resolve a routed repository");
+  }
   const root = repoPath(repoName, cloneRoot);
-  const path = contractSearchPaths(repoName, cloneRoot).find((candidate) =>
-    existsSync(candidate)
-  );
-  if (!path) return null;
+  const path = resolveFactoryConfigPath(configPath);
+  if (!existsSync(path)) return null;
 
   let raw;
   try {
@@ -82,8 +111,13 @@ export function loadFactoryContract(repoName, { cloneRoot }) {
   }
 
   const safety = raw.safety ?? {};
+  const repo = repoName.includes("/") || !raw.repos?.org
+    ? repoName
+    : `${raw.repos.org}/${repoName}`;
+  const routedRepos = factoryRoutedRepos(raw.repos);
   return {
-    repo: raw.repos?.default ?? repoName,
+    repo,
+    routesRepo: routedRepos.has(repo.toLowerCase()),
     path,
     root,
     // Null means "Factory decides at dispatch time by asking Relayfile whether
@@ -106,18 +140,59 @@ export function loadFactoryContract(repoName, { cloneRoot }) {
 /**
  * The contract, or a refusal explaining which repo is missing it.
  */
-export function requireFactoryContract(repoName, { cloneRoot }) {
-  const contract = loadFactoryContract(repoName, { cloneRoot });
-  if (contract) return contract;
+export function requireFactoryContract(repoName, { cloneRoot, configPath } = {}) {
+  const path = resolveFactoryConfigPath(configPath);
+  const contract = loadFactoryContract(repoName, { cloneRoot, configPath: path });
+  if (contract?.routesRepo) return contract;
+  if (contract) {
+    throw new Error(
+      `Chief's active Factory contract at ${path} does not route ${contract.repo}. ` +
+      "Add it to repos.names or one of repos.byLabel, repos.byProject, " +
+      "repos.keywordRules, or repos.default. Chief will not infer routing from " +
+      "file placement.",
+    );
+  }
   throw new Error(
-    `No ${FACTORY_CONFIG_FILENAME} covers ${repoName}. Looked in ` +
-    `${contractSearchPaths(repoName, cloneRoot).join(" then ")}. Chief will ` +
-    "not guess a surface. Add a shared contract at the clone root to cover " +
-    "every repository that dispatches the same way, or a per-repo file where " +
-    "one differs — minimally " +
-    '{"issueSource":"linear","safety":{"requireTitlePrefix":"[factory]",' +
+    `Chief's active Factory contract is missing at ${path}; cannot route ` +
+    `${repoName}. Chief will not guess a surface or search target repositories. ` +
+    "Run `npm run setup` or copy the correct committed " +
+    "factory.<principal>.config.json variant to factory.config.json. A minimal " +
+    "contract is " +
+    '{"issueSource":"linear","repos":{"org":"AgentWorkforce",' +
+    '"names":["chief"]},"safety":{"requireTitlePrefix":"[factory]",' +
     '"requireLabel":"factory","requireTeamKey":"AR"},"mergePolicy":"never"}.',
   );
+}
+
+/** Reproduce Factory's configured repo set without importing Factory itself. */
+function factoryRoutedRepos(repos = {}) {
+  const org = typeof repos.org === "string" ? repos.org : null;
+  const normalizeRepo = (repo) => {
+    if (typeof repo !== "string" || repo.length === 0) return null;
+    return (repo.includes("/") || !org ? repo : `${org}/${repo}`).toLowerCase();
+  };
+  const routed = new Set();
+  const names = Array.isArray(repos.names) ? repos.names : [];
+  const values = (record) =>
+    record && typeof record === "object" && !Array.isArray(record)
+      ? Object.values(record)
+      : [];
+  for (const name of names) {
+    const repo = repos.overrides?.[name] ?? name;
+    const normalized = normalizeRepo(repo);
+    if (normalized) routed.add(normalized);
+  }
+  for (const repo of [
+    ...values(repos.byLabel),
+    ...values(repos.byProject),
+    ...(Array.isArray(repos.keywordRules) ? repos.keywordRules : [])
+      .map((rule) => rule?.repo),
+    repos.default,
+  ]) {
+    const normalized = normalizeRepo(repo);
+    if (normalized) routed.add(normalized);
+  }
+  return routed;
 }
 
 /**

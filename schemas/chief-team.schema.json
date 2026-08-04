@@ -64,7 +64,7 @@
     },
     "recipes": {
       "type": "object",
-      "description": "Factory recipe selection. Chief chooses the recipe; the target repository's factory.config.json owns everything else about dispatch.",
+      "description": "Factory recipe selection. Chief chooses the recipe; Chief's active factory.config.json owns everything else about dispatch.",
       "required": [
         "default",
         "labels"
@@ -162,5 +162,5 @@
     }
   },
   "additionalProperties": false,
-  "description": "The one per-principal file. Names the principal, the resident agent roster the broker spawns, and the senses least-privilege declaration. Everything else is derived (brainRoot from principal.slug) or owned elsewhere (the workspace by agent-relay, the Factory dispatch contract by factory.config.json)."
+  "description": "The one per-principal file. Names the principal, the resident agent roster the broker spawns, and the senses least-privilege declaration. Everything else is derived (brainRoot from principal.slug) or owned elsewhere (the workspace by agent-relay, the Factory dispatch contract by Chief's active factory.config.json)."
 }

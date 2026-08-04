@@ -15,14 +15,12 @@
   gap; removing them exposed it. This blocks any gated workload, Sage and
   NightCTO included.
 
-- **No Factory contract covers `relay`, `cloud`, or `relayfile` yet.** Chief
-  resolves `factory.config.json` nearest-first — target repo, then clone root —
-  and refuses to route when neither exists rather than assuming Linear. One
-  file at `/Users/khaliqgant/Projects/AgentWorkforce/factory.config.json` would
-  cover all three (verified: with it present, all three resolve `linear` while
-  `hoopsheet`'s own file still wins with `github`). Khaliq's call whether to add
-  it there, since it lives outside the chief repo. Until then `promote-issue`,
-  `create-task`, `bootstrap`, and `status` refuse for those repos.
+- **Chief-owned Factory contract cutover is awaiting PR #10.** The active path
+  is `<chief>/factory.config.json`, copied from the committed principal variant
+  and passed explicitly for `chief`, `cloud`, `factory`, `hoopsheet`, `pear`,
+  `relay`, `relayfile`, and `workforce`. `bootstrap` and `status` now understand
+  its GitHub-native gate. Legacy per-repo contracts are not fallback layers and
+  remain a coordinated removal follow-up in AgentWorkforce/chief#11.
 
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.

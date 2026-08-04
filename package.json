@@ -8,6 +8,7 @@
     "validate": "node scripts/validate-config.mjs",
     "config:migrate": "node scripts/migrate-config.mjs",
     "config:test": "node --test scripts/lib/chief-runtime.test.mjs",
+    "factory:test": "node --test scripts/lib/factory-contract.test.mjs",
     "factory:bootstrap": "node scripts/factory-control.mjs bootstrap",
     "factory:status": "node scripts/factory-control.mjs status",
     "factory:first-task": "node scripts/factory-control.mjs dispatch-workspace-task",

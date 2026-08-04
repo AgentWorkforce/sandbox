@@ -2,6 +2,9 @@
 
 import { execFileSync } from "node:child_process";
 import {
+  createFactoryContract,
+} from "./lib/factory-contract.mjs";
+import {
   existsSync,
   readdirSync,
   mkdirSync,
@@ -15,6 +18,8 @@ import { createInterface } from "node:readline/promises";
 import {
   TEAMS_PATH,
   LEGACY_CONFIG_PATH,
+  FACTORY_CONFIG_PATH,
+  CLONE_ROOT,
   REPO_ROOT,
   activeWorkspace,
   cloudRequest,
@@ -92,6 +97,18 @@ function writeJsonAtomic(path, value) {
   const temp = `${path}.${process.pid}.tmp`;
   writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   renameSync(temp, path);
+}
+
+function existingFactoryRepos(variantPath) {
+  if (!existsSync(variantPath)) {
+    return {
+      org: "AgentWorkforce",
+      names: ["chief"],
+      default: "AgentWorkforce/chief",
+    };
+  }
+  const existing = JSON.parse(readFileSync(variantPath, "utf8"));
+  return existing.repos ?? {};
 }
 
 function starterBrain(config) {
@@ -316,6 +333,25 @@ try {
 
   step(4, "Human and agent work systems");
   await ensureIntegrations(session, workspace, integrationProviders(roster));
+  const contractVariant = join(
+    REPO_ROOT,
+    `factory.${config.principal.slug}.config.json`,
+  );
+  const contract = createFactoryContract(config, {
+    cloneRoot: CLONE_ROOT,
+    workspaceId: workspace.cloudWorkspaceId,
+    repos: existingFactoryRepos(contractVariant),
+  });
+  writeJsonAtomic(contractVariant, contract);
+  writeJsonAtomic(FACTORY_CONFIG_PATH, contract);
+  console.log(
+    `✓ Dispatch contract ${contractVariant} ` +
+    `(active copy at ${FACTORY_CONFIG_PATH})`,
+  );
+  console.log(
+    `  Chief passes this exact file to Factory; routing scope lives in its ` +
+    `\`repos\` maps and the \`factory\` label is the trigger.`,
+  );
   run(process.execPath, [join(REPO_ROOT, "scripts/factory-control.mjs"), "bootstrap"]);
   console.log("✓ Factory readiness gate and hosted brain verified");
 
@@ -342,8 +378,8 @@ try {
   console.log("\nChief is ready.");
   console.log("Run `npm run chief` to attach.");
   console.log(
-    "Each repository declares how its work is dispatched in its own " +
-    "`factory.config.json`: `issueSource` picks the surface (a Linear issue " +
+    "Chief's `factory.config.json` declares how work is dispatched: " +
+    "`issueSource` picks the surface (a Linear issue " +
     "in the configured ready state, or a labelled GitHub issue) and `safety` " +
     "is the opt-in gate. Merge remains human-gated.",
   );

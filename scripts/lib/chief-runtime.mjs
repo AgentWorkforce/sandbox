@@ -22,6 +22,56 @@ export const REPO_ROOT = resolve(LIB_DIR, "../..");
 export const TEAMS_PATH = join(REPO_ROOT, "teams.json");
 export const LEGACY_CONFIG_PATH = join(REPO_ROOT, "chief.config.json");
 
+/**
+ * The dispatch contract Chief owns, following the same split as the roster:
+ * `factory.<principal>.config.json` is committed, `factory.config.json` is the
+ * per-machine copy because it carries an absolute `cloneRoot`.
+ *
+ * Factory resolves exactly one contract — `--config` or the file in its cwd
+ * (see `src/cli/fleet.ts`). There is no per-repository lookup and no walk to a
+ * clone root. Routing scope lives inside that contract's `repos` maps, never in
+ * where other files happen to be placed.
+ */
+export const FACTORY_CONFIG_PATH = join(REPO_ROOT, "factory.config.json");
+
+/** The checkout root Chief and every routed repository share. */
+function defaultCloneRoot() {
+  try {
+    // In a linked worktree REPO_ROOT's parent is the worktree container, not
+    // the sibling-checkout root. The common git dir still belongs to the main
+    // Chief checkout, so walking up from it is stable in both layouts.
+    const commonGitDir = execFileSync(
+      "git",
+      ["rev-parse", "--git-common-dir"],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
+    if (commonGitDir) return resolve(REPO_ROOT, commonGitDir, "../..");
+  } catch {
+    // Source archives and installations without git use the normal sibling
+    // layout, where Chief's parent is the checkout root.
+  }
+  return resolve(REPO_ROOT, "..");
+}
+
+export const CLONE_ROOT = process.env.CLONE_ROOT
+  ? resolve(REPO_ROOT, process.env.CLONE_ROOT)
+  : defaultCloneRoot();
+
+/** Environment inherited by Chief-owned services and external Factory runs. */
+export function factoryRuntimeEnv({
+  factoryConfigPath = FACTORY_CONFIG_PATH,
+  cloneRoot = CLONE_ROOT,
+} = {}) {
+  return {
+    FACTORY_CONFIG_PATH: resolve(REPO_ROOT, factoryConfigPath),
+    CLONE_ROOT: resolve(REPO_ROOT, cloneRoot),
+  };
+}
+
 /** Constants, not choices: nobody configures these differently. */
 const SENSES_LOCAL_DIR = "senses";
 const SENSES_REFRESH_BEFORE_SECONDS = 600;
@@ -193,7 +243,7 @@ export function validateConfig(config) {
   }
   // No `work` validation here on purpose. Which surface a task arrives on,
   // what makes it dispatchable, and whether merge is automatic are Factory's
-  // to declare, per repository, in that repository's `factory.config.json`.
+  // to declare in Chief's active `factory.config.json`.
   // Chief previously restated them and pinned humanSystem to Linear, which
   // made a GitHub-native repo like `hoopsheet` unrepresentable.
   const recipes = config?.recipes;
@@ -235,7 +285,24 @@ export function execJson(command, args) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  return JSON.parse(output);
+  return JSON.parse(jsonPayload(output, `${command} ${args.join(" ")}`));
+}
+
+/**
+ * agent-relay writes notices to stdout ahead of `--json` payloads — the
+ * telemetry banner is the standing example, and update notices behave the same
+ * way. Parsing raw stdout therefore fails on a healthy command, which stayed
+ * hidden for as long as the workspace call failed earlier for its own reasons.
+ *
+ * Take the payload from the first structural character so a banner cannot
+ * masquerade as a resolve failure.
+ */
+function jsonPayload(output, label) {
+  const start = output.search(/[[{]/u);
+  if (start === -1) {
+    throw new Error(`${label} produced no JSON payload: ${output.trim() || "(empty)"}`);
+  }
+  return output.slice(start);
 }
 
 /**
@@ -296,9 +363,32 @@ export function assertWorkspaceConvergence(workspace, config) {
 }
 
 export function cloudSession() {
-  const session = execJson("agent-relay", ["cloud", "session", "--json"]);
+  // `--json` masks the access token as `cld_at_…suffix` on builds that carry the
+  // mask. Without --reveal-token every authenticated call there fails inside
+  // fetch with a ByteString error, because the mask's ellipsis is not Latin-1 —
+  // an unreadable way to be told the token was never real.
+  //
+  // The flag arrived after the mask, so a build old enough to print the raw
+  // token rejects it outright (`unknown option '--reveal-token'`). Ask for it,
+  // and fall back to plain `--json` when the CLI does not know it; the check
+  // below is what actually decides whether the token is usable, on either build.
+  let session;
+  try {
+    session = execJson("agent-relay", ["cloud", "session", "--json", "--reveal-token"]);
+  } catch (error) {
+    if (!/unknown option .*--reveal-token/u.test(String(error?.stderr ?? error?.message ?? ""))) {
+      throw error;
+    }
+    session = execJson("agent-relay", ["cloud", "session", "--json"]);
+  }
   if (!session.apiUrl || !session.accessToken) {
     throw new Error("Agent Relay Cloud session is unavailable; run agent-relay cloud login");
+  }
+  if (session.accessToken.includes("…")) {
+    throw new Error(
+      "Agent Relay Cloud returned a masked access token. This build of " +
+      "agent-relay masks it and did not honor --reveal-token; upgrade agent-relay",
+    );
   }
   return session;
 }

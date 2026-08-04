@@ -3,11 +3,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   activeWorkspace,
+  CLONE_ROOT,
   cloudRequest,
   cloudSession,
+  FACTORY_CONFIG_PATH,
   loadConfig,
   mintSensesSession,
   REPO_ROOT,
@@ -246,20 +248,18 @@ async function waitForCreateReceipt(remotePath, timeoutMs = 60_000) {
   );
 }
 
-/** Sibling checkouts of this repo — where target repositories live. */
-const CLONE_ROOT = dirname(REPO_ROOT);
-
 /**
  * The dispatch contract for a set of routed repositories.
  *
- * Every routed repo must agree on the surface: a single Linear issue cannot
- * simultaneously be the record for a repo that dispatches from GitHub. When
- * they disagree, that is a routing mistake worth stopping on rather than
- * quietly using the first one.
+ * Every route reads the same Chief-owned file. Passing its path explicitly is
+ * essential: neither Chief nor Factory searches a target repo or clone root.
  */
 function resolveContract(repoNames) {
   const contracts = repoNames.map((repoName) =>
-    requireFactoryContract(repoName, { cloneRoot: CLONE_ROOT })
+    requireFactoryContract(repoName, {
+      cloneRoot: CLONE_ROOT,
+      configPath: FACTORY_CONFIG_PATH,
+    })
   );
   const sources = new Set(contracts.map((contract) => requireIssueSource(contract)));
   if (sources.size > 1) {
@@ -371,6 +371,18 @@ async function resolveReadyState(contract) {
 }
 
 async function bootstrap(contract) {
+  const deployment = await factoryDeployment();
+  if (!deployment) {
+    throw new Error("cloud-factory-brain is not active in this workspace");
+  }
+  console.log(`✓ Factory contract ${contract.path}`);
+  console.log(`✓ Issue source ${contract.issueSource}`);
+  if (contract.issueSource === "github") {
+    console.log(`✓ GitHub readiness label ${contract.safety.requireLabel}`);
+    console.log("✓ Hosted Cloud Factory brain active");
+    return { deployment, contract };
+  }
+
   const team = await resolveTeam(contract);
   const state = await resolveReadyState(contract);
   const readinessLabel = await findLabel([
@@ -384,12 +396,6 @@ async function bootstrap(contract) {
       "in Linear, then rerun onboarding.",
     );
   }
-  const deployment = await factoryDeployment();
-  if (!deployment) {
-    throw new Error("cloud-factory-brain is not active in this workspace");
-  }
-  console.log(`✓ Factory contract ${contract.path}`);
-  console.log(`✓ Issue source ${contract.issueSource}`);
   console.log(`✓ Linear team ${contract.safety.requireTeamKey}`);
   console.log(`✓ Linear state ${state.title}`);
   console.log(`✓ Linear label ${readinessLabel.name}`);
@@ -409,7 +415,7 @@ async function factoryDeployment() {
 }
 
 async function status(repoNames) {
-  const contract = requireLinearSurface(resolveContract(repoNames), "status");
+  const contract = resolveContract(repoNames);
   const { team, state, readinessLabel, deployment } = await bootstrap(contract);
   console.log(JSON.stringify({
     ready: true,
@@ -423,12 +429,25 @@ async function status(repoNames) {
       issueSource: contract.issueSource,
       repos: repoNames,
     },
-    linear: {
-      team: { id: team.id, key: contract.safety.requireTeamKey, name: team.name },
-      readinessState: { id: state.id, name: state.title },
-      readinessLabel: { id: readinessLabel.id, name: readinessLabel.name },
-      defaultRecipe: config.recipes.default,
-    },
+    ...(contract.issueSource === "linear"
+      ? {
+          linear: {
+            team: {
+              id: team.id,
+              key: contract.safety.requireTeamKey,
+              name: team.name,
+            },
+            readinessState: { id: state.id, name: state.title },
+            readinessLabel: { id: readinessLabel.id, name: readinessLabel.name },
+            defaultRecipe: config.recipes.default,
+          },
+        }
+      : {
+          github: {
+            readinessLabel: contract.safety.requireLabel,
+            defaultRecipe: config.recipes.default,
+          },
+        }),
     deployment: {
       agentId: deployment.agentId,
       name: deployment.deployedName,
@@ -905,16 +924,15 @@ const COMMANDS = new Set([
 
 const USAGE =
   "Usage: node scripts/factory-control.mjs " +
-  "bootstrap <repo[,repo]>|status <repo[,repo]>|dispatch-workspace-task|" +
+  "bootstrap [repo[,repo]]|status [repo[,repo]]|dispatch-workspace-task|" +
   "promote-issue <LINEAR-KEY> <repo[,repo]> [single|workflow|team] " +
   "[--allow-claimed]|" +
   "create-task <task-spec.json>|" +
   "comment <LINEAR-KEY> <body-file|-> [idempotency-key]";
 
 /**
- * Repository routes are required wherever a dispatch contract is needed:
- * `issueSource`, the safety gate, and the merge policy all live in the target
- * repository's `factory.config.json`, so there is no repo-independent answer.
+ * Repository routes select task ownership, not a config file. The surface,
+ * safety gate, and merge policy always come from Chief's active contract.
  */
 function requireRepoNames(argvIndex, commandName) {
   const repoNames = (process.argv[argvIndex] ?? "")
@@ -924,8 +942,8 @@ function requireRepoNames(argvIndex, commandName) {
   if (repoNames.length === 0) {
     throw new Error(
       `Usage: node scripts/factory-control.mjs ${commandName} <repo[,repo]>. ` +
-      "Factory's dispatch contract is per repository, so this command needs " +
-      "to know which one.",
+      "This command needs at least one repository route; the contract itself " +
+      "still comes from Chief's single active file.",
     );
   }
   return repoNames;
@@ -941,11 +959,17 @@ async function planCommand() {
     throw new Error(USAGE);
   }
   if (command === "bootstrap") {
-    const repoNames = requireRepoNames(3, "bootstrap");
-    return () =>
-      bootstrap(requireLinearSurface(resolveContract(repoNames), "bootstrap"));
+    const repoNames = process.argv[3]
+      ? requireRepoNames(3, "bootstrap")
+      : ["chief"];
+    return () => bootstrap(resolveContract(repoNames));
   }
-  if (command === "status") return () => status(requireRepoNames(3, "status"));
+  if (command === "status") {
+    const repoNames = process.argv[3]
+      ? requireRepoNames(3, "status")
+      : ["chief"];
+    return () => status(repoNames);
+  }
   if (command === "dispatch-workspace-task") {
     return () => createWorkspaceConvergenceTask();
   }

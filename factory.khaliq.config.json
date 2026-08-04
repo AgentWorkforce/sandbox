@@ -1,0 +1,34 @@
+{
+  "issueSource": "github",
+  "repos": {
+    "org": "AgentWorkforce",
+    "names": [
+      "chief",
+      "cloud",
+      "factory",
+      "hoopsheet",
+      "pear",
+      "relay",
+      "relayfile",
+      "workforce"
+    ],
+    "cloneRoot": "/Users/khaliqgant/Projects/AgentWorkforce"
+  },
+  "safety": {
+    "requireLabel": "factory",
+    "requireTitlePrefix": "[factory]"
+  },
+  "recipes": {
+    "default": "single",
+    "labels": {
+      "single": "agent:single",
+      "workflow": "agent:workflow",
+      "team": "agent:team"
+    }
+  },
+  "mergePolicy": "never",
+  "babysitter": {
+    "enabled": true
+  },
+  "terminalState": "human-review"
+}

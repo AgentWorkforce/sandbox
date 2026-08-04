@@ -9,8 +9,11 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  CLONE_ROOT,
+  FACTORY_CONFIG_PATH,
   REPO_ROOT,
   activeWorkspace,
+  factoryRuntimeEnv,
   loadConfig,
 } from "./lib/chief-runtime.mjs";
 
@@ -93,7 +96,13 @@ const runtimePath = Array.from(new Set([
   "/usr/sbin",
   "/sbin",
 ])).join(":");
-const serviceEnvironment = { PATH: runtimePath };
+const serviceEnvironment = {
+  PATH: runtimePath,
+  ...factoryRuntimeEnv({
+    factoryConfigPath: FACTORY_CONFIG_PATH,
+    cloneRoot: CLONE_ROOT,
+  }),
+};
 
 const services = [
   {

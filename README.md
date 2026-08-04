@@ -1,20 +1,20 @@
 # Chief
 
 Chief is the front door to an agent team. It keeps durable context in
-Markdown, sees human work in Linear and agent work in GitHub through Relayfile,
-and dispatches ready work to the hosted Factory.
+Markdown, sees human work in connected surfaces through Relayfile, and
+dispatches ready work to the hosted Factory.
 
 The operating model is deliberately simple:
 
 ```text
-Human intent in Linear → Chief → Cloud Factory → agent work in GitHub
-                                  ↓
-                       checkpoints back to Linear
+Human intent on configured surface → Chief → Cloud Factory → agent work in GitHub
+                                          ↓
+                         checkpoints back to the source surface
 ```
 
-Linear stays legible to people. GitHub stays legible to agents. Chief
-reconciles outcomes between them without copying every low-level task into
-both systems, and no agent merges without explicit human approval.
+The source surface stays legible to people. GitHub stays legible to agents.
+Chief reconciles outcomes without copying every low-level task into every
+system, and no agent merges without explicit human approval.
 
 ## Set up
 
@@ -38,6 +38,18 @@ npm run config:migrate -- --write      # backup and convert teams.json
 `chief.config.json` is left untouched for rollback. Existing deployments can
 continue on v1 until their principal intentionally runs the write step.
 
+Chief also owns one active Factory dispatch contract at
+`<chief>/factory.config.json`, generated from the committed
+`factory.<principal>.config.json` variant. Factory does not discover contracts:
+start it with the Chief-owned path explicitly.
+
+```bash
+factory start --mode live --config /absolute/path/to/chief/factory.config.json
+```
+
+Chief services export `FACTORY_CONFIG_PATH` and `CLONE_ROOT`; an interactive
+shell may instead use the literal `<chief>/factory.config.json` path.
+
 Onboarding:
 
 1. Signs in to Agent Relay Cloud if needed.
@@ -45,8 +57,8 @@ Onboarding:
    RelayAuth resolve the same durable identity.
 3. Creates the principal's isolated Markdown brain.
 4. Verifies Linear and GitHub workspace connections.
-5. Reuses an existing explicit Factory readiness label and verifies the hosted
-   Factory brain. No Linear label-administration permission is required.
+5. Reuses the active contract's explicit Factory readiness label and verifies
+   the hosted Factory brain. No label-administration permission is required.
 6. Verifies least-privilege access to only `/linear`, `/github`, and
    `/digests`.
 7. Installs resident macOS services that keep those paths mounted in
@@ -108,7 +120,10 @@ agents attached to this local broker.
 
 ## Dispatch work
 
-A Linear issue becomes Factory work only when all of these are true:
+The active `factory.config.json` selects the source. A GitHub-native issue is
+ready only when it is open and carries the configured readiness label. Under a
+Linear-native contract, an issue becomes Factory work only when all of these
+are true:
 
 - title starts with `[factory]`;
 - team is `AR`;
@@ -119,7 +134,7 @@ A Linear issue becomes Factory work only when all of these are true:
 - a repository-routing label such as `cloud`, `relay`, or `relayfile` is set.
 
 Factory creates and coordinates GitHub-side work, then writes useful
-checkpoints back to the Linear issue. It never merges.
+checkpoints back to the configured source. It never merges.
 
 GitHub issues mirrored into Linear can be promoted through the same durable
 Relayfile writeback path used by Chief:
@@ -140,6 +155,8 @@ same checks and make cross-repository team work auditable before dispatch.
 | Path | Purpose |
 |---|---|
 | `teams.<principal>.json` | The principal, the resident agent roster, senses scopes, and recipe choice |
+| `factory.<principal>.config.json` | Committed variant of Chief's Factory dispatch contract |
+| `factory.config.json` | Generated per-machine active contract passed explicitly to Factory |
 | `CLAUDE.md` | Chief's persona and operating manual |
 | `principals/<name>/` | Active principal's memory, journal, and workstreams |
 | `senses/` | Scoped Relayfile projection (gitignored) |

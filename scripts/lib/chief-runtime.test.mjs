@@ -6,9 +6,23 @@ import test from "node:test";
 import {
   assertWorkspaceConvergence,
   deriveConfig,
+  factoryRuntimeEnv,
   loadConfig,
   migrateLegacyRoster,
 } from "./chief-runtime.mjs";
+
+test("Factory runtime environment carries one explicit config and clone root", () => {
+  assert.deepEqual(
+    factoryRuntimeEnv({
+      factoryConfigPath: "/tmp/chief/factory.config.json",
+      cloneRoot: "/tmp/checkouts",
+    }),
+    {
+      FACTORY_CONFIG_PATH: "/tmp/chief/factory.config.json",
+      CLONE_ROOT: "/tmp/checkouts",
+    },
+  );
+});
 
 const legacyWillRoster = {
   team: "chief",
