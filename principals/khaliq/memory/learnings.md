@@ -45,6 +45,21 @@
   list carried `source: "github"` in plain sight and Chief reported it twice as
   a curiosity while continuing to assert Linear-only dispatch. When observed
   data disagrees with the model being reported, stop and chase it.
+- **Verify a CLI flag against the installed binary, not the source repo.** Chief
+  started passing `agent-relay cloud session --reveal-token` because relay's
+  `main` carries it. The binary on this machine is 11.2.0, relay `main` is
+  11.4.0, and 11.2.0 rejects the flag outright — so every hosted Cloud call
+  failed on `unknown option`, taking out the doctor's cloud check and, behind
+  it, integrations, factory, and senses. Reading source proves a flag exists
+  somewhere; only `--help` on the installed binary proves Chief may pass it.
+- **A live supervisor pid is not a live mount.** The doctor called senses OK
+  because a process was alive, while the mount had been stopped for four days
+  with an expired credential — the supervisor stays up retrying a mint
+  RelayAuth keeps refusing. Chief then read a four-day-old `senses/` projection
+  as current external truth. Check the thing Chief actually reads through (the
+  mount, the credential), never the supervisor around it. Same shape as the
+  `broker` OK lesson above; a health check must assert the capability, not the
+  process.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking

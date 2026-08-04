@@ -1,7 +1,7 @@
 ---
 status: active
 owner: khaliq-chief
-updated: 2026-07-30
+updated: 2026-08-04
 repos: [chief, relayfile]
 ---
 # Chief onboarding
@@ -26,6 +26,16 @@ sequence behind the guided onboarding command.
 
 ## History
 
+- 2026-08-04 — Two of Chief's own status checks were lying, and both are fixed
+  on branches awaiting review. `cloud` errored because Chief passed
+  `--reveal-token` to an installed agent-relay 11.2.0 that predates the flag —
+  verified against relay `main` (11.4.0) instead of the binary — which took out
+  integrations, factory, and senses behind it. `senses` reported OK because a
+  supervisor pid was alive while the mount had been stopped since 07-31 with an
+  expired credential, so a four-day-old projection read as current. The doctor
+  now gates senses on the mount and the credential and names the upstream
+  failure. Onboarding lesson: a readiness check that asserts a process rather
+  than a capability makes a new principal's first green run untrustworthy.
 - 2026-07-30 — Production onboarding exposed an upstream capacity failure:
   RelayAuth health remained green while token persistence returned
   `D1_ERROR: Exceeded maximum DB size`. Factory status now prefers Chief's

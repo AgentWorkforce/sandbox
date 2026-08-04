@@ -15,19 +15,28 @@
   gap; removing them exposed it. This blocks any gated workload, Sage and
   NightCTO included.
 
-- **Chief-owned Factory contract cutover is awaiting PR #10.** The active path
-  is `<chief>/factory.config.json`, copied from the committed principal variant
-  and passed explicitly for `chief`, `cloud`, `factory`, `hoopsheet`, `pear`,
-  `relay`, `relayfile`, and `workforce`. `bootstrap` and `status` now understand
-  its GitHub-native gate. Legacy per-repo contracts are not fallback layers and
-  remain a coordinated removal follow-up in AgentWorkforce/chief#11.
+- **Chief-owned Factory contract cutover merged in chief#10.** Factory resolves
+  one explicit contract, with no target-repository or clone-root search. The
+  active `<chief>/factory.config.json` is generated from the committed
+  `factory.<principal>.config.json` variant and routes `chief`, `cloud`,
+  `factory`, `hoopsheet`, `pear`, `relay`, `relayfile`, and `workforce` through
+  its GitHub-native `factory` label gate with `mergePolicy: never`. Legacy
+  per-repo contracts are not fallback layers; their coordinated removal remains
+  AgentWorkforce/chief#11.
 
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.
-- RelayAuth delegated token mint currently returns an upstream error. Chief's
-  scoped senses use Cloud mount sessions until native delegation is repaired.
-- GitHub integration sync health is degraded even though ingress events arrive;
-  diagnose without disconnecting the working installation.
+- **RelayAuth cannot mint a session at all, and it is now the single blocker.**
+  Native delegated mint was already broken; as of 2026-08-04 the Cloud mount
+  session Chief fell back to also returns `500 mount_session_failed`. Senses
+  have not refreshed since 2026-07-31T08:13Z, so Chief has no live Linear or
+  GitHub read and no writeback. Everything downstream — the AR-448 checkpoint,
+  Factory control, the Sage program's item 1 — waits on the gated #2857 D1
+  capacity recovery, which needs Khaliq's explicit grant.
+- GitHub integration health resolved on its own: both installations read
+  `ready` with events through 2026-08-03, and the doctor no longer reports
+  `syncHealthy:false`. Nothing was done to fix it, so if it recurs, treat the
+  earlier degradation as intermittent rather than newly broken.
 - Deploy the Cloud Factory brain persona, enable its reversible production
   flag, and prove one canary Linear issue reaches a GitHub-side agent run.
 - Connect Khaliq's and Will's Chiefs in the same Relay workspace once Will's
@@ -42,6 +51,14 @@
   via env or file instead of `--mcp-config` argv, redact key values from
   node/broker logs) filed as an issue, then rotation. Owner: Khaliq's
   decision on whether this Chief files it or Will's already has.
+  **Add one more, 2026-08-04:** a Cloud access token (`cld_at_…`, expiring
+  2026-08-04T10:01:55Z) was printed into the resident session transcript by
+  Chief running `agent-relay cloud session --json` while diagnosing the
+  `--reveal-token` failure. Short-lived and now expired, but the transcript is
+  persisted, and the refresh token behind it lives until 2026-11-01.
+  `agent-relay cloud login` again to rotate. The general rule stands and Chief
+  broke it: never run a command that prints a credential — on 11.2.0 plain
+  `--json` is exactly such a command, which is why the mask exists in 11.4.0.
 - **Will's Chief needs its `brainRoot` repointed.** His brain moved from the
   repo root to `principals/will/` on 2026-07-30 (Khaliq's call). Nothing in
   this repo referenced the old paths — skills and scripts are all
@@ -86,6 +103,13 @@
   **Remaining fix is cloud-side** — claim before spawning, not after, and abort
   the dispatch when the claim write fails. Chief's half (a promote-time guard
   that refuses to re-offer an issue with an open PR) is done.
+  **Status 2026-08-04:** the re-dispatch window is closed — AR-448 reads
+  `In Human Review` in the senses projection, though that projection stopped
+  refreshing 2026-07-31T08:13Z, so it is the last known state and not a live
+  one. It still carries `factory-ready`. Both PRs are still open and untouched
+  (#1402 last updated 07-30, #1403 07-31). The lineage decision is Khaliq's and
+  has been outstanding five days; fleet identity work should not build on
+  either branch until it lands.
 - **Workspace keys leak through observer links too.** `agent-relay node status`
   prints `https://agentrelay.com/observer?key=rk_live_…` in plaintext — a
   channel the 07-29 rotation batch did not cover. Relay PR #1405 (`fix(plugins):
@@ -103,3 +127,9 @@
   healthy, run
   `npm run factory:comment -- AR-448 factory-tasks/ar-448-pr-opened-checkpoint.md ar-448-pr-1402-opened`,
   confirm the receipt, then move AR-448 out of `Ready for Agent`.
+  **Still blocked 2026-08-04:** every mount session mint returns
+  `500 mount_session_failed` — five days now. The staged body also needs a
+  rewrite before it is posted: it announces "PR opened" for #1402, while the
+  issue has since moved to `In Human Review` with two competing PRs open. The
+  checkpoint Linear actually needs today is the lineage decision, not the one
+  staged on 07-31.

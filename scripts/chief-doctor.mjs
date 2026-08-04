@@ -12,6 +12,7 @@ import {
   processIsAlive,
   publicWorkspace,
 } from "./lib/chief-runtime.mjs";
+import { credentialHealth } from "./lib/senses-health.mjs";
 
 const config = loadConfig();
 const results = [];
@@ -157,14 +158,38 @@ try {
 } catch {
   // A missing pid file is the normal pre-install state.
 }
+// A live supervisor pid is not a live mount. The supervisor stays up while it
+// retries a mint that RelayAuth keeps refusing, so liveness alone reported OK
+// on 2026-08-04 with the mount stopped since 07-31 and its credential four days
+// expired — the projection under `senses/` was stale external truth read as
+// current. Report the mount and the credential, which are what Chief reads
+// through.
 const sensesRunning = processIsAlive(supervisorPid);
+const mountRunning = supervisorState?.status === "running"
+  && processIsAlive(supervisorState?.mountPid ?? null);
+const credentialExpiresAt = supervisorState?.credentialExpiresAt ?? null;
+const credential = credentialHealth(credentialExpiresAt);
+const sensesHealthy = sensesRunning && mountRunning && credential.healthy;
+const sensesNext = sensesRunning
+  ? (sensesHealthy
+    ? null
+    : "Senses are not projecting external truth; anything under senses/ is a " +
+      "stale snapshot. Check `npm run senses:status` — a mint failing with " +
+      "500 mount_session_failed is the RelayAuth capacity incident, not a " +
+      "local fault.")
+  : "Start the senses supervisor: `npm run senses`.";
 result(
   "senses",
-  sensesRunning ? "ok" : "warn",
+  sensesHealthy ? "ok" : "warn",
   {
     running: sensesRunning,
+    mountRunning,
+    credentialExpiresAt,
+    credentialHealthy: credential.healthy,
+    credentialProblem: credential.problem,
     localDir: resolve(REPO_ROOT, config.senses.localDir),
     state: supervisorState,
+    next: sensesNext,
   },
 );
 

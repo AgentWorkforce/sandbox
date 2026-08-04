@@ -1,7 +1,7 @@
 ---
 status: active
 owner: khaliq-chief
-updated: 2026-07-31
+updated: 2026-08-04
 repos: [chief, relay, cloud]
 ---
 # Workspace convergence
@@ -14,12 +14,17 @@ review and merge. `node up` resolves the machine-global canonical workspace
 before the broker can mint one, `workspace active --json` emits convergence
 evidence, and a stop/start regression test covers the resident address.
 
-**Next:** Khaliq reviews and merges relay PR #1402, then a real broker
-stop/start on this machine confirms the Chief address and mailbox survive.
-RelayAuth capacity recovery remains the prerequisite for fresh scoped
-credentials and provider writeback.
+**Next:** Khaliq picks the surviving AR-448 lineage — #1402 or #1403 — and
+merges it, then a real broker stop/start on this machine confirms the Chief
+address and mailbox survive. RelayAuth capacity recovery remains the
+prerequisite for fresh scoped credentials and provider writeback.
 
 ## History
+
+- 2026-08-04 — The invariant still holds at boot: `default` resolves Relaycast,
+  Relayfile, and RelayAuth to one `rw_7ccfea89` identity, broker CONNECTED with
+  the resident attached. Both AR-448 PRs are still open and untouched, so the
+  lineage decision is five days old and nothing has been merged into it.
 
 - 2026-07-31 — Implemented AR-448 and opened relay PR #1402 on
   `feat/ar-448-durable-workspace-identity`. Root cause was single: `node up`
