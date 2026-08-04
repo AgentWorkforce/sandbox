@@ -4,6 +4,7 @@ import test from "node:test";
 import agent, {
   createChiefHandler,
   normalizeIncomingMessage,
+  replyForSurface,
   writebackRequestFor,
 } from "./agent.mjs";
 
@@ -198,6 +199,24 @@ test("handler replies to the originating Telegram message", async () => {
     idempotencyKey: "chief-khaliq:workspace-khaliq:telegram:telegram-delivery-1",
   });
   assert.equal(state.relayReads(), 0);
+});
+
+test("Telegram replies preserve an exact 4,096-character boundary", () => {
+  const exactBoundary = "x".repeat(4_096);
+  assert.equal(replyForSurface("telegram", exactBoundary), exactBoundary);
+});
+
+test("Telegram replies over 4,096 characters are capped without splitting Unicode", () => {
+  const overBoundary = `${"x".repeat(4_095)}\u{1F680}extra`;
+  const reply = replyForSurface("telegram", overBoundary);
+  assert.equal(reply, "x".repeat(4_095));
+  assert.ok(reply.length <= 4_096);
+  assert.doesNotMatch(reply, /[\uD800-\uDBFF]$/);
+});
+
+test("Slack replies retain the existing reply limit", () => {
+  const reply = "x".repeat(4_097);
+  assert.equal(replyForSurface("slack", reply), reply);
 });
 
 test("delivery retries reuse one provider idempotency identity", () => {

@@ -4,6 +4,7 @@ import { CHIEF_CONTEXT, CHIEF_CONTEXT_TEXT } from "./context.generated.mjs";
 const EXPECTED_AGENT = "chief-khaliq";
 const MAX_MESSAGE_LENGTH = 8_000;
 const MAX_REPLY_LENGTH = 32_000;
+const TELEGRAM_MAX_REPLY_LENGTH = 4_096;
 const WRITEBACK_TIMEOUT_MS = 12_000;
 const WRITEBACK_HARD_TIMEOUT_MS = 15_000;
 
@@ -127,6 +128,17 @@ function withHardTimeout(promise, timeoutMs, label) {
   });
 }
 
+export function replyForSurface(surface, output) {
+  const reply = output.trim();
+  if (surface !== "telegram") return reply.slice(0, MAX_REPLY_LENGTH);
+  let end = 0;
+  for (const character of reply) {
+    if (end + character.length > TELEGRAM_MAX_REPLY_LENGTH) break;
+    end += character.length;
+  }
+  return reply.slice(0, end);
+}
+
 export function writebackRequestFor(message, reply, workspaceId) {
   const idempotencyKey = `${EXPECTED_AGENT}:${workspaceId}:${message.surface}:${message.eventId}`;
   if (message.surface === "slack") {
@@ -189,7 +201,7 @@ export function createChiefHandler({ writeJson = writeJsonFile } = {}) {
     if (result.exitCode !== 0) {
       throw new Error(`chief harness failed with exit code ${result.exitCode}`);
     }
-    const reply = result.output.trim().slice(0, MAX_REPLY_LENGTH);
+    const reply = replyForSurface(message.surface, result.output);
     if (!reply) {
       ctx.log("info", "chief produced no customer-visible reply", { eventId: event.id });
       return;
