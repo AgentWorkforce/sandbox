@@ -3,18 +3,19 @@
 // a terminal attached to an agent, and renders live workstream status.
 // Localhost only, no dependencies.
 import { createServer } from 'node:http';
-import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { mkdir, open, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { constants as fsConstants, existsSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { basename, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { loadConfig } from '../../scripts/lib/chief-runtime.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1';
 const PORT = 4780;
 
-// Read-only: this server never writes outside its own directory.
+// Writes remain confined to this tool's state directory. External org overlays
+// are read-only and only loaded from explicitly allowlisted directories.
 const REPO_ROOT = join(HERE, '..', '..');
 const activeTeam = () => loadConfig().roster;
 const brainRoot = () => join(REPO_ROOT, `principals/${activeTeam().principal.slug}`);
@@ -26,6 +27,12 @@ const STATUS_ORDER = { active: 0, blocked: 1, parked: 2, done: 3 };
 const REPOS_ROOT = join(HERE, '..', '..', '..');
 const GIT_CACHE_TTL_MS = 60_000;
 const GIT_LOG_DELIM = '\x1f';
+const ORG_OVERLAY_FILENAME = 'org-overlay.json';
+const ORG_OVERLAY_DIRS_ENV = 'CHIEF_ORG_OVERLAY_DIRS';
+const ORG_OVERLAY_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const OVERLAY_FIELDS = new Set(['schemaVersion', 'principal', 'agents']);
+const PRINCIPAL_FIELDS = new Set(['name', 'slug']);
+const AGENT_FIELDS = new Set(['name', 'title', 'reportsTo', 'repo', 'status']);
 
 // Review inbox: chief is the sole writer of queue.md, this server only reads
 // it and relays verdict clicks back to chief as a DM — it never edits the
@@ -72,6 +79,75 @@ function slugify(value) {
     .replace(/^-|-$/g, '');
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function unexpectedKey(value, allowed) {
+  return Object.keys(value).find((key) => !allowed.has(key));
+}
+
+function principalIdentity(overlay) {
+  if (!isPlainObject(overlay?.principal) || !nonEmptyString(overlay.principal.name)) return null;
+  const slug = overlay.principal.slug || slugify(overlay.principal.name);
+  if (!ORG_OVERLAY_SLUG.test(slug)) return null;
+  return {
+    name: overlay.principal.name.trim().toLocaleLowerCase('en-US'),
+    slug,
+  };
+}
+
+function validateExternalOverlay(value) {
+  if (!isPlainObject(value)) return { valid: false, error: 'manifest must be a JSON object' };
+  const topLevelExtra = unexpectedKey(value, OVERLAY_FIELDS);
+  if (topLevelExtra) return { valid: false, error: `unknown top-level field: ${topLevelExtra}` };
+  if (value.schemaVersion !== 1) return { valid: false, error: 'schemaVersion must equal 1' };
+
+  if (!isPlainObject(value.principal)) {
+    return { valid: false, error: 'principal must be an object' };
+  }
+  const principalExtra = unexpectedKey(value.principal, PRINCIPAL_FIELDS);
+  if (principalExtra) return { valid: false, error: `unknown principal field: ${principalExtra}` };
+  if (!nonEmptyString(value.principal.name)) {
+    return { valid: false, error: 'principal.name must be a non-empty string' };
+  }
+  if (value.principal.slug !== undefined
+    && (!nonEmptyString(value.principal.slug) || !ORG_OVERLAY_SLUG.test(value.principal.slug))) {
+    return { valid: false, error: 'principal.slug must be a canonical lowercase slug' };
+  }
+  if (!principalIdentity(value)) {
+    return { valid: false, error: 'principal.name must produce a non-empty canonical slug' };
+  }
+
+  if (!Array.isArray(value.agents)) return { valid: false, error: 'agents must be an array' };
+  const agentNames = new Set();
+  for (const [index, agent] of value.agents.entries()) {
+    if (!isPlainObject(agent)) return { valid: false, error: `agents[${index}] must be an object` };
+    const agentExtra = unexpectedKey(agent, AGENT_FIELDS);
+    if (agentExtra) return { valid: false, error: `unknown agents[${index}] field: ${agentExtra}` };
+    if (!nonEmptyString(agent.name)) {
+      return { valid: false, error: `agents[${index}].name must be a non-empty string` };
+    }
+    if (agentNames.has(agent.name)) {
+      return { valid: false, error: `duplicate agent name: ${agent.name}` };
+    }
+    agentNames.add(agent.name);
+    for (const field of ['title', 'reportsTo', 'repo', 'status']) {
+      if (agent[field] !== undefined && !nonEmptyString(agent[field])) {
+        return { valid: false, error: `agents[${index}].${field} must be a non-empty string` };
+      }
+    }
+    if (agent.repo !== undefined && !isAbsolute(agent.repo)) {
+      return { valid: false, error: `agents[${index}].repo must be an absolute path` };
+    }
+  }
+  return { valid: true, value };
+}
+
 // Agent Relay may append a human update notice after its JSON payload. Parse
 // the first complete JSON object/array instead of assuming stdout is only JSON.
 function parseFirstJson(text) {
@@ -110,9 +186,8 @@ function parseFirstJson(text) {
 }
 
 function overlayMatchesPrincipal(overlay, principal) {
-  if (!overlay?.principal) return false;
-  const overlaySlug = overlay.principal.slug || slugify(overlay.principal.name);
-  return overlaySlug === principal.slug;
+  const identity = principalIdentity(overlay);
+  return identity?.slug === slugify(principal.slug || principal.name);
 }
 
 function inferLiveTitle(agent) {
@@ -228,12 +303,148 @@ function capture(bin, args) {
   });
 }
 
-async function readOrgOverlay() {
+function parseBuiltInOverlays(parsed) {
+  if (Array.isArray(parsed?.overlays)) return parsed.overlays;
+  // Back-compat: a bare single-overlay object (the pre-multi-principal shape).
+  if (parsed?.principal) return [parsed];
+  return [];
+}
+
+function hasParentSegment(path) {
+  return path.split(/[\\/]/).includes('..');
+}
+
+function comparePaths(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+async function externalOverlaySources(configuredDirs, emitWarning) {
+  if (!nonEmptyString(configuredDirs)) return [];
+  const canonicalDirs = new Set();
+  for (const configuredDir of configuredDirs.split(delimiter).map((entry) => entry.trim()).filter(Boolean)) {
+    if (!isAbsolute(configuredDir) || hasParentSegment(configuredDir)) {
+      emitWarning(`Skipping invalid ${ORG_OVERLAY_DIRS_ENV} entry: ${configuredDir}`);
+      continue;
+    }
+    try {
+      const canonicalDir = await realpath(configuredDir);
+      const info = await stat(canonicalDir);
+      if (!info.isDirectory()) {
+        emitWarning(`Skipping non-directory overlay source: ${configuredDir}`);
+        continue;
+      }
+      canonicalDirs.add(canonicalDir);
+    } catch (error) {
+      emitWarning(`Skipping unavailable overlay directory ${configuredDir}: ${error.message}`);
+    }
+  }
+  return [...canonicalDirs]
+    .sort(comparePaths)
+    .map((directory) => ({ directory, path: join(directory, ORG_OVERLAY_FILENAME) }));
+}
+
+async function readExternalOverlay(source, emitWarning) {
   try {
-    return JSON.parse(await readFile(join(HERE, 'org.json'), 'utf8'));
-  } catch {
+    const canonicalPath = await realpath(source.path);
+    if (dirname(canonicalPath) !== source.directory) {
+      emitWarning(`Skipping overlay symlink outside allowlisted directory: ${source.path}`);
+      return null;
+    }
+    const handle = await open(canonicalPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    let raw;
+    try {
+      const fileInfo = await handle.stat();
+      if (!fileInfo.isFile()) {
+        emitWarning(`Skipping non-file overlay source: ${source.path}`);
+        return null;
+      }
+      raw = await handle.readFile('utf8');
+    } finally {
+      await handle.close();
+    }
+    const parsed = JSON.parse(raw);
+    const validation = validateExternalOverlay(parsed);
+    if (!validation.valid) {
+      emitWarning(`Skipping malformed overlay ${source.path}: ${validation.error}`);
+      return null;
+    }
+    return { overlay: validation.value, source: canonicalPath, identity: principalIdentity(validation.value) };
+  } catch (error) {
+    emitWarning(`Skipping unavailable or malformed overlay ${source.path}: ${error.message}`);
     return null;
   }
+}
+
+function rejectDuplicateExternalOverlays(builtIns, candidates, emitWarning) {
+  const builtInNames = new Set();
+  const builtInSlugs = new Set();
+  for (const overlay of builtIns) {
+    const identity = principalIdentity(overlay);
+    if (!identity) continue;
+    builtInNames.add(identity.name);
+    builtInSlugs.add(identity.slug);
+  }
+
+  const rejected = new Set();
+  for (const candidate of candidates) {
+    if (builtInNames.has(candidate.identity.name) || builtInSlugs.has(candidate.identity.slug)) {
+      rejected.add(candidate);
+      emitWarning(`Skipping external overlay that duplicates a built-in principal: ${candidate.source}`);
+    }
+  }
+
+  const nameOwners = new Map();
+  const slugOwners = new Map();
+  for (const candidate of candidates) {
+    if (rejected.has(candidate)) continue;
+    const names = nameOwners.get(candidate.identity.name) ?? [];
+    names.push(candidate);
+    nameOwners.set(candidate.identity.name, names);
+    const slugs = slugOwners.get(candidate.identity.slug) ?? [];
+    slugs.push(candidate);
+    slugOwners.set(candidate.identity.slug, slugs);
+  }
+  for (const owners of [...nameOwners.values(), ...slugOwners.values()]) {
+    if (owners.length < 2) continue;
+    for (const owner of owners) rejected.add(owner);
+  }
+  for (const candidate of candidates) {
+    if (rejected.has(candidate)
+      && !builtInNames.has(candidate.identity.name)
+      && !builtInSlugs.has(candidate.identity.slug)) {
+      emitWarning(`Skipping duplicate external principal ${candidate.identity.slug}: ${candidate.source}`);
+    }
+  }
+  return candidates.filter((candidate) => !rejected.has(candidate));
+}
+
+// org.json holds committed overlays; operator-configured external manifests are
+// appended only after strict validation and collision checks.
+async function readOrgOverlays({
+  builtInPath = join(HERE, 'org.json'),
+  configuredDirs = process.env[ORG_OVERLAY_DIRS_ENV],
+  warn = console.warn,
+} = {}) {
+  const warnings = [];
+  const emitWarning = (message) => {
+    warnings.push(message);
+    warn?.(message);
+  };
+  let builtIns = [];
+  try {
+    builtIns = parseBuiltInOverlays(JSON.parse(await readFile(builtInPath, 'utf8')));
+  } catch (error) {
+    emitWarning(`Unable to load built-in org overlays: ${error.message}`);
+  }
+  const sources = await externalOverlaySources(configuredDirs, emitWarning);
+  const loaded = [];
+  for (const source of sources) {
+    const candidate = await readExternalOverlay(source, emitWarning);
+    if (candidate) loaded.push(candidate);
+  }
+  const accepted = rejectDuplicateExternalOverlays(builtIns, loaded, emitWarning);
+  return { overlays: [...builtIns, ...accepted.map((candidate) => candidate.overlay)], warnings };
 }
 
 async function loadRuntime() {
@@ -241,8 +452,8 @@ async function loadRuntime() {
   if (runtimeCache && runtimeCache.expires > now) return runtimeCache.promise;
   const promise = (async () => {
     const config = activeTeam();
-    const [overlay, localResult, fleetResult] = await Promise.all([
-      readOrgOverlay(),
+    const [overlayResult, localResult, fleetResult] = await Promise.all([
+      readOrgOverlays(),
       capture(RELAY_BIN, ['node', 'agent', 'list'])
         .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
         .catch((error) => ({ value: [], error })),
@@ -250,10 +461,15 @@ async function loadRuntime() {
         .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
         .catch((error) => ({ value: { nodes: [] }, error })),
     ]);
+    const overlay = overlayResult.overlays
+      .find((entry) => overlayMatchesPrincipal(entry, config.principal)) ?? null;
     return {
       org: buildRuntimeOrg(config, overlay, Array.isArray(localResult.value) ? localResult.value : []),
       executionLayers: executionLayersFromFleet(fleetResult.value, fleetResult.error),
-      warnings: [localResult.error, fleetResult.error].filter(Boolean).map((error) => error.message),
+      warnings: [
+        ...overlayResult.warnings,
+        ...[localResult.error, fleetResult.error].filter(Boolean).map((error) => error.message),
+      ],
     };
   })();
   runtimeCache = { expires: now + RUNTIME_CACHE_TTL_MS, promise };
@@ -851,4 +1067,6 @@ export {
   handleReviewNotifications,
   parseFirstJson,
   parseReviewQueue,
+  readOrgOverlays,
+  validateExternalOverlay,
 };
