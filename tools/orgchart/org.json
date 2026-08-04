@@ -237,20 +237,6 @@
           "status": "unseated"
         },
         {
-          "name": "customers",
-          "title": "Customers",
-          "reportsTo": "agentworkforce",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents",
-          "status": "unseated"
-        },
-        {
-          "name": "watchdog-customer",
-          "title": "Watchdog (customer) → chief-watchdog",
-          "reportsTo": "customers",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unseated"
-        },
-        {
           "name": "hoopsheet",
           "title": "HoopSheet",
           "reportsTo": "agentworkforce",
@@ -375,62 +361,6 @@
           "reportsTo": "chief-khaliq",
           "repo": "/Users/khaliqgant/Projects/AgentWorkforce/nightcto",
           "status": "unseated"
-        }
-      ]
-    },
-    {
-      "principal": {
-        "name": "Watchdog"
-      },
-      "agents": [
-        {
-          "name": "chief-watchdog",
-          "title": "Watchdog Chief",
-          "reportsTo": "Watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unseated"
-        },
-        {
-          "name": "customer-health",
-          "title": "Customer Health",
-          "reportsTo": "chief-watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unverified"
-        },
-        {
-          "name": "intake-triage",
-          "title": "Intake Triage",
-          "reportsTo": "chief-watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unverified"
-        },
-        {
-          "name": "linear-reconciler",
-          "title": "Linear Reconciler",
-          "reportsTo": "chief-watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unverified"
-        },
-        {
-          "name": "churn-digest",
-          "title": "Churn Digest",
-          "reportsTo": "chief-watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unverified"
-        },
-        {
-          "name": "deadline-watcher",
-          "title": "Deadline Watcher",
-          "reportsTo": "chief-watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unverified"
-        },
-        {
-          "name": "meeting-actions",
-          "title": "Meeting Actions",
-          "reportsTo": "chief-watchdog",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
-          "status": "unverified"
         }
       ]
     }
