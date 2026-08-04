@@ -1,6 +1,7 @@
 {
   "name": "chief",
   "private": true,
+  "type": "module",
   "scripts": {
     "setup": "node scripts/onboard.mjs",
     "install:services": "node scripts/install.mjs",
@@ -27,6 +28,22 @@
     "status": "agent-relay node status",
     "digest:now": "launchctl kickstart -k gui/501/com.agentworkforce.chief.digest",
     "orgchart": "node tools/orgchart/serve.mjs",
-    "orgchart:test": "node --test tools/orgchart/serve.test.mjs"
+    "orgchart:test": "node --test tools/orgchart/serve.test.mjs",
+    "cloud:context:build": "node scripts/build-chief-cloud-context.mjs",
+    "cloud:context:check": "node scripts/build-chief-cloud-context.mjs --check",
+    "cloud:typecheck": "node --check personas/chief-khaliq/agent.mjs && node --check scripts/build-chief-cloud-context.mjs && node --check scripts/deploy-chief-cloud.mjs && node --check scripts/verify-chief-cloud-bundle.mjs",
+    "cloud:test": "node --test scripts/lib/chief-cloud-context.test.mjs personas/chief-khaliq/agent.test.mjs",
+    "cloud:compile:check": "node scripts/verify-chief-cloud-bundle.mjs",
+    "cloud:deploy:khaliq:dry-run": "node scripts/deploy-chief-cloud.mjs --dry-run --no-prompt",
+    "cloud:deploy:khaliq": "node scripts/deploy-chief-cloud.mjs"
+  },
+  "dependencies": {
+    "@agentworkforce/runtime": "4.1.37"
+  },
+  "devDependencies": {
+    "agentworkforce": "4.1.37"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

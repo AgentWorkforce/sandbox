@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "tenant": "khaliq",
+  "agent": "chief-khaliq",
+  "source": {
+    "repository": "https://github.com/AgentWorkforce/chief.git",
+    "ref": "refs/pull/13/head",
+    "commit": "004472f27f65940313ce9348a503124baa2184b7"
+  },
+  "selections": [
+    {
+      "path": "teams.khaliq.json",
+      "mode": "khaliq-team-metadata",
+      "sha256": "c0770070956d27ab3d93befb9cba256eb2bb1ff00cc9279c82f36c9e1cc2665a"
+    },
+    {
+      "path": "principals/khaliq/memory/learnings.md",
+      "mode": "text",
+      "sha256": "aa8e9b51890fba5ec5326ae57a4f0649e5fae4fcc63a994305877f9d93e4a68c"
+    },
+    {
+      "path": "principals/khaliq/memory/preferences.md",
+      "mode": "text",
+      "sha256": "2842ad813dc8d023d67ad8194dbd5730d11099b7166307c485d76b9a58a3a4a6"
+    },
+    {
+      "path": "principals/khaliq/workstreams/chief-onboarding.md",
+      "mode": "workstream-current",
+      "sha256": "9d4482f1fc0828b8f7b8016d3d774c7ec8ead34afb944fd1402368c42994ed48"
+    },
+    {
+      "path": "principals/khaliq/workstreams/workspace-convergence.md",
+      "mode": "workstream-current",
+      "sha256": "80b9009c3a984e15e800898094e5189604698f9a17d68c38dca4b2c6d11f2dab"
+    }
+  ]
+}
