@@ -228,11 +228,19 @@ function capture(bin, args) {
   });
 }
 
-async function readOrgOverlay() {
+// org.json holds one hierarchy overlay per principal (`{ overlays: [...] }`) so
+// Khaliq's and Will's department trees can live in the same committed file
+// without either one clobbering the other — loadRuntime() below picks the
+// entry matching the currently active principal via overlayMatchesPrincipal.
+async function readOrgOverlays() {
   try {
-    return JSON.parse(await readFile(join(HERE, 'org.json'), 'utf8'));
+    const parsed = JSON.parse(await readFile(join(HERE, 'org.json'), 'utf8'));
+    if (Array.isArray(parsed?.overlays)) return parsed.overlays;
+    // Back-compat: a bare single-overlay object (the pre-multi-principal shape).
+    if (parsed?.principal) return [parsed];
+    return [];
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -241,8 +249,8 @@ async function loadRuntime() {
   if (runtimeCache && runtimeCache.expires > now) return runtimeCache.promise;
   const promise = (async () => {
     const config = activeTeam();
-    const [overlay, localResult, fleetResult] = await Promise.all([
-      readOrgOverlay(),
+    const [overlays, localResult, fleetResult] = await Promise.all([
+      readOrgOverlays(),
       capture(RELAY_BIN, ['node', 'agent', 'list'])
         .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
         .catch((error) => ({ value: [], error })),
@@ -250,6 +258,7 @@ async function loadRuntime() {
         .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
         .catch((error) => ({ value: { nodes: [] }, error })),
     ]);
+    const overlay = overlays.find((entry) => overlayMatchesPrincipal(entry, config.principal)) ?? null;
     return {
       org: buildRuntimeOrg(config, overlay, Array.isArray(localResult.value) ? localResult.value : []),
       executionLayers: executionLayersFromFleet(fleetResult.value, fleetResult.error),

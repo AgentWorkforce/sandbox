@@ -1,140 +1,438 @@
 {
-  "principal": {
-    "name": "Will"
-  },
-  "agents": [
+  "overlays": [
     {
-      "name": "chief",
-      "title": "Chief of Staff",
-      "reportsTo": "Will",
-      "repo": "/Users/will/Projects/AgentWorkforce/chief",
-      "status": "resident"
+      "principal": {
+        "name": "Will"
+      },
+      "agents": [
+        {
+          "name": "chief",
+          "title": "Chief of Staff",
+          "reportsTo": "Will",
+          "repo": "/Users/will/Projects/AgentWorkforce/chief",
+          "status": "resident"
+        },
+        {
+          "name": "voice",
+          "title": "Chief's Voice",
+          "reportsTo": "chief",
+          "repo": "/Users/will/Projects/AgentWorkforce/chief",
+          "status": "resident"
+        },
+        {
+          "name": "cmo",
+          "title": "CMO — GTM dept",
+          "reportsTo": "chief",
+          "repo": "/Users/will/Projects/AgentWorkforce/cmo",
+          "status": "resident"
+        },
+        {
+          "name": "scout",
+          "title": "Relay Scout (CRM)",
+          "reportsTo": "cmo",
+          "repo": "/Users/will/Projects/AgentWorkforce/scout",
+          "status": "resident"
+        },
+        {
+          "name": "agentrelay-com",
+          "title": "agentrelay.com + content pipeline",
+          "reportsTo": "cmo",
+          "repo": "/Users/will/Projects/AgentWorkforce/agentrelay.com",
+          "status": "resident"
+        },
+        {
+          "name": "coo",
+          "title": "COO — biz ops",
+          "reportsTo": "chief",
+          "repo": "/Users/will/Projects/AgentWorkforce/coo",
+          "status": "unseated"
+        },
+        {
+          "name": "cso",
+          "title": "CSO — research & competitive intel",
+          "reportsTo": "chief",
+          "repo": "/Users/will/Projects/AgentWorkforce/cso",
+          "status": "resident"
+        },
+        {
+          "name": "cpo",
+          "title": "CPO — product",
+          "reportsTo": "chief",
+          "repo": "/Users/will/Projects/AgentWorkforce/cpo",
+          "status": "resident"
+        },
+        {
+          "name": "head-of-ecosystem",
+          "title": "Head of AR Ecosystem",
+          "reportsTo": "cpo",
+          "repo": "/Users/will/Projects/AgentWorkforce/cpo",
+          "status": "resident"
+        },
+        {
+          "name": "head-of-experiments",
+          "title": "Head of Experiments",
+          "reportsTo": "cpo",
+          "repo": "/Users/will/Projects/AgentWorkforce/cpo",
+          "status": "resident"
+        },
+        {
+          "name": "chief-app",
+          "title": "chief-app (org cockpit)",
+          "reportsTo": "head-of-ecosystem",
+          "repo": "/Users/will/Projects/AgentWorkforce/chief-app",
+          "status": "resident"
+        },
+        {
+          "name": "burn",
+          "title": "burn + software factory",
+          "reportsTo": "head-of-ecosystem",
+          "repo": "/Users/will/Projects/AgentWorkforce/burn",
+          "status": "resident"
+        },
+        {
+          "name": "relayfile",
+          "title": "Relayfile (senses layer)",
+          "reportsTo": "head-of-ecosystem",
+          "repo": "/Users/will/Projects/AgentWorkforce/relayfile",
+          "status": "resident"
+        },
+        {
+          "name": "relaycron-cloud",
+          "title": "relaycron-cloud (migration)",
+          "reportsTo": "head-of-ecosystem",
+          "repo": "/Users/will/Projects/AgentWorkforce/relaycron-cloud",
+          "status": "resident"
+        },
+        {
+          "name": "mobile",
+          "title": "Agent Relay Mobile",
+          "reportsTo": "head-of-ecosystem",
+          "repo": "/Users/will/Projects/AgentWorkforce/mobile",
+          "status": "resident"
+        },
+        {
+          "name": "notesnumber",
+          "title": "notesnumber (in ladd)",
+          "reportsTo": "head-of-experiments",
+          "repo": "/Users/will/Projects/AgentWorkforce/ladd",
+          "status": "unseated"
+        },
+        {
+          "name": "hoopsheet",
+          "title": "hoopsheet",
+          "reportsTo": "head-of-experiments",
+          "repo": "/Users/will/Projects/AgentWorkforce/hoopsheet",
+          "status": "unseated"
+        },
+        {
+          "name": "relay",
+          "title": "Relay Product Owner",
+          "reportsTo": "head-of-ecosystem",
+          "repo": "/Users/will/Projects/AgentWorkforce/relay",
+          "status": "resident"
+        },
+        {
+          "name": "cloud",
+          "title": "cloud (teardown)",
+          "reportsTo": "chief",
+          "repo": "/Users/will/Projects/AgentWorkforce/cloud",
+          "status": "resident"
+        }
+      ]
     },
     {
-      "name": "voice",
-      "title": "Chief's Voice",
-      "reportsTo": "chief",
-      "repo": "/Users/will/Projects/AgentWorkforce/chief",
-      "status": "resident"
+      "principal": {
+        "name": "Khaliq"
+      },
+      "agents": [
+        {
+          "name": "chief-khaliq",
+          "title": "Chief of Staff",
+          "reportsTo": "Khaliq",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/chief",
+          "status": "resident"
+        },
+        {
+          "name": "marketing-lead",
+          "title": "Marketing Lead",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/internal-agents",
+          "status": "resident"
+        },
+        {
+          "name": "x-reply-radar",
+          "title": "Tweet monitor (X reply radar)",
+          "reportsTo": "marketing-lead",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/internal-agents",
+          "status": "resident"
+        },
+        {
+          "name": "positioning-agent",
+          "title": "Positioning memory (Will/Khaliq call digest)",
+          "reportsTo": "marketing-lead",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/internal-agents",
+          "status": "resident"
+        },
+        {
+          "name": "agentworkforce",
+          "title": "AgentWorkforce",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce",
+          "status": "unseated"
+        },
+        {
+          "name": "relayfile",
+          "title": "Relayfile",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/relayfile",
+          "status": "unseated"
+        },
+        {
+          "name": "relay",
+          "title": "Agent Relay",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/relay",
+          "status": "unseated"
+        },
+        {
+          "name": "proactive-agents",
+          "title": "Proactive Agents",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/agents",
+          "status": "unseated"
+        },
+        {
+          "name": "cloud",
+          "title": "Agent Relay Cloud",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/cloud",
+          "status": "unseated"
+        },
+        {
+          "name": "factory",
+          "title": "Factory",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/factory",
+          "status": "unseated"
+        },
+        {
+          "name": "scout",
+          "title": "Scout (Will-only reference)",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/will/Projects/AgentWorkforce/scout",
+          "status": "unseated"
+        },
+        {
+          "name": "pear",
+          "title": "Pear",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/pear",
+          "status": "unseated"
+        },
+        {
+          "name": "relaycron",
+          "title": "RelayCron",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/relaycron",
+          "status": "unseated"
+        },
+        {
+          "name": "customers",
+          "title": "Customers",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents",
+          "status": "unseated"
+        },
+        {
+          "name": "watchdog-customer",
+          "title": "Watchdog (customer) → chief-watchdog",
+          "reportsTo": "customers",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unseated"
+        },
+        {
+          "name": "hoopsheet",
+          "title": "HoopSheet",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/hoopsheet",
+          "status": "unseated"
+        },
+        {
+          "name": "relayhistory",
+          "title": "RelayHistory",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/relayhistory",
+          "status": "unseated"
+        },
+        {
+          "name": "reflex",
+          "title": "Reflex",
+          "reportsTo": "agentworkforce",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/reflex",
+          "status": "unseated"
+        },
+        {
+          "name": "prpm",
+          "title": "PRPM — Package Manager for AI Prompts",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/PRPM/prpm",
+          "status": "unseated"
+        },
+        {
+          "name": "collections-builder",
+          "title": "Collections Builder",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/collections-builder",
+          "status": "unseated"
+        },
+        {
+          "name": "content-engine",
+          "title": "Content Engine",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/content-engine",
+          "status": "unseated"
+        },
+        {
+          "name": "karen-action",
+          "title": "Karen Action (AI code review)",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/karen-action",
+          "status": "unseated"
+        },
+        {
+          "name": "opencode",
+          "title": "OpenCode",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/opencode",
+          "status": "unseated"
+        },
+        {
+          "name": "skills",
+          "title": "PRPM Skills",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/skills",
+          "status": "unseated"
+        },
+        {
+          "name": "superpowers",
+          "title": "Superpowers",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/superpowers",
+          "status": "unseated"
+        },
+        {
+          "name": "sync",
+          "title": "PRPM Sync",
+          "reportsTo": "prpm",
+          "repo": "/Users/khaliqgant/Projects/PRPM/sync",
+          "status": "unseated"
+        },
+        {
+          "name": "gradable",
+          "title": "Gradable",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/gradable",
+          "status": "unseated"
+        },
+        {
+          "name": "agent-tool-spec",
+          "title": "Agent Tool Spec",
+          "reportsTo": "gradable",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/agent-tool-spec",
+          "status": "unseated"
+        },
+        {
+          "name": "dev-diaries",
+          "title": "Dev Diaries",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Sites/dev-diaries",
+          "status": "unseated"
+        },
+        {
+          "name": "vibe-coding-consultant",
+          "title": "Vibe Coding Consultant (planned)",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Sites/vibe-coding-consultant",
+          "status": "unseated"
+        },
+        {
+          "name": "msd",
+          "title": "My Senior Dev",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/My-Senior-Dev",
+          "status": "unseated"
+        },
+        {
+          "name": "sage",
+          "title": "Sage",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/sage",
+          "status": "unseated"
+        },
+        {
+          "name": "nightcto",
+          "title": "NightCTO",
+          "reportsTo": "chief-khaliq",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/nightcto",
+          "status": "unseated"
+        }
+      ]
     },
     {
-      "name": "cmo",
-      "title": "CMO \u2014 GTM dept",
-      "reportsTo": "chief",
-      "repo": "/Users/will/Projects/AgentWorkforce/cmo",
-      "status": "resident"
-    },
-    {
-      "name": "scout",
-      "title": "Relay Scout (CRM)",
-      "reportsTo": "cmo",
-      "repo": "/Users/will/Projects/AgentWorkforce/scout",
-      "status": "resident"
-    },
-    {
-      "name": "agentrelay-com",
-      "title": "agentrelay.com + content pipeline",
-      "reportsTo": "cmo",
-      "repo": "/Users/will/Projects/AgentWorkforce/agentrelay.com",
-      "status": "resident"
-    },
-    {
-      "name": "coo",
-      "title": "COO \u2014 biz ops",
-      "reportsTo": "chief",
-      "repo": "/Users/will/Projects/AgentWorkforce/coo",
-      "status": "unseated"
-    },
-    {
-      "name": "cso",
-      "title": "CSO \u2014 research & competitive intel",
-      "reportsTo": "chief",
-      "repo": "/Users/will/Projects/AgentWorkforce/cso",
-      "status": "resident"
-    },
-    {
-      "name": "cpo",
-      "title": "CPO \u2014 product",
-      "reportsTo": "chief",
-      "repo": "/Users/will/Projects/AgentWorkforce/cpo",
-      "status": "resident"
-    },
-    {
-      "name": "head-of-ecosystem",
-      "title": "Head of AR Ecosystem",
-      "reportsTo": "cpo",
-      "repo": "/Users/will/Projects/AgentWorkforce/cpo",
-      "status": "resident"
-    },
-    {
-      "name": "head-of-experiments",
-      "title": "Head of Experiments",
-      "reportsTo": "cpo",
-      "repo": "/Users/will/Projects/AgentWorkforce/cpo",
-      "status": "resident"
-    },
-    {
-      "name": "chief-app",
-      "title": "chief-app (org cockpit)",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/chief-app",
-      "status": "resident"
-    },
-    {
-      "name": "burn",
-      "title": "burn + software factory",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/burn",
-      "status": "resident"
-    },
-    {
-      "name": "relayfile",
-      "title": "Relayfile (senses layer)",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/relayfile",
-      "status": "resident"
-    },
-    {
-      "name": "relaycron-cloud",
-      "title": "relaycron-cloud (migration)",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/relaycron-cloud",
-      "status": "resident"
-    },
-    {
-      "name": "mobile",
-      "title": "Agent Relay Mobile",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/mobile",
-      "status": "resident"
-    },
-    {
-      "name": "notesnumber",
-      "title": "notesnumber (in ladd)",
-      "reportsTo": "head-of-experiments",
-      "repo": "/Users/will/Projects/AgentWorkforce/ladd",
-      "status": "unseated"
-    },
-    {
-      "name": "hoopsheet",
-      "title": "hoopsheet",
-      "reportsTo": "head-of-experiments",
-      "repo": "/Users/will/Projects/AgentWorkforce/hoopsheet",
-      "status": "unseated"
-    },
-    {
-      "name": "relay",
-      "title": "Relay Product Owner",
-      "reportsTo": "head-of-ecosystem",
-      "repo": "/Users/will/Projects/AgentWorkforce/relay",
-      "status": "resident"
-    },
-    {
-      "name": "cloud",
-      "title": "cloud (teardown)",
-      "reportsTo": "chief",
-      "repo": "/Users/will/Projects/AgentWorkforce/cloud",
-      "status": "resident"
+      "principal": {
+        "name": "Watchdog"
+      },
+      "agents": [
+        {
+          "name": "chief-watchdog",
+          "title": "Watchdog Chief",
+          "reportsTo": "Watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unseated"
+        },
+        {
+          "name": "customer-health",
+          "title": "Customer Health",
+          "reportsTo": "chief-watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unverified"
+        },
+        {
+          "name": "intake-triage",
+          "title": "Intake Triage",
+          "reportsTo": "chief-watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unverified"
+        },
+        {
+          "name": "linear-reconciler",
+          "title": "Linear Reconciler",
+          "reportsTo": "chief-watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unverified"
+        },
+        {
+          "name": "churn-digest",
+          "title": "Churn Digest",
+          "reportsTo": "chief-watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unverified"
+        },
+        {
+          "name": "deadline-watcher",
+          "title": "Deadline Watcher",
+          "reportsTo": "chief-watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unverified"
+        },
+        {
+          "name": "meeting-actions",
+          "title": "Meeting Actions",
+          "reportsTo": "chief-watchdog",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/customer-agents/watchdog-agents",
+          "status": "unverified"
+        }
+      ]
     }
   ]
 }
