@@ -94,6 +94,27 @@ infrastructure rather than the Chief conversation:
 
 Use `npm run chief` when you want to talk to Chief.
 
+### Deploy Khaliq's Cloud Chief
+
+`chief-khaliq` also has an event-driven Cloud deployment unit for customer
+conversation surfaces. It is separate from the resident Relay node: Slack app
+mentions and Telegram bot messages provision a sandbox for one trigger, and
+the reply is written back to the same Slack thread or Telegram message.
+
+The bundle contains an explicit Khaliq-only context allowlist read from the
+reviewed Chief PR #13 commit. It does not upload the repository, the working
+tree, other principal profiles, journals, customer data, secrets, or unrelated
+factory/integration configuration.
+
+```bash
+npm run cloud:deploy:khaliq:dry-run  # validate only; no side effects
+npm run cloud:compile:check          # deterministic local bundle verification
+npm run cloud:deploy:khaliq          # deploy this one tenant agent after review
+```
+
+The last command deploys only `chief-khaliq`; it is not a whole-team atomic
+deployment. See `docs/cloud-chief-khaliq.md` for provenance and surface details.
+
 ## Open the workforce cockpit
 
 ```bash
