@@ -101,10 +101,10 @@ conversation surfaces. It is separate from the resident Relay node: Slack app
 mentions and Telegram bot messages provision a sandbox for one trigger, and
 the reply is written back to the same Slack thread or Telegram message.
 
-The bundle contains an explicit Khaliq-only context allowlist read from the
-reviewed Chief PR #13 commit. It does not upload the repository, the working
-tree, other principal profiles, journals, customer data, secrets, or unrelated
-factory/integration configuration.
+The bundle contains an explicit Khaliq-only context allowlist read from a
+reviewed commit on the Chief repository's `main` branch. It does not upload the
+repository, the working tree, other principal profiles, journals, customer
+data, secrets, or unrelated factory/integration configuration.
 
 ```bash
 npm run cloud:deploy:khaliq:dry-run  # validate only; no side effects

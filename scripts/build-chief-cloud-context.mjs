@@ -22,7 +22,7 @@ export const DEFAULT_OUTPUT_PATH = path.join(
 const EXPECTED_TENANT = "khaliq";
 const EXPECTED_AGENT = "chief-khaliq";
 const EXPECTED_REPOSITORY = "https://github.com/AgentWorkforce/chief.git";
-const EXPECTED_COMMIT = "004472f27f65940313ce9348a503124baa2184b7";
+const EXPECTED_COMMIT = "d42cc98a7c4e474e0a65fd42467869201943dbcf";
 const ALLOWED_SELECTIONS = new Map([
   ["teams.khaliq.json", "khaliq-team-metadata"],
   ["principals/khaliq/memory/learnings.md", "text"],
@@ -60,9 +60,9 @@ function assertManifest(manifest) {
   if (
     manifest.source.repository !== EXPECTED_REPOSITORY ||
     manifest.source.commit !== EXPECTED_COMMIT ||
-    manifest.source.ref !== "refs/pull/13/head"
+    manifest.source.ref !== "refs/heads/main"
   ) {
-    throw new Error("context provenance must remain pinned to reviewed Chief PR #13 head");
+    throw new Error("context provenance must remain pinned to the reviewed Chief main commit");
   }
   if (!Array.isArray(manifest.selections) || manifest.selections.length !== ALLOWED_SELECTIONS.size) {
     throw new Error("context manifest must contain the complete explicit allowlist");

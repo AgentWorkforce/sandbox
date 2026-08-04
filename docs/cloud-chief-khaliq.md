@@ -32,8 +32,8 @@ infrastructure and a test/reachability surface.
 `personas/chief-khaliq/context.manifest.json` pins:
 
 - repository: `https://github.com/AgentWorkforce/chief.git`
-- reviewed ref: `refs/pull/13/head`
-- commit: `004472f27f65940313ce9348a503124baa2184b7`
+- reviewed ref: `refs/heads/main`
+- commit: `d42cc98a7c4e474e0a65fd42467869201943dbcf`
 
 Every selected source file carries a SHA-256 digest. The generator reads those
 files from the pinned Git object, not the current working tree. The roster is

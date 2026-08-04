@@ -4,8 +4,8 @@
   "agent": "chief-khaliq",
   "source": {
     "repository": "https://github.com/AgentWorkforce/chief.git",
-    "ref": "refs/pull/13/head",
-    "commit": "004472f27f65940313ce9348a503124baa2184b7"
+    "ref": "refs/heads/main",
+    "commit": "d42cc98a7c4e474e0a65fd42467869201943dbcf"
   },
   "selections": [
     {

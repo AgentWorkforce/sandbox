@@ -13,7 +13,8 @@ test("pinned Khaliq context generation is deterministic and committed", async ()
   const committed = await readFile(DEFAULT_OUTPUT_PATH, "utf8");
   assert.equal(first, second);
   assert.equal(first, committed);
-  assert.match(first, /004472f27f65940313ce9348a503124baa2184b7/);
+  assert.match(first, /d42cc98a7c4e474e0a65fd42467869201943dbcf/);
+  assert.equal(CHIEF_CONTEXT.provenance.ref, "refs/heads/main");
 });
 
 test("context artifact enforces the tenant allowlist", async () => {

@@ -62,7 +62,7 @@ try {
   for (const marker of forbidden) {
     if (joined.includes(marker)) throw new Error(`bundle contains excluded context marker: ${marker}`);
   }
-  if (!joined.includes("004472f27f65940313ce9348a503124baa2184b7")) {
+  if (!joined.includes("d42cc98a7c4e474e0a65fd42467869201943dbcf")) {
     throw new Error("bundle is missing pinned Chief context provenance");
   }
   process.stdout.write("chief cloud bundle: deterministic, pinned, and boundary-clean\n");

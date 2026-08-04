@@ -198,7 +198,7 @@
           "name": "proactive-agents",
           "title": "Proactive Agents",
           "reportsTo": "agentworkforce",
-          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/agents",
+          "repo": "/Users/khaliqgant/Projects/AgentWorkforce/cloud",
           "status": "unseated"
         },
         {
