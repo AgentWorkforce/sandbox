@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "mountRoot": "../senses/notion",
+  "workerMountRoot": ".integrations/notion",
+  "statePath": "../.agentworkforce/notion-intake-state.json",
+  "tasks": [
+    {
+      "page": "https://app.notion.com/p/Gmail-3b36800c1c90801db1cfc8f2e1cff7cf?source=copy_link",
+      "bootstrap": {
+        "authorizedPageId": "3b36800c-1c90-801d-b1cf-c8f2e1cff7cf",
+        "reason": "The principal supplied this exact Notion page and mapped it to the Cloud project in the current session.",
+        "status": "ready",
+        "title": "Resume GOOGLE-MAIL-RELINK-V1 from its durable checkpoint",
+        "recipe": "team",
+        "summary": "Resume the existing google-mail relink generation for workspace rw_7ccfea89 without starting another generation. Follow the mounted page's dormant-flip-and-rollback contract exactly: monitor to 6/6 complete, capture two stable snapshots at least 30 seconds apart, verify the staged personal mailbox and unchanged predecessor data, activate once with all expected-pointer and manifest gates, soak, and roll back immediately on any red post-flip gate. Direct reviewed merges only; no queue, DLQ, global Nango, or auto-merge changes.",
+        "targets": [{ "repo": "AgentWorkforce/cloud", "labels": [] }]
+      }
+    },
+    {
+      "page": "https://app.notion.com/p/Relayfile-proof-and-issues-resolution-3b36800c1c908020bf04f857e1066218?source=copy_link",
+      "bootstrap": {
+        "authorizedPageId": "3b36800c-1c90-8020-bf04-f857e1066218",
+        "reason": "The principal supplied this exact Notion page and mapped it to the Relay project in the current session.",
+        "status": "ready",
+        "title": "Finish Relay fleet enrollment and spawn reliability follow-ups",
+        "recipe": "team",
+        "summary": "Continue the verified Relay fleet work in isolated worktrees. Refresh issue and PR state, extract and independently verify the completed workspace-enrollment-precedence fix into a real branch and PR, inspect the existing #1430 fleet-spawn-confirmation work, confirm PR #1429 status, and reconcile stale tracker items. Coordinate real Agent Relay workers across available machines and verify process CPU, session transcript, and independent tests before accepting agent claims. Make changes merge-ready but do not merge from this task.",
+        "targets": [{
+          "repo": "AgentWorkforce/relay",
+          "labels": [],
+          "publicSummary": "Continue the verified Relay fleet work in isolated worktrees. Refresh issue and PR state, extract and independently verify the completed workspace-enrollment-precedence fix into a real branch and PR, inspect the existing #1430 fleet-spawn-confirmation work, confirm PR #1429 status, and reconcile stale tracker items. Coordinate Agent Relay workers across available machines and verify live process, session, and independent test evidence before accepting agent claims. Make changes merge-ready but do not merge from this task."
+        }]
+      }
+    },
+    {
+      "page": "https://app.notion.com/p/Relayfile-vs-MCP-Benchmark-3b36800c1c908084b536e3c19a84f582?source=copy_link",
+      "bootstrap": {
+        "authorizedPageId": "3b36800c-1c90-8084-b536-e3c19a84f582",
+        "reason": "The principal supplied this exact Notion page and exact local benchmark project path in the current session.",
+        "status": "ready",
+        "title": "Complete the Relayfile vs MCP mail-surface benchmark",
+        "recipe": "team",
+        "summary": "Resume the mail-surface benchmark only after the google-mail personal-account relink is genuinely ready. Rebuild the stale wrong-mailbox snapshot, verify the target Storebrand thread, run baseline/find across gmail-mcp, superhuman-mcp, and relayfile-fs plus the approved archive/draft arms on writable surfaces, summarize results, draft the blog post, prove triage-agent end to end, and then consider the lower-priority life-agent handoff. Preserve every sequencing and safety condition in the mounted page.",
+        "targets": [{
+          "projectPath": "/Users/khaliqgant/Sites/khaliq-agents/docs/benchmarks/mail-surface-2026-08-03",
+          "node": "self"
+        }]
+      }
+    },
+    {
+      "page": "https://app.notion.com/p/INternal-Agents-and-Chief-in-progress-work-3b36800c1c908070a67bc032f1a2f886?source=copy_link",
+      "bootstrap": {
+        "authorizedPageId": "3b36800c-1c90-8070-a67b-c032f1a2f886",
+        "reason": "The principal supplied this exact Notion page; its Chief PR scope identifies this repository explicitly.",
+        "status": "ready",
+        "title": "Make Chief PRs 5, 6, and 15 merge-ready",
+        "recipe": "team",
+        "summary": "Coordinate Agent Relay Codex and Claude workers to refresh and remediate Chief PRs #5, #6, and #15 exactly as specified in the mounted page. Preserve current Factory wiring, add required launchd and drive-reattach regressions, verify current-main ancestry, focused and full tests, artifacts, diff checks, secrets, two-phase Veto, independent review, and terminal GitHub CI. Preserve dirty primary checkouts with isolated worktrees. Do not reinstall services or merge these task PRs.",
+        "targets": [{ "repo": "AgentWorkforce/chief", "labels": [] }]
+      }
+    },
+    {
+      "page": "https://app.notion.com/p/INternal-Agents-and-Chief-in-progress-work-3b36800c1c908070a67bc032f1a2f886?source=copy_link",
+      "bootstrap": {
+        "authorizedPageId": "3b36800c-1c90-8070-a67b-c032f1a2f886",
+        "reason": "The principal supplied this exact Notion page; its Internal Agents PR scope identifies this repository explicitly.",
+        "status": "ready",
+        "title": "Make Internal Agents PRs 3, 11, and 37 merge-ready",
+        "recipe": "team",
+        "summary": "Coordinate Agent Relay Codex and Claude workers to refresh and remediate Internal Agents PRs #3, #11, and #37 exactly as specified in the mounted page. Modernize PR #3, reimplement only justified conversational mention UX for #11 without restoring superseded behavior, and fix all three #37 collapse, identifier, and bounded-calculation findings. Preserve current deployed x-reply behavior and privacy constraints. Require current-main ancestry, focused and full tests, artifact parity, deploy dry-run, diff and secret checks, two-phase Veto, independent review, and terminal CI. Do not merge, deploy, close PRs, rotate credentials, or send external messages from this task.",
+        "targets": [{ "repo": "AgentWorkforce/internal-agents", "labels": [] }]
+      }
+    }
+  ]
+}

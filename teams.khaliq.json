@@ -10,12 +10,14 @@
     "remotePaths": [
       "/linear",
       "/github",
+      "/notion",
       "/digests"
     ],
     "scopes": [
       "relayfile:fs:read:/linear/**",
       "relayfile:fs:write:/linear/**",
       "relayfile:fs:read:/github/**",
+      "relayfile:fs:read:/notion/**",
       "relayfile:fs:read:/digests/**"
     ]
   },

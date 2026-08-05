@@ -5,11 +5,25 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   assertWorkspaceConvergence,
+  configuredIntegrationProviders,
   deriveConfig,
   factoryRuntimeEnv,
   loadConfig,
   migrateLegacyRoster,
 } from "./chief-runtime.mjs";
+
+test("configured integration providers follow scoped senses paths", () => {
+  assert.deepEqual(
+    configuredIntegrationProviders([
+      "/linear",
+      "/github/repos",
+      "/notion",
+      "/digests",
+      "/notion/pages",
+    ]),
+    ["linear", "github", "notion"],
+  );
+});
 
 test("Factory runtime environment carries one explicit config and clone root", () => {
   assert.deepEqual(

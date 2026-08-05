@@ -56,11 +56,12 @@ Onboarding:
 2. Selects one canonical workspace and verifies that Relaycast, Relayfile, and
    RelayAuth resolve the same durable identity.
 3. Creates the principal's isolated Markdown brain.
-4. Verifies Linear and GitHub workspace connections.
+4. Verifies every provider connection declared by the active senses paths.
 5. Reuses the active contract's explicit Factory readiness label and verifies
    the hosted Factory brain. No label-administration permission is required.
-6. Verifies least-privilege access to only `/linear`, `/github`, and
-   `/digests`.
+6. Verifies least-privilege access to only the configured provider paths and
+   `/digests`. Khaliq's active profile reads Notion, reads GitHub, and reads and
+   writes Linear.
 7. Installs resident macOS services that keep those paths mounted in
    `senses/` and run the Relay node.
 8. Runs a readiness doctor.
@@ -171,6 +172,11 @@ title, moves the issue to `Ready for Agent`, waits for the provider-backed
 mount to converge, and is idempotent on rerun. Declarative task specs use the
 same checks and make cross-repository team work auditable before dispatch.
 
+The exact page-to-project bootstrap mappings authorized for the current Notion
+backlog live in `factory-intake/notion-tonight.json`. Factory owns the parser,
+privacy gate, idempotency, GitHub publication, and exact-path fleet dispatch;
+Chief owns only this operator-specific routing data and the read-only mount.
+
 ## Layout
 
 | Path | Purpose |
@@ -181,6 +187,7 @@ same checks and make cross-repository team work auditable before dispatch.
 | `CLAUDE.md` | Chief's persona and operating manual |
 | `principals/<name>/` | Active principal's memory, journal, and workstreams |
 | `senses/` | Scoped Relayfile projection (gitignored) |
+| `factory-intake/` | Operator-authorized source-to-project routing manifests consumed by Factory |
 | `teams.json` | Resident Agent Relay roster |
 | `scripts/` | Onboarding, doctor, mount supervisor, and attach commands |
 

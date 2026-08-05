@@ -501,3 +501,16 @@ export function publicWorkspace(workspace) {
     relayauthWorkspaceId: workspace.relayauthWorkspaceId,
   };
 }
+
+/**
+ * Provider integrations implied by Chief's scoped Relayfile projection.
+ * Digests are derived output, not a provider connection of their own.
+ */
+export function configuredIntegrationProviders(remotePaths = []) {
+  const providers = new Set();
+  for (const remotePath of remotePaths) {
+    const provider = /^\/([a-z0-9-]+)(?:\/|$)/u.exec(remotePath)?.[1];
+    if (provider && provider !== "digests") providers.add(provider);
+  }
+  return [...providers];
+}

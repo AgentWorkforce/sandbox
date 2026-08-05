@@ -8,6 +8,7 @@ import {
   activeWorkspace,
   cloudRequest,
   cloudSession,
+  configuredIntegrationProviders,
   loadConfig,
   processIsAlive,
   publicWorkspace,
@@ -55,7 +56,7 @@ if (workspace && session) {
       `/api/v1/workspaces/${encodeURIComponent(workspace.relayfileWorkspaceId)}` +
         "/integrations",
     );
-    for (const provider of ["linear", "github"]) {
+    for (const provider of configuredIntegrationProviders(config.senses.remotePaths)) {
       const matches = integrations.filter((entry) => entry.provider === provider);
       const ready = matches.some((entry) => entry.status === "ready");
       const usable = ready || matches.some((entry) => entry.status === "degraded");
