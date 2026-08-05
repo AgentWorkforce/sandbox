@@ -176,6 +176,8 @@ The exact page-to-project bootstrap mappings authorized for the current Notion
 backlog live in `factory-intake/notion-tonight.json`. Factory owns the parser,
 privacy gate, idempotency, GitHub publication, and exact-path fleet dispatch;
 Chief owns only this operator-specific routing data and the read-only mount.
+Exact-path destinations must name the fleet node that owns the absolute path;
+`self` is intentionally unpinned and allows least-loaded placement.
 
 ## Layout
 
