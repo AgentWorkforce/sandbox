@@ -43,7 +43,7 @@
         "summary": "Resume the mail-surface benchmark only after the google-mail personal-account relink is genuinely ready. Rebuild the stale wrong-mailbox snapshot, verify the target Storebrand thread, run baseline/find across gmail-mcp, superhuman-mcp, and relayfile-fs plus the approved archive/draft arms on writable surfaces, summarize results, draft the blog post, prove triage-agent end to end, and then consider the lower-priority life-agent handoff. Preserve every sequencing and safety condition in the mounted page.",
         "targets": [{
           "projectPath": "/Users/khaliqgant/Sites/khaliq-agents/docs/benchmarks/mail-surface-2026-08-03",
-          "node": "self"
+          "node": "kjg-laptop"
         }]
       }
     },
