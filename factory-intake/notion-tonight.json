@@ -2,6 +2,7 @@
   "version": 1,
   "mountRoot": "../senses/notion",
   "workerMountRoot": ".integrations/notion",
+  "workerMountTransport": { "kind": "relay-channel" },
   "statePath": "../.agentworkforce/notion-intake-state.json",
   "tasks": [
     {
