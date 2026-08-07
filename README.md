@@ -63,7 +63,8 @@ Onboarding:
    `/digests`. Khaliq's active profile reads Notion, reads GitHub, and reads and
    writes Linear.
 7. Installs resident macOS services that keep those paths mounted in
-   `senses/` and run the Relay node.
+   `senses/`, run the Relay node, and continuously verify roster and message
+   liveness with the fleet watchdog.
 8. Runs a readiness doctor.
 
 For repeatable or CI checks:
@@ -82,8 +83,10 @@ npm run chief
 That attaches to the resident agent named by the active `teams.json`. You can also
 DM that name from any Agent Relay session in the same workspace. Onboarding
 rejects a workspace whose Relaycast, Relayfile, and RelayAuth identities have
-drifted. Restart-stable resident-agent identity is the first Factory task, with
-a stop/start regression test required before that stronger guarantee is made.
+drifted. The watchdog pages on a missing roster resident, a blind Relaycast
+monitor, or a renamed successor taking over from the canonical Chief.
+Restart-stable resident-agent identity is the first Factory task, with a
+stop/start regression test required before that stronger guarantee is made.
 
 `npm run chief:view` opens a read-only local view. The web dashboards show
 infrastructure rather than the Chief conversation:

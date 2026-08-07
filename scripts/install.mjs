@@ -19,6 +19,7 @@ import {
 
 const config = loadConfig();
 activeWorkspace(config);
+const cliArgs = new Set(process.argv.slice(2));
 
 function which(command) {
   return execFileSync("sh", ["-c", `command -v ${command}`], {
@@ -34,7 +35,14 @@ function xml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function plist({ label, args, stdout, stderr, environment = {} }) {
+function plist({
+  label,
+  args,
+  stdout,
+  stderr,
+  environment = {},
+  startInterval = null,
+}) {
   const array = args.map((arg) => `      <string>${xml(arg)}</string>`).join("\n");
   const environmentEntries = Object.entries(environment)
     .map(([key, value]) =>
@@ -59,11 +67,12 @@ ${environmentEntries}
     </dict>
     <key>RunAtLoad</key>
     <true/>
-    <key>KeepAlive</key>
+    ${startInterval == null ? `<key>KeepAlive</key>
     <dict>
       <key>SuccessfulExit</key>
       <false/>
-    </dict>
+    </dict>` : `<key>StartInterval</key>
+    <integer>${startInterval}</integer>`}
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
@@ -104,7 +113,7 @@ const serviceEnvironment = {
   }),
 };
 
-const services = [
+const allServices = [
   {
     label: "com.agentworkforce.chief.senses",
     args: [process.execPath, join(REPO_ROOT, "scripts/chief-senses.mjs"), "run"],
@@ -121,7 +130,25 @@ const services = [
     stdout: "/dev/null",
     stderr: "/dev/null",
   },
+  {
+    label: "com.agentworkforce.fleet-watchdog",
+    args: [
+      process.execPath,
+      join(REPO_ROOT, "tools/watchdog/fleet-watchdog.mjs"),
+      "--quiet",
+    ],
+    environment: {
+      ...serviceEnvironment,
+      WATCHDOG_CHIEF_REPO: REPO_ROOT,
+    },
+    stdout: join(logs, "fleet-watchdog-run.log"),
+    stderr: join(logs, "fleet-watchdog-run.log"),
+    startInterval: 600,
+  },
 ];
+const services = cliArgs.has("--watchdog-only")
+  ? allServices.filter((service) => service.label === "com.agentworkforce.fleet-watchdog")
+  : allServices;
 
 for (const service of services) {
   const path = join(launchAgents, `${service.label}.plist`);
@@ -137,5 +164,9 @@ for (const service of services) {
   console.log(`Installed and started ${service.label}`);
 }
 
-console.log(`Chief is configured for ${config.principal.name}.`);
-console.log("Run `npm run doctor` to verify, then `npm run chief` to attach.");
+if (cliArgs.has("--watchdog-only")) {
+  console.log("Watchdog installed without restarting Chief's resident services.");
+} else {
+  console.log(`Chief is configured for ${config.principal.name}.`);
+  console.log("Run `npm run doctor` to verify, then `npm run chief` to attach.");
+}

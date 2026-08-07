@@ -5,6 +5,8 @@
   "scripts": {
     "setup": "node scripts/onboard.mjs",
     "install:services": "node scripts/install.mjs",
+    "watchdog:install": "node scripts/install.mjs --watchdog-only",
+    "watchdog:test": "node --test tools/watchdog/test-watchdog.mjs scripts/lib/watchdog-health.test.mjs",
     "doctor": "node scripts/chief-doctor.mjs",
     "validate": "node scripts/validate-config.mjs",
     "config:migrate": "node scripts/migrate-config.mjs",

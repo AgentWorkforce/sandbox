@@ -33,6 +33,8 @@ const CODEX_SESSIONS = process.env.WATCHDOG_CODEX_SESSIONS || path.join(HOME, '.
 
 const API = process.env.WATCHDOG_API_BASE || 'https://cast.agentrelay.com/v1';
 const UA = 'fleet-watchdog/1.0';
+const RELAY_LOG_DIR = process.env.WATCHDOG_RELAY_LOG_DIR
+  || path.join(HOME, 'Library/Logs/agentworkforce/relay');
 
 const num = (name, dflt) => {
   const v = Number(process.env[name]);
@@ -56,11 +58,15 @@ const CPU_ACTIVE_SEC = num('WATCHDOG_CPU_ACTIVE_SECONDS', 5);
 // Re-page interval for a condition that is still true.
 const REALERT_MIN = num('WATCHDOG_REALERT_MINUTES', 60);
 const CODEX_LOOKBACK_DAYS = num('WATCHDOG_CODEX_LOOKBACK_DAYS', 3);
+const BROKER_FAILURE_MIN = num('WATCHDOG_BROKER_FAILURE_MINUTES', 20);
+const PTY_TIMEOUT_LIMIT = num('WATCHDOG_PTY_TIMEOUT_LIMIT', 2);
+const UNVERIFIED_LIMIT = num('WATCHDOG_UNVERIFIED_DELIVERY_LIMIT', 3);
+const CLOUD_FAILURE_LIMIT = num('WATCHDOG_CLOUD_FAILURE_SWEEPS', 2);
 
 const CHIEF_REPO = process.env.WATCHDOG_CHIEF_REPO || path.join(HOME, 'Projects/AgentWorkforce/chief');
-const DM_TARGET = process.env.WATCHDOG_DM_TARGET || 'chief';
+const DM_TARGET_OVERRIDE = process.env.WATCHDOG_DM_TARGET || null;
 
-const DRY_RUN = process.argv.includes('--dry-run');   // evaluate + log, never send
+const DRY_RUN = process.argv.includes('--dry-run');   // evaluate only; no sends or persistent writes
 const NO_PING = process.argv.includes('--no-ping');   // T1 only, never probe
 const AS_JSON = process.argv.includes('--json');
 const QUIET = process.argv.includes('--quiet');
@@ -189,6 +195,131 @@ function discoverResidents() {
     out.push({ slug: m[1], cwd: plist.WorkingDirectory });
   }
   return out.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/** The checked-in roster is the authority for which agents must stay resident. */
+export function expectedAgents(repoCwd) {
+  const roster = readJson(path.join(repoCwd, 'teams.json'));
+  if (!Array.isArray(roster?.agents)) return [];
+  return roster.agents.filter((agent) => agent?.name && agent?.cli);
+}
+
+/** Page the principal directly; a dead Chief cannot consume its own alert. */
+export function resolveDmTarget(residents) {
+  if (DM_TARGET_OVERRIDE) return DM_TARGET_OVERRIDE;
+  for (const resident of residents) {
+    const handle = readJson(path.join(resident.cwd, 'teams.json'))?.principal?.handle;
+    if (handle) return handle;
+  }
+  const roster = residents.flatMap((resident) => expectedAgents(resident.cwd));
+  return roster.find((agent) => /chief/i.test(agent.role ?? ''))?.name
+    ?? roster.find((agent) => /^chief(?:-|$)/i.test(agent.name))?.name
+    ?? 'chief';
+}
+
+const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/gu;
+
+/** Definitive delivery failures from the broker's bounded local log. */
+export function brokerDeliveryFailures(logDir, slug, names, sinceMs) {
+  const result = Object.fromEntries(
+    names.map((name) => [name, {
+      ptyTimeouts: 0,
+      unverified: 0,
+      lastPtyTimeoutAt: null,
+      lastUnverifiedAt: null,
+    }]),
+  );
+  let files = [];
+  try {
+    files = fs.readdirSync(logDir)
+      .filter((name) => name === `${slug}.log` || name.startsWith(`${slug}.log.`))
+      .map((name) => path.join(logDir, name))
+      .sort((a, b) => mtime(b) - mtime(a))
+      .slice(0, 2);
+  } catch {
+    return result;
+  }
+  for (const file of files) {
+    let text;
+    try {
+      const size = fs.statSync(file).size;
+      const fd = fs.openSync(file, 'r');
+      const start = Math.max(0, size - 1024 * 1024);
+      const buffer = Buffer.alloc(size - start);
+      fs.readSync(fd, buffer, 0, buffer.length, start);
+      fs.closeSync(fd);
+      text = buffer.toString('utf8');
+    } catch {
+      continue;
+    }
+    for (const raw of text.split('\n')) {
+      const line = raw.replace(ANSI_RE, '');
+      const timestamp = parseTs(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/u.exec(line)?.[0]);
+      if (timestamp == null || timestamp < sinceMs) continue;
+      const worker = /(?:^|\s)worker=([^\s]+)/u.exec(line)?.[1];
+      if (!worker || !Object.hasOwn(result, worker)) continue;
+      if (line.includes('worker request timed out before worker responded')
+        && line.includes('kind=write_pty')) {
+        result[worker].ptyTimeouts += 1;
+        result[worker].lastPtyTimeoutAt = Math.max(
+          result[worker].lastPtyTimeoutAt ?? 0,
+          timestamp,
+        );
+      }
+      if (line.includes('delivery acked via timeout fallback')
+        && line.includes('echo never verified')) {
+        result[worker].unverified += 1;
+        result[worker].lastUnverifiedAt = Math.max(
+          result[worker].lastUnverifiedAt ?? 0,
+          timestamp,
+        );
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Broker failures only describe an outage while no later resident activity is
+ * visible. A transcript write after the newest failure proves the worker made
+ * progress, so an old timeout must not keep paging for the whole log window.
+ */
+export function classifyDeliveryFailures(failures, recoveredAtMs, {
+  ptyLimit = PTY_TIMEOUT_LIMIT,
+  unverifiedLimit = UNVERIFIED_LIMIT,
+} = {}) {
+  if (!failures) return null;
+  const recoveredAt = recoveredAtMs ?? 0;
+  if (failures.ptyTimeouts >= ptyLimit
+    && (failures.lastPtyTimeoutAt ?? 0) > recoveredAt) {
+    return {
+      verdict: 'PTY_UNREACHABLE',
+      detail: `${failures.ptyTimeouts} PTY write requests timed out without later resident activity`,
+    };
+  }
+  if (failures.unverified >= unverifiedLimit
+    && (failures.lastUnverifiedAt ?? 0) > recoveredAt) {
+    return {
+      verdict: 'DELIVERY_UNVERIFIED',
+      detail: `${failures.unverified} deliveries were acknowledged without verified terminal echo or later resident activity`,
+    };
+  }
+  return null;
+}
+
+/** Require consecutive blind sweeps so one transient API response does not page. */
+export function cloudBlindStatus(cloudError, previousFailures = 0, limit = CLOUD_FAILURE_LIMIT) {
+  const failureCount = cloudError ? previousFailures + 1 : 0;
+  if (!cloudError) return { failureCount, row: null };
+  const page = failureCount >= limit;
+  return {
+    failureCount,
+    row: {
+      repo: 'fleet', agent: 'control-plane', key: 'fleet/cloud',
+      verdict: page ? 'CLOUD_BLIND' : 'CLOUD_DEGRADED', page, tier: 0,
+      detail: `cannot inspect Relaycast liveness (${cloudError}); blind sweep ${failureCount}/${limit}`,
+    },
+  };
 }
 
 // ------------------------------------------------------------ process CPU
@@ -574,6 +705,7 @@ async function brokerStatus(repoCwd) {
 const LOG_MAX_BYTES = 2 * 1024 * 1024;
 
 function appendLog(line) {
+  if (DRY_RUN) return;
   try {
     fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
     if ((fs.statSync(LOG_FILE).size ?? 0) > LOG_MAX_BYTES) {
@@ -590,10 +722,10 @@ function appendLog(line) {
 }
 
 /** Page chief. Prefers the watchdog identity; falls back to a local broker. */
-async function pageChief(text, agentClient, residents) {
+async function pageChief(text, target, agentClient, residents) {
   if (agentClient) {
     try {
-      await agentClient('/dm', { method: 'POST', body: JSON.stringify({ to: DM_TARGET, text }) });
+      await agentClient('/dm', { method: 'POST', body: JSON.stringify({ to: target, text }) });
       return { ok: true, via: 'watchdog-identity' };
     } catch { /* fall through to a local broker */ }
   }
@@ -604,7 +736,7 @@ async function pageChief(text, agentClient, residents) {
       const res = await fetch(`http://127.0.0.1:${conn.port}/api/send`, {
         method: 'POST',
         headers: { 'X-API-Key': conn.api_key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: DM_TARGET, message: text }),
+        body: JSON.stringify({ to: target, message: text }),
         signal: AbortSignal.timeout(15000),
       });
       if (res.ok) return { ok: true, via: `broker:${path.basename(repo)}` };
@@ -617,6 +749,7 @@ async function pageChief(text, agentClient, residents) {
 
 async function main() {
   const residents = discoverResidents();
+  const dmTarget = resolveDmTarget(residents);
   const prev = readJson(STATE_FILE) || {};
   const psTable = processTable();
 
@@ -627,11 +760,15 @@ async function main() {
 
   // Cloud state: workspace roster (last_seen) + every DM conversation.
   const lastSeen = {};
+  const cloudAgents = {};
   let conversations = [];
   let cloudError = null;
   if (ws) {
     try {
-      for (const a of await ws('/agents')) lastSeen[a.name] = parseTs(a.last_seen);
+      for (const a of await ws('/agents')) {
+        lastSeen[a.name] = parseTs(a.last_seen);
+        cloudAgents[a.name] = a;
+      }
       conversations = await ws('/dm/conversations/all?limit=200');
     } catch (e) {
       cloudError = e.message;
@@ -646,6 +783,12 @@ async function main() {
   const nextAdjudicated = { ...(prev.adjudicated || {}) };
   const convCache = new Map();
 
+  // A Cloud error disables the unread-work detector. It is a monitor outage,
+  // not a healthy sweep, and must never collapse into misleading OK rows. One
+  // blind sweep is degraded; consecutive failures page the principal.
+  const cloudHealth = cloudBlindStatus(cloudError, prev.cloudFailureCount ?? 0);
+  if (cloudHealth.row) rows.push(cloudHealth.row);
+
   for (const res of residents) {
     const relayDir = path.join(res.cwd, '.agentworkforce/relay');
     let stateFile = null;
@@ -656,6 +799,7 @@ async function main() {
 
     const status = await brokerStatus(res.cwd);
     const agents = stateFile ? readJson(stateFile)?.agents ?? {} : {};
+    const expected = expectedAgents(res.cwd);
 
     if (!status.ok) {
       rows.push({
@@ -665,11 +809,53 @@ async function main() {
       });
       continue;
     }
-    if (Object.keys(agents).length === 0) {
+    if (Object.keys(agents).length === 0 && expected.length === 0) {
       rows.push({ repo: res.slug, agent: '(none)', key: `${res.slug}/none`, verdict: 'NO_AGENTS', page: false, tier: 1, detail: 'broker up, no agents in state file' });
       continue;
     }
 
+    for (const declared of expected) {
+      if (!agents[declared.name]) {
+        rows.push({
+          repo: res.slug, agent: declared.name, key: `${res.slug}/${declared.name}`,
+          verdict: 'MISSING_RESIDENT', page: true, tier: 0,
+          detail: `declared in teams.json but absent from ${stateFile ? path.basename(stateFile) : 'broker state'}`,
+        });
+        continue;
+      }
+
+      const aliases = Object.keys(agents).filter((name) =>
+        name.startsWith(`${declared.name}-successor`)
+        || name.startsWith(`${declared.name}-replacement`));
+      const canonicalSeen = lastSeen[declared.name] ?? null;
+      const freshAlias = aliases.find((name) => {
+        const aliasSeen = lastSeen[name] ?? null;
+        return aliasSeen != null
+          && (canonicalSeen == null || aliasSeen - canonicalSeen >= STALE_MIN * 60000);
+      });
+      if (freshAlias && cloudAgents[declared.name]?.status !== 'online') {
+        rows.push({
+          repo: res.slug, agent: declared.name, key: `${res.slug}/${declared.name}/identity`,
+          verdict: 'IDENTITY_SPLIT', page: true, tier: 0,
+          detail: `${freshAlias} is fresher while the canonical roster identity is ${cloudAgents[declared.name]?.status ?? 'unknown'}; the successor is not restart-durable`,
+        });
+      }
+    }
+
+    const monitoredNames = new Set(expected.map((agent) => agent.name));
+    for (const name of Object.keys(agents)) {
+      if (expected.some((agent) =>
+        name.startsWith(`${agent.name}-successor`)
+        || name.startsWith(`${agent.name}-replacement`))) {
+        monitoredNames.add(name);
+      }
+    }
+    const deliveryFailures = brokerDeliveryFailures(
+      RELAY_LOG_DIR,
+      res.slug,
+      [...monitoredNames],
+      NOW - BROKER_FAILURE_MIN * 60000,
+    );
     for (const [name, a] of Object.entries(agents)) {
       const cli = a?.spec?.cli || 'unknown';
       const pid = a?.pid;
@@ -698,6 +884,23 @@ async function main() {
       const brokerAgent = (status.data?.agents || []).find((x) => x?.name === name || x?.worker_name === name);
       row.brokerState = brokerAgent?.current_state ?? null;
       row.pendingMessages = brokerAgent?.pending_messages ?? null;
+
+      // Delivery failures are actionable only when the resident has not made
+      // progress since. This clears transient broker timeouts once transcript
+      // activity proves the worker recovered.
+      const recoveredAtMs = Math.max(startedMs ?? 0, row.transcript ? (mtime(row.transcript) ?? 0) : 0);
+      const deliveryIssue = classifyDeliveryFailures(deliveryFailures[name], recoveredAtMs);
+      if (deliveryIssue) {
+        rows.push({
+          repo: res.slug,
+          agent: name,
+          key: `${key}/${deliveryIssue.verdict === 'PTY_UNREACHABLE' ? 'pty' : 'delivery'}`,
+          verdict: deliveryIssue.verdict,
+          page: true,
+          tier: 0,
+          detail: `${deliveryIssue.detail} in the last ${BROKER_FAILURE_MIN}m`,
+        });
+      }
 
       // Tier 1 — unread work addressed to this resident.
       row.lastSeenMs = lastSeen[name] ?? null;
@@ -822,20 +1025,28 @@ async function main() {
       '',
       `Alert-only — nothing was restarted. Log: ${LOG_FILE}`,
     ].join('\n');
-    dm = await pageChief(text, agentClient, residents);
+    dm = await pageChief(text, dmTarget, agentClient, residents);
     appendLog(JSON.stringify({ ts: stamp, event: 'page', ok: dm.ok, via: dm.via ?? null, count: firing.length }));
   }
 
-  // Persist for the next sweep.
+  // Persist for the next sweep. Dry-run is observational: it must not consume
+  // a page, advance a probe, or make the doctor believe a scheduled sweep ran.
   const cpu = {};
   for (const row of rows) if (row.key && row.cpu != null) cpu[row.key] = { pid: row.pid, cpu: row.cpu };
-  try {
-    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify({
-      ts: NOW, cpu, pings: nextPings, adjudicated: nextAdjudicated, alerts: nextAlerts,
-    }, null, 2), { mode: 0o600 });
-  } catch (e) {
-    process.stderr.write(`watchdog: cannot write state: ${e.message}\n`);
+  if (!DRY_RUN) {
+    try {
+      fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+      fs.writeFileSync(STATE_FILE, JSON.stringify({
+        ts: NOW,
+        cpu,
+        pings: nextPings,
+        adjudicated: nextAdjudicated,
+        alerts: nextAlerts,
+        cloudFailureCount: cloudHealth.failureCount,
+      }, null, 2), { mode: 0o600 });
+    } catch (e) {
+      process.stderr.write(`watchdog: cannot write state: ${e.message}\n`);
+    }
   }
 
   if (AS_JSON) {
@@ -850,7 +1061,7 @@ async function main() {
         + `${w((r.unread || []).length || '·', 5)} ${w(fmtMin(r.lastSeenMin), 9)} ${r.detail}\n`);
     }
     process.stdout.write(`\n${Object.entries(summary).map(([k, v]) => `${k}=${v}`).join('  ')}\n`);
-    if (firing.length) process.stdout.write(`PAGED: ${firing.map((f) => f.key).join(', ')}${dm ? ` (dm ${dm.ok ? `sent via ${dm.via}` : 'FAILED'})` : ''}\n`);
+    if (firing.length) process.stdout.write(`${DRY_RUN ? 'WOULD PAGE' : 'PAGED'}: ${firing.map((f) => f.key).join(', ')}${dm ? ` (dm ${dm.ok ? `sent via ${dm.via}` : 'FAILED'})` : ''}\n`);
   }
 }
 

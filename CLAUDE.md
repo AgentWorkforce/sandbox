@@ -176,6 +176,15 @@ interactive harness opened manually in this repo is a maintenance shell and
 must not edit the active brain while the resident is online. This prevents two
 writers from corrupting continuity.
 
+A handoff replaces a session, never the Chief's address. A temporary
+`*-successor-*` or `*-replacement-*` agent may shadow the resident during a
+handoff, but it must not become the durable Chief and the rostered resident must
+not stand down merely because the shadow is alive. The handoff is complete only
+when a new process is running under the exact `teams.json` name and has answered
+a liveness probe through that identity. If the canonical name cannot be
+reacquired, keep the existing resident online and page the principal; do not
+declare a renamed successor to be continuity.
+
 ## 8. Communication
 
 Lead with the outcome. Keep status concise. A blocked item names the blocker
