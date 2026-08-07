@@ -49,13 +49,6 @@ access to its own brief. The answer is the Relayfile mount, which is already in
 production (sf-mini runs a peer-mode mount today) and whose operating skill
 landed the same day as skills#94.
 
-**Second blocker for distribution, learned the hard way the same day:** remote
-nodes do not carry the repos. A lead placed on `barry` had no access to its own
-brief and needed 17KB hand-carried through three DMs. Distributed execution
-needs the Relayfile mount on each node — see `herdr-fleet-surface.md` T7, which
-delivered that skill — or clones on every host. Capability advertisement alone
-is not enough.
-
 **Next:** two independent moves, neither started, both needing Khaliq's word
 because each starts real work. (1) Add the `[factory]` prefix to the 17 inert
 issues, which begins dispatching genuine backlog. (2) Prove one distributed
@@ -65,11 +58,14 @@ Sage's activation gate 2 is separate and Sage-specific.
 
 ## History
 
-- 2026-08-07 — Audited the live pipeline for the first time since 07-30. Found
-  the eligible/inert split (4 of 21) and established that no node can host a
-  Factory workload. The workstream's previous Next was written against the
-  RelayAuth D1 blocker, which was resolved days earlier and had gone unnoticed
-  here — the same stale-blocker failure recorded in `memory/learnings.md`.
+- 2026-08-07 — Audited the live pipeline for the first time since 07-30 and
+  found the eligible/inert split (4 of 21). Also asserted, wrongly, that no node
+  could host a Factory workload; Khaliq falsified it the same day and the Now
+  above carries the correction. The workstream's previous Next was written
+  against the RelayAuth D1 blocker, resolved days earlier and unnoticed here —
+  the same stale-blocker failure recorded in `memory/learnings.md`. Two
+  independent instances of carrying a dead premise, in one workstream, in one
+  day.
 
 - 2026-07-30 — The state this workstream reported as its Now until the 08-07
   audit: hosted brain active and dispatching; PR #2871 deployed the current-only
