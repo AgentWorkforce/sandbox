@@ -220,6 +220,20 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **Before explaining why one mechanism treated two things differently, check
+  they went through the same mechanism.** Chief spent a morning unable to explain
+  why the admission gate stranded `chief` while `chief-khaliq` reclaimed its id
+  twice — both legacy records with no stamped identity key, opposite outcomes.
+  Chief wrote it into the brain as an unexplained asymmetry, published a
+  "one hard kill from the same fate" warning off it, and briefed a lane on it.
+  A dispatched lead resolved it in under an hour: **there are three registration
+  paths and the gate covers one.** The two records were never running the same
+  code, so there was no asymmetry to explain. The tell was available the whole
+  time and Chief had already read it — `chief` is `type=human` with empty
+  metadata, `chief-khaliq` is `type=agent` carrying `metadata.fleet.nodeId`.
+  Two records that differ in *shape* usually differ in *origin*. **When a single
+  mechanism appears to behave inconsistently, first enumerate the callers** —
+  the inconsistency is far more often two code paths than one confused one.
 - **"Released", "stopped" and "gone" are three different states, and no single
   call delivers all three.** Managing a worker on 2026-08-07: `fleet release`
   returned `status=pending, dispatchedNodeId=null` against a `node_direct_*`

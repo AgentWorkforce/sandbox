@@ -1,5 +1,50 @@
 # Open threads
 
+- **CORRECTION 2026-08-07, and it retracts most of what this file said this
+  morning: there are THREE agent-registration paths, and the 11.4.2 admission
+  gate covers only one.** Established by `relay-name-reclaim-lead` reading the
+  live workspace and the source, after Chief spent the morning unable to explain
+  why `chief` was stranded while `chief-khaliq` reclaimed twice. They were never
+  running the same code.
+  1. **Broker self-registration** (what `chief` used) — Rust `AuthClient` → POST
+     `/v1/agents` → 409 → `admit_agent_registration`, `crates/broker/src/relaycast/auth.rs:959`.
+     **Gated** on `identity_key`. Records show `type=human`, empty metadata.
+  2. **Broker-spawned worker** (what `chief-khaliq` and `marketing-lead` used) —
+     node-control `agent.register` → `registerAgentViaNode`,
+     `packages/engine/src/engine/node.ts:1118`. A server-side
+     `onConflictDoUpdate` on `(workspace_id, name)` that overwrites `tokenHash`
+     with `setWhere = status != 'active' OR locationNodeId == this node`. The node
+     id was unchanged across the restart, so it matched. **Never touched the gate
+     and never needed an identity key.** Records carry `metadata.fleet.nodeId`
+     and a `registeredAt` stamp — that stamp *is* the reclaim.
+  3. **SDK fallback** — `registerOrRotate` → 409 → get + `rotateToken`.
+     **Ungated; the name alone suffices.**
+  The populations separate perfectly by path, so the earlier "same gate, opposite
+  outcomes" framing was a category error: it compared a path-1 record to a path-2
+  record and read the difference as a gate decision.
+  **Consequences.** `chief-khaliq` is *not* "one hard kill from a burned name" —
+  that claim is withdrawn; it reclaims through path 2's server-enforced node
+  proof. And the backfill fix is narrow (~4 path-1 records), not a fleet
+  migration. Note also that path 2's `setWhere` already ships the exact
+  `status != 'active'` trap the reclaim brief warns against.
+
+- **The admission gate is a coordination gate, not a security boundary — and one
+  live hole makes that concrete.** `PATCH /v1/agents/:name`
+  (`relaycast packages/engine/src/routes/agent.ts:291`) requires only
+  `requireWorkspaceKey` and shallow-merges arbitrary metadata onto **any** agent,
+  so a key holder can write `identityKey` today and then reclaim through the
+  gate. `POST /agents/:name/rotate-token` (`routes/workspace.ts:415`) is likewise
+  workspace-key-only. **This is not theoretical here:** the workspace key is
+  passed in broker `pty` argv and readable by any local process via `ps` — the
+  same leak flagged for rotation below and reconfirmed twice today. Key from
+  `ps` → PATCH an identity onto any agent → reclaim it. **Rotation does not close
+  this while argv exposure stands.** Chief described that gate as a security
+  boundary all day; it is not. Being filed by the lead.
+  *Also falsified:* relay#1436 was carried here as the threat to the gate. It is
+  not — `registerOrRotate` drops metadata entirely on the conflict branch, so
+  #1436's metadata only lands on create. It is open, checks green, not near
+  merge, and not the risk.
+
 - **The org hierarchy lives on one laptop, and three gaps are now filed.**
   Khaliq asked for initiatives/epics/projects organized and visible, and for it
   to be managed from Cloud and trickle down to local. Measured 2026-08-07, it is
