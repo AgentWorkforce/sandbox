@@ -220,6 +220,20 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **The code you are reading is not necessarily the code that is running, and
+  that failed three separate ways in one day.** (1) A broker upgraded to 11.4.2
+  while a shadowed 10.6.7 copy was the one executing. (2) A `status` column
+  holding `active` for 329 agents while every API consumer rendered it
+  `unknown` — a lane and Chief both concluded a security guard was open, and
+  were one message from escalating it. (3) A dispatched lead could not find the
+  `active`→`unknown` mapping anywhere in the local relaycast tree, meaning **the
+  deployed engine carries code the checkout does not**. The lead drew the right
+  line unprompted: *empirical results against the live system stand; every
+  `file:line` claim is provisional until checked against the deployed build.*
+  Adopt that as the standard for any source-derived claim, and say which side of
+  the line each claim falls on when reporting — otherwise a reviewer who cannot
+  find your line number concludes you were careless rather than that they are
+  reading a different build.
 - **Before explaining why one mechanism treated two things differently, check
   they went through the same mechanism.** Chief spent a morning unable to explain
   why the admission gate stranded `chief` while `chief-khaliq` reclaimed its id

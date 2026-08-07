@@ -28,6 +28,44 @@
   migration. Note also that path 2's `setWhere` already ships the exact
   `status != 'active'` trap the reclaim brief warns against.
 
+- **Agent-identity work is filed as six issues, 2026-08-07, none labelled for
+  dispatch.** By `relay-name-reclaim-lead`, from
+  `docs/brief-agent-name-reclaim-20260807.md`. Nothing implemented.
+  - **A — relaycast#309** — freeing a name requires deleting history, and the
+    delete is refused for any agent that has ever spoken. **Land this first.**
+  - **B — relay#1452** — the gate has no migration path. **Sequencing decided:
+    land A, release the stranded name, let the create branch stamp on the next
+    honest restart, and hold adopt-and-stamp** until A is in and the legacy
+    population is characterized. The lead argued its own briefed fix *down* after
+    measuring, and was right: a legacy record carries no ownership proof at all,
+    so adoption can only infer ownership from absence — the weakest possible
+    basis for touching the boundary that stops AR-448.
+    **The legacy population is 226 of 864**, not the ~4 the brief assumed and
+    not the "~4" Chief repeated in its own ruling after being told otherwise.
+  - **C — relay#1451** — `node up` spawns `AGENT_RELAY_BIN` unvalidated. The
+    briefed fix was insufficient: routing through the resolver still returns the
+    CLI, because the override branch only does `existsSync` and never checks the
+    binary is a broker. The right predicate already sits unused at
+    `cli/lib/broker-lifecycle.ts:755`.
+  - **D — relaycast#311** — SDK `registerOrRotate` hands over any agent's
+    identity on name alone, reachable from the MCP `register_agent` tool, while
+    the CLI's `agent register`/`agent add` hard-409. That inconsistency is part
+    of the finding, not noise.
+  - **E — relaycast#310** — the PATCH hole below.
+  - **F — relaycast#312** — `GET /v1/agents` reports every live agent as
+    `unknown` while the column holds `active`. **Not cosmetic:** an engineer
+    verifying a guard through the API sees no agent ever active, concludes the
+    disjunct is always true, and concludes the boundary is open. Chief and the
+    lead ran exactly that chain and were one message from escalating a false
+    security finding. A field that reads one way to SQL and another to every
+    consumer is a trap aimed at whoever is trying to verify a security property.
+  **Still open:** is `sweepStaleAgents` actually invoked today? It decides
+  whether path 2's protection is a five-minute window (it flips `active` →
+  `offline` after `STALE_THRESHOLD_MS`, and once flipped the node-identity
+  requirement evaporates) or permanent. Chief's 08-06 note says the sweep has had
+  no caller since the Cloudflare migration and relaycast#306 is still unmerged —
+  if that holds, the window does not exist and `offline` is sediment.
+
 - **The admission gate is a coordination gate, not a security boundary — and one
   live hole makes that concrete.** `PATCH /v1/agents/:name`
   (`relaycast packages/engine/src/routes/agent.ts:291`) requires only
