@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import {
   REPO_ROOT,
   activeWorkspace,
@@ -14,6 +15,7 @@ import {
   publicWorkspace,
 } from "./lib/chief-runtime.mjs";
 import { credentialHealth } from "./lib/senses-health.mjs";
+import { watchdogHealth } from "./lib/watchdog-health.mjs";
 
 const config = loadConfig();
 const results = [];
@@ -209,6 +211,96 @@ result(
     running: brokerRunning,
     nodeDelivery: brokerDelivery,
     agents: brokerAgents ? Number(brokerAgents) : null,
+  },
+);
+
+function relayVersion(command) {
+  if (!command) return null;
+  const probe = spawnSync(command, ["version"], { encoding: "utf8" });
+  return /agent-relay v([^\s]+)/u.exec(`${probe.stdout ?? ""}\n${probe.stderr ?? ""}`)?.[1] ?? null;
+}
+
+const shellRelayVersion = relayVersion("agent-relay");
+const connection = readJson(join(REPO_ROOT, ".agentworkforce/relay/connection.json"));
+let brokerBinary = null;
+if (connection?.pid) {
+  const command = spawnSync("ps", ["-p", String(connection.pid), "-o", "command="], {
+    encoding: "utf8",
+  }).stdout?.trim();
+  brokerBinary = command?.split(/\s+/u)[0] ?? null;
+}
+const brokerRelayCommand = brokerBinary?.endsWith("agent-relay-broker")
+  ? join(dirname(brokerBinary), "agent-relay")
+  : brokerBinary;
+const brokerRelayVersion = relayVersion(brokerRelayCommand);
+const relayVersionsAligned = Boolean(
+  shellRelayVersion
+  && brokerRelayVersion
+  && shellRelayVersion === brokerRelayVersion,
+);
+result(
+  "relay-version",
+  relayVersionsAligned ? "ok" : "error",
+  {
+    shell: shellRelayVersion,
+    broker: brokerRelayVersion,
+    brokerBinary,
+    brokerRelayCommand,
+    next: relayVersionsAligned
+      ? null
+      : "Upgrade the CLI and resident binary together, then restart the broker in a coordinated maintenance window.",
+  },
+);
+
+const relayDir = join(REPO_ROOT, ".agentworkforce/relay");
+let residentState = {};
+try {
+  const stateName = readdirSync(relayDir).find((name) => /^state-.+\.json$/u.test(name));
+  residentState = stateName ? readJson(join(relayDir, stateName))?.agents ?? {} : {};
+} catch {
+  // The broker result above owns the missing-state explanation.
+}
+for (const resident of config.roster?.agents ?? []) {
+  const state = residentState[resident.name];
+  const alive = Boolean(state && processIsAlive(state.pid));
+  result(
+    `resident:${resident.name}`,
+    alive ? "ok" : "error",
+    alive
+      ? { pid: state.pid, startedAt: state.started_at ?? null }
+      : {
+          declared: true,
+          presentInBrokerState: Boolean(state),
+          pid: state?.pid ?? null,
+          next: "Run `npm run install:services`, then inspect `agent-relay node tail` before replacing the resident.",
+        },
+  );
+}
+
+const watchdogLabel = `gui/${process.getuid()}/com.agentworkforce.fleet-watchdog`;
+const watchdog = spawnSync("launchctl", ["print", watchdogLabel], {
+  cwd: REPO_ROOT,
+  encoding: "utf8",
+});
+const watchdogLog = join(homedir(), "Library/Logs/fleet-watchdog.log");
+let watchdogLastSweepMs = null;
+try {
+  watchdogLastSweepMs = statSync(watchdogLog).mtimeMs;
+} catch {
+  // A missing log is expected before the first installed sweep.
+}
+const watchdogState = watchdogHealth({
+  installed: watchdog.status === 0,
+  lastSweepMs: watchdogLastSweepMs,
+});
+result(
+  "watchdog",
+  watchdogState.healthy ? "ok" : "error",
+  {
+    ...watchdogState,
+    next: watchdogState.healthy
+      ? null
+      : "Install or restart only the watchdog with `npm run watchdog:install`; do not recycle Chief's broker.",
   },
 );
 

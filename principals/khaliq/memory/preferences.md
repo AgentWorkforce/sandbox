@@ -12,3 +12,15 @@
   the same review gate as agent work.
 - Use the product internally as the showcase; failures found in real use become
   platform work, not hidden Chief-specific workarounds.
+- **Every agent should be both proactive and addressable** (Khaliq, 2026-08-07).
+  A lead that only acts when driven is not leading; a proactive agent Khaliq
+  cannot ask a question is a cron job with a Slack webhook. The two categories
+  should collapse into one.
+  Today they are split by runtime, which is why the org chart greys out View and
+  Drive on half its rows. **Cloud personas** (`persona.ts` + `agent.ts`, e.g.
+  `x-reply-radar` on `harness: grok`/`grok-4.5`, cron hourly) are proactive and
+  have no PTY to attach to. **Broker-spawned PTY agents** (the `teams.json`
+  roster) are attachable and only act when messaged. Neither is what he wants.
+  The direction is: proactive agents get a local, attachable presence so Khaliq
+  can ask them what they know — starting with `x-reply-radar`, which should live
+  locally as a Grok instance he can query about tweets.

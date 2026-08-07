@@ -10,7 +10,7 @@ Alert-only. It never kickstarts, restarts, or interrupts anything.
 ```
 node tools/watchdog/fleet-watchdog.mjs               # sweep (may probe)
 node tools/watchdog/fleet-watchdog.mjs --no-ping     # tier 1 only, never probes
-node tools/watchdog/fleet-watchdog.mjs --dry-run     # evaluate and log, send nothing
+node tools/watchdog/fleet-watchdog.mjs --dry-run     # evaluate only; no sends, state, or log writes
 node tools/watchdog/fleet-watchdog.mjs --json        # machine-readable
 node tools/watchdog/test-watchdog.mjs                # tier-ladder tests
 ```
@@ -118,6 +118,12 @@ reading the wrong session silently produces confident nonsense:
 | `UNRESPONSIVE` | 3 | **yes** | no reply within the window |
 | `DEAD_PTY` | 0 | **yes** | the state file lists an agent whose pid is gone |
 | `BROKER_DOWN` | 0 | **yes** | the repo's broker is unreachable, so nothing can be delivered |
+| `MISSING_RESIDENT` | 0 | **yes** | an agent declared in `teams.json` is absent from broker state |
+| `IDENTITY_SPLIT` | 0 | **yes** | a renamed successor is fresher than the offline canonical resident |
+| `CLOUD_DEGRADED` | 0 | no | one Relaycast inspection failed; wait for confirmation before paging |
+| `CLOUD_BLIND` | 0 | **yes** | Relaycast failed for consecutive sweeps, so unread-work liveness is unknown |
+| `PTY_UNREACHABLE` | 0 | **yes** | repeated PTY writes timed out with no later transcript activity |
+| `DELIVERY_UNVERIFIED` | 0 | **yes** | repeated deliveries lacked terminal echo proof and the transcript made no later progress |
 | `NO_AGENTS` | 1 | no | broker up, no agents in its state file |
 
 A page repeats at most every `REALERT_MINUTES` (60) unless the verdict changes.
@@ -142,6 +148,10 @@ A page repeats at most every `REALERT_MINUTES` (60) unless the verdict changes.
   are ignored, since the agent that would have read them no longer exists.
 - *Repeat suspicion on the same message* — once a probe adjudicates a message,
   its id is recorded and never reconsidered.
+- *Transient control-plane failures* — one blind Relaycast sweep degrades the
+  monitor; only consecutive failures page.
+- *Recovered broker writes* — PTY timeouts and unverified acknowledgements clear
+  when a newer transcript write proves the resident made progress.
 
 **Structural blind spots:**
 
@@ -157,7 +167,8 @@ A page repeats at most every `REALERT_MINUTES` (60) unless the verdict changes.
 - **`last_seen` is workspace-wide, not per-node**, so an identity used from more
   than one place would look more alive than it is.
 - If the cloud API is unreachable, tier 1 cannot evaluate; the sweep logs
-  `cloud=error:...` and only the local `DEAD_PTY` / `BROKER_DOWN` checks apply.
+  `cloud=error:...` and only local checks apply. The first failed sweep is
+  `CLOUD_DEGRADED`; the second consecutive failure is `CLOUD_BLIND` and pages.
 
 ## Configuration
 
@@ -171,12 +182,21 @@ A page repeats at most every `REALERT_MINUTES` (60) unless the verdict changes.
 | `WATCHDOG_MAX_CANDIDATES` | 5 | receipt checks per resident per sweep |
 | `WATCHDOG_CPU_ACTIVE_SECONDS` | 5 | CPU burn that reads as "working" in the evidence line |
 | `WATCHDOG_REALERT_MINUTES` | 60 | re-page interval for a standing condition |
-| `WATCHDOG_DM_TARGET` | `chief` | who gets paged |
+| `WATCHDOG_DM_TARGET` | roster principal | who gets paged; explicit override when needed |
+| `WATCHDOG_BROKER_FAILURE_MINUTES` | 20 | broker-log window for PTY and delivery failures |
+| `WATCHDOG_PTY_TIMEOUT_LIMIT` | 2 | unrecovered PTY write timeouts in the window before paging |
+| `WATCHDOG_UNVERIFIED_DELIVERY_LIMIT` | 3 | unverified acknowledgements in the window before paging |
+| `WATCHDOG_CLOUD_FAILURE_SWEEPS` | 2 | consecutive Relaycast inspection failures before paging |
 
 `WATCHDOG_LAUNCH_AGENTS`, `WATCHDOG_LOG_FILE`, `WATCHDOG_STATE_FILE`,
 `WATCHDOG_IDENTITY_FILE`, `WATCHDOG_CLAUDE_PROJECTS`, `WATCHDOG_CODEX_SESSIONS`
 and `WATCHDOG_API_BASE` redirect the roots so the pipeline can be exercised
 against fixtures.
+
+`WATCHDOG_DM_TARGET` overrides the page recipient. Normally it is omitted and
+the watchdog resolves `principal.handle`, because a dead Chief cannot consume
+its own page. It falls back to the rostered Chief when no principal handle is
+declared.
 
 ## Identity and secrets
 
@@ -202,10 +222,15 @@ error bodies are never echoed.
 ## Install
 
 ```sh
-cp tools/watchdog/com.agentworkforce.fleet-watchdog.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.agentworkforce.fleet-watchdog.plist
-launchctl kickstart -p gui/501/com.agentworkforce.fleet-watchdog
+npm run watchdog:install       # safe on a live broker
+# `npm run install:services` installs/restarts the full resident service set.
 ```
+
+The installer renders a machine-local LaunchAgent with the current Node path,
+repository path, and user id. It runs every ten minutes and is verified by
+`npm run doctor`; the doctor requires a sweep no older than 25 minutes, so an
+installed-but-stopped watchdog cannot stay falsely green because of an old log.
+No user-specific plist is committed.
 
 Plain `node`, no harness. Residents are discovered from
 `com.agentworkforce.<repo>.node` plists, so a new one is picked up with no edit

@@ -69,6 +69,11 @@ const NOT_ATTACHABLE = {
 };
 
 const RUNTIME_CACHE_TTL_MS = 5_000;
+const LIVE_AGENT_WINDOW_MS = 5 * 60_000;
+const BROKER_STATUS_TIMEOUT_MS = 1_000;
+const WORKSPACE_STATUS_TIMEOUT_MS = 1_500;
+const RELAYCAST_API_BASE = process.env.CHIEF_RELAYCAST_API_BASE
+  || 'https://cast.agentrelay.com/v1';
 let runtimeCache = null;
 
 function slugify(value) {
@@ -148,43 +153,6 @@ function validateExternalOverlay(value) {
   return { valid: true, value };
 }
 
-// Agent Relay may append a human update notice after its JSON payload. Parse
-// the first complete JSON object/array instead of assuming stdout is only JSON.
-function parseFirstJson(text) {
-  for (let start = 0; start < text.length; start += 1) {
-    if (text[start] !== '{' && text[start] !== '[') continue;
-    const stack = [];
-    let quoted = false;
-    let escaped = false;
-    for (let index = start; index < text.length; index += 1) {
-      const char = text[index];
-      if (quoted) {
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === '"') quoted = false;
-        continue;
-      }
-      if (char === '"') {
-        quoted = true;
-        continue;
-      }
-      if (char === '{' || char === '[') stack.push(char);
-      else if (char === '}' || char === ']') {
-        const expected = char === '}' ? '{' : '[';
-        if (stack.pop() !== expected) break;
-        if (stack.length === 0) {
-          try {
-            return JSON.parse(text.slice(start, index + 1));
-          } catch {
-            break;
-          }
-        }
-      }
-    }
-  }
-  throw new Error('Agent Relay command did not return JSON');
-}
-
 function overlayMatchesPrincipal(overlay, principal) {
   const identity = principalIdentity(overlay);
   return identity?.slug === slugify(principal.slug || principal.name);
@@ -194,6 +162,69 @@ function inferLiveTitle(agent) {
   if (agent.name?.toLowerCase().includes('chief')) return 'Chief of Staff';
   if (agent.team) return `${agent.team} agent`;
   return `${agent.cli || agent.runtime || 'Relay'} agent`;
+}
+
+function normalizeWorkspaceAgents(agents, now = Date.now()) {
+  if (!Array.isArray(agents)) return [];
+  return agents.flatMap((agent) => {
+    if (!isPlainObject(agent) || !nonEmptyString(agent.name)) return [];
+    const lastSeenValue = agent.lastSeenAt ?? agent.lastSeen ?? agent.last_seen;
+    const lastSeenMs = typeof lastSeenValue === 'number'
+      ? lastSeenValue
+      : Date.parse(lastSeenValue);
+    if (!Number.isFinite(lastSeenMs)) return [];
+
+    const lastActivityMs = now - lastSeenMs;
+    if (lastActivityMs > LIVE_AGENT_WINDOW_MS) return [];
+
+    const metadata = isPlainObject(agent.metadata) ? agent.metadata : {};
+    const fleet = isPlainObject(metadata.fleet) ? metadata.fleet : {};
+    const nodeId = fleet.nodeId ?? fleet.node_id ?? metadata.nodeId ?? metadata.node_id;
+    const cli = nonEmptyString(agent.cli)
+      ? agent.cli.trim()
+      : nonEmptyString(metadata.cli) ? metadata.cli.trim() : null;
+    const explicitRuntime = agent.runtime_kind ?? agent.runtime
+      ?? metadata.runtime_kind ?? metadata.runtime;
+    const runtime = nonEmptyString(explicitRuntime)
+      ? explicitRuntime.trim()
+      : nonEmptyString(nodeId)
+        ? 'fleet'
+        : metadata.source === 'cloud-persona-deploy' ? 'cloud' : 'workspace';
+
+    return [{
+      name: agent.name.trim(),
+      current_state: nonEmptyString(agent.status) ? agent.status.trim() : 'online',
+      last_activity_ms: lastActivityMs,
+      cli,
+      runtime_kind: runtime,
+      node_id: nonEmptyString(nodeId) ? nodeId.trim() : null,
+      attachable: false,
+    }];
+  });
+}
+
+// Workspace presence answers "is this agent alive anywhere?"; the local
+// broker answers the narrower "can this machine attach to it?". Keep those
+// claims separate so Drive never opens against the wrong broker.
+function mergeRuntimeAgents(workspaceAgents, localAgents) {
+  const merged = new Map(
+    workspaceAgents.map((agent) => [agent.name, { ...agent, attachable: false }]),
+  );
+  for (const agent of Array.isArray(localAgents) ? localAgents : []) {
+    if (!isPlainObject(agent) || !nonEmptyString(agent.name)) continue;
+    const current = merged.get(agent.name) ?? {};
+    merged.set(agent.name, {
+      ...current,
+      name: agent.name.trim(),
+      current_state: agent.current_state ?? current.current_state ?? 'online',
+      last_activity_ms: agent.last_activity_ms ?? current.last_activity_ms ?? null,
+      cli: agent.cli ?? current.cli ?? null,
+      runtime_kind: agent.runtime_kind ?? agent.runtime
+        ?? current.runtime_kind ?? current.runtime ?? 'pty',
+      attachable: true,
+    });
+  }
+  return [...merged.values()];
 }
 
 function buildRuntimeOrg(config, overlay, liveAgents = []) {
@@ -243,13 +274,21 @@ function buildRuntimeOrg(config, overlay, liveAgents = []) {
       reportsTo: current.reportsTo || (looksLikeChief ? principal.name : liveChief || rosterChief || principal.name),
       repo: current.repo || REPO_ROOT,
       status: 'resident',
-      attachable: true,
+      attachable: live.attachable === true,
       live: true,
       currentState: live.current_state || 'online',
       lastActivityMs: live.last_activity_ms ?? null,
       cli: live.cli ?? null,
       runtime: live.runtime_kind || live.runtime || null,
-      source: current.source ? `${current.source}+live` : 'live-broker',
+      nodeId: live.node_id ?? null,
+      nodeName: live.node_name ?? null,
+      // The deployed chart admits observed identities as `live-broker` and
+      // reads their hierarchy from the already-merged reportsTo/title fields.
+      // teams.json remains an identity-owned source; an overlay is hierarchy,
+      // not an alternate live-agent source.
+      source: current.source && current.source !== 'org-overlay'
+        ? `${current.source}+live`
+        : 'live-broker',
     });
   }
 
@@ -270,37 +309,102 @@ function executionLayersFromFleet(fleet, error = null) {
   }];
 
   for (const node of fleet?.nodes ?? []) {
+    const tags = Array.isArray(node.tags) ? node.tags : [];
+    const live = node.live === undefined ? node.status === 'online' : node.live === true;
+    if (!live || node.handlersLive === false || node.handlers_live === false || tags.includes('direct')) {
+      continue;
+    }
     layers.push({
       id: node.id,
       name: node.name,
       title: 'Fleet execution node',
       kind: 'fleet-node',
       status: node.status,
-      live: node.live === true && node.status === 'online',
-      capabilities: (node.capabilities ?? []).map((capability) => capability.name),
-      tags: node.tags ?? [],
-      activeAgents: node.activeAgents ?? 0,
-      maxAgents: node.maxAgents ?? 0,
-      handlersLive: node.handlersLive === true,
+      live,
+      capabilities: (node.capabilities ?? [])
+        .map((capability) => typeof capability === 'string' ? capability : capability.name)
+        .filter(Boolean),
+      tags,
+      activeAgents: node.activeAgents ?? node.active_agents ?? 0,
+      maxAgents: node.maxAgents ?? node.max_agents ?? 0,
+      handlersLive: (node.handlersLive ?? node.handlers_live) === true,
       version: node.version ?? '',
-      lastHeartbeatAt: node.lastHeartbeatAt ?? null,
+      lastHeartbeatAt: node.lastHeartbeatAt ?? node.last_heartbeat_at ?? null,
     });
   }
   return layers;
 }
 
-function capture(bin, args) {
-  return new Promise((resolve, reject) => {
-    execFile(bin, args, {
-      cwd: REPO_ROOT,
-      env: childEnv(),
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr?.trim() || err.message));
-      else resolve(stdout);
-    });
+// The Org Chart runs as a macOS LaunchAgent. Agent Relay CLI subprocesses
+// inherit launchd's background scheduling policy there and can exceed their
+// timeout before producing any output. Resident discovery is latency-critical
+// because it controls whether View/Drive are enabled, so read the broker's
+// authenticated local status API directly instead of shelling out.
+async function readLocalBrokerStatus({
+  connectionProvider = chiefConnection,
+  fetchImpl = fetch,
+  timeoutMs = BROKER_STATUS_TIMEOUT_MS,
+} = {}) {
+  const connection = await connectionProvider();
+  if (!connection) throw new Error('Chief broker connection is unavailable');
+  if (!Number.isInteger(connection.port) || connection.port < 1 || connection.port > 65_535) {
+    throw new Error('Chief broker connection has an invalid port');
+  }
+  if (!nonEmptyString(connection.api_key)) {
+    throw new Error('Chief broker connection has no API key');
+  }
+
+  const response = await fetchImpl(`http://127.0.0.1:${connection.port}/api/status`, {
+    headers: { 'X-API-Key': connection.api_key },
+    signal: AbortSignal.timeout(timeoutMs),
   });
+  if (!response.ok) throw new Error(`Chief broker status returned HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!isPlainObject(payload) || !Array.isArray(payload.agents)) {
+    throw new Error('Chief broker status returned an invalid agent roster');
+  }
+  return payload;
+}
+
+async function workspaceKey() {
+  try {
+    const value = JSON.parse(await readFile(
+      join(CHIEF_REPO, '.agentworkforce/relay/workspace-key.json'),
+      'utf8',
+    )).workspaceKey;
+    return nonEmptyString(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readWorkspaceRuntime({
+  keyProvider = workspaceKey,
+  fetchImpl = fetch,
+  timeoutMs = WORKSPACE_STATUS_TIMEOUT_MS,
+  apiBase = RELAYCAST_API_BASE,
+} = {}) {
+  const key = await keyProvider();
+  if (!nonEmptyString(key)) throw new Error('Relaycast workspace key is unavailable');
+
+  const readCollection = async (name) => {
+    const response = await fetchImpl(`${apiBase}/${name}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`Relaycast ${name} returned HTTP ${response.status}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload?.data)) {
+      throw new Error(`Relaycast ${name} returned an invalid collection`);
+    }
+    return payload.data;
+  };
+
+  const [agents, nodes] = await Promise.all([
+    readCollection('agents'),
+    readCollection('nodes'),
+  ]);
+  return { agents, nodes };
 }
 
 function parseBuiltInOverlays(parsed) {
@@ -452,23 +556,40 @@ async function loadRuntime() {
   if (runtimeCache && runtimeCache.expires > now) return runtimeCache.promise;
   const promise = (async () => {
     const config = activeTeam();
-    const [overlayResult, localResult, fleetResult] = await Promise.all([
+    const [overlayResult, brokerResult, workspaceResult] = await Promise.all([
       readOrgOverlays(),
-      capture(RELAY_BIN, ['node', 'agent', 'list'])
-        .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
-        .catch((error) => ({ value: [], error })),
-      capture(RELAY_BIN, ['fleet', 'nodes'])
-        .then((stdout) => ({ value: parseFirstJson(stdout), error: null }))
-        .catch((error) => ({ value: { nodes: [] }, error })),
+      readLocalBrokerStatus()
+        .then((value) => ({ value, error: null }))
+        .catch((error) => ({ value: { agents: [], node_connected: false }, error })),
+      readWorkspaceRuntime()
+        .then((value) => ({ value, error: null }))
+        .catch((error) => ({ value: { agents: [], nodes: [] }, error })),
     ]);
     const overlay = overlayResult.overlays
       .find((entry) => overlayMatchesPrincipal(entry, config.principal)) ?? null;
+    const workspaceAgents = normalizeWorkspaceAgents(workspaceResult.value.agents);
+    const nodeNames = new Map(
+      workspaceResult.value.nodes.map((node) => [node.id, node.name]),
+    );
+    for (const agent of workspaceAgents) {
+      agent.node_name = agent.node_id ? nodeNames.get(agent.node_id) ?? null : null;
+    }
+    const liveAgents = mergeRuntimeAgents(workspaceAgents, brokerResult.value.agents);
+    const connectivityError = brokerResult.error
+      ?? (brokerResult.value.node_connected === true
+        ? null
+        : new Error('Agent Relay node delivery is disconnected'));
     return {
-      org: buildRuntimeOrg(config, overlay, Array.isArray(localResult.value) ? localResult.value : []),
-      executionLayers: executionLayersFromFleet(fleetResult.value, fleetResult.error),
+      org: buildRuntimeOrg(config, overlay, liveAgents),
+      executionLayers: executionLayersFromFleet(
+        { nodes: workspaceResult.value.nodes },
+        workspaceResult.error,
+      ),
       warnings: [
         ...overlayResult.warnings,
-        ...[localResult.error, fleetResult.error].filter(Boolean).map((error) => error.message),
+        ...[brokerResult.error, workspaceResult.error, connectivityError]
+          .filter((error, index, errors) => error && errors.indexOf(error) === index)
+          .map((error) => error.message),
       ],
     };
   })();
@@ -1065,7 +1186,10 @@ export {
   buildRuntimeOrg,
   executionLayersFromFleet,
   handleReviewNotifications,
-  parseFirstJson,
+  mergeRuntimeAgents,
+  normalizeWorkspaceAgents,
+  readLocalBrokerStatus,
+  readWorkspaceRuntime,
   parseReviewQueue,
   readOrgOverlays,
   validateExternalOverlay,

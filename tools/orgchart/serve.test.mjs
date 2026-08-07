@@ -7,7 +7,10 @@ import { delimiter, join } from 'node:path';
 import {
   buildRuntimeOrg,
   executionLayersFromFleet,
-  parseFirstJson,
+  mergeRuntimeAgents,
+  normalizeWorkspaceAgents,
+  readLocalBrokerStatus,
+  readWorkspaceRuntime,
   readOrgOverlays,
   validateExternalOverlay,
 } from './serve.mjs';
@@ -37,9 +40,106 @@ async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-test('parseFirstJson ignores an Agent Relay update notice after JSON', () => {
-  const parsed = parseFirstJson('{"nodes":[{"name":"sf-mini"}]}\nUpdate available: 11.3.1');
-  assert.deepEqual(parsed, { nodes: [{ name: 'sf-mini' }] });
+test('local broker status uses the authenticated loopback API', async () => {
+  const requests = [];
+  const result = await readLocalBrokerStatus({
+    connectionProvider: async () => ({ port: 49495, api_key: 'test-broker-key' }),
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          agents: [{ name: 'chief-khaliq', current_state: 'idle', runtime_kind: 'pty' }],
+          node_connected: true,
+        }),
+      };
+    },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'http://127.0.0.1:49495/api/status');
+  assert.equal(requests[0].options.headers['X-API-Key'], 'test-broker-key');
+  assert.equal(result.agents[0].name, 'chief-khaliq');
+});
+
+test('local broker status fails closed on a malformed roster', async () => {
+  await assert.rejects(
+    readLocalBrokerStatus({
+      connectionProvider: async () => ({ port: 49495, api_key: 'test-broker-key' }),
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ agents: null }),
+      }),
+    }),
+    /invalid agent roster/,
+  );
+});
+
+test('workspace runtime reads agents and nodes without exposing its key', async () => {
+  const requests = [];
+  const result = await readWorkspaceRuntime({
+    keyProvider: async () => 'test-workspace-key',
+    apiBase: 'https://relay.example/v1',
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: url.endsWith('/agents')
+            ? [{ name: 'chief-khaliq', last_seen: '2026-08-07T08:00:00.000Z' }]
+            : [{ id: 'node_1', name: 'chief', live: true }],
+        }),
+      };
+    },
+  });
+
+  assert.deepEqual(requests.map((request) => request.url), [
+    'https://relay.example/v1/agents',
+    'https://relay.example/v1/nodes',
+  ]);
+  assert.ok(requests.every((request) =>
+    request.options.headers.Authorization === 'Bearer test-workspace-key'));
+  assert.equal(result.agents[0].name, 'chief-khaliq');
+  assert.equal(result.nodes[0].name, 'chief');
+});
+
+test('workspace presence stays visible but only local broker agents are attachable', () => {
+  const now = Date.parse('2026-08-07T08:00:00.000Z');
+  const workspace = normalizeWorkspaceAgents([
+    {
+      name: 'chief-khaliq',
+      status: 'active',
+      last_seen: '2026-08-07T07:59:30.000Z',
+      metadata: { fleet: { nodeId: 'node_chief' } },
+    },
+    {
+      name: 'daily-ship',
+      status: 'active',
+      last_seen: '2026-08-07T07:59:00.000Z',
+      metadata: { source: 'cloud-persona-deploy' },
+    },
+    {
+      name: 'stale-worker',
+      status: 'offline',
+      last_seen: '2026-08-07T06:00:00.000Z',
+    },
+  ], now);
+  const merged = mergeRuntimeAgents(workspace, [
+    { name: 'chief-khaliq', current_state: 'idle', runtime_kind: 'pty' },
+  ]);
+
+  assert.deepEqual(merged.map((agent) => ({
+    name: agent.name,
+    attachable: agent.attachable,
+    runtime: agent.runtime_kind,
+    nodeId: agent.node_id ?? null,
+  })), [
+    { name: 'chief-khaliq', attachable: true, runtime: 'pty', nodeId: 'node_chief' },
+    { name: 'daily-ship', attachable: false, runtime: 'cloud', nodeId: null },
+  ]);
 });
 
 test('teams.json always owns the principal and a mismatched org overlay is ignored', () => {
@@ -56,6 +156,7 @@ test('teams.json always owns the principal and a mismatched org overlay is ignor
         current_state: 'working',
         runtime_kind: 'pty',
         last_activity_ms: 100,
+        attachable: true,
       },
       {
         name: 'sage-worker',
@@ -63,6 +164,7 @@ test('teams.json always owns the principal and a mismatched org overlay is ignor
         current_state: 'idle',
         runtime_kind: 'pty',
         last_activity_ms: 500,
+        attachable: true,
       },
     ],
   );
@@ -133,6 +235,43 @@ test('Cloud and fleet machines are execution layers, not agents in the org', () 
     handlersLive: true,
     version: 'relay-broker/11.3.1',
     lastHeartbeatAt: null,
+  });
+});
+
+test('execution layers normalize API fields and hide dead or direct nodes', () => {
+  const layers = executionLayersFromFleet({
+    nodes: [
+      {
+        id: 'node_live',
+        name: 'finn-mini',
+        status: 'online',
+        live: true,
+        handlers_live: true,
+        capabilities: [{ name: 'spawn:codex' }],
+        active_agents: 3,
+        max_agents: 0,
+        last_heartbeat_at: '2026-08-07T08:00:00.000Z',
+      },
+      { id: 'node_dead', name: 'old-node', status: 'offline', live: false },
+      { id: 'node_direct', name: 'direct-chief', status: 'online', live: true, tags: ['direct'] },
+    ],
+  });
+
+  assert.equal(layers.length, 2);
+  assert.deepEqual(layers[1], {
+    id: 'node_live',
+    name: 'finn-mini',
+    title: 'Fleet execution node',
+    kind: 'fleet-node',
+    status: 'online',
+    live: true,
+    capabilities: ['spawn:codex'],
+    tags: [],
+    activeAgents: 3,
+    maxAgents: 0,
+    handlersLive: true,
+    version: '',
+    lastHeartbeatAt: '2026-08-07T08:00:00.000Z',
   });
 });
 

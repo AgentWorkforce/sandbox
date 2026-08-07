@@ -1,5 +1,272 @@
 # Open threads
 
+- **CORRECTION 2026-08-07, and it retracts most of what this file said this
+  morning: there are THREE agent-registration paths, and the 11.4.2 admission
+  gate covers only one.** Established by `relay-name-reclaim-lead` reading the
+  live workspace and the source, after Chief spent the morning unable to explain
+  why `chief` was stranded while `chief-khaliq` reclaimed twice. They were never
+  running the same code.
+  1. **Broker self-registration** (what `chief` used) — Rust `AuthClient` → POST
+     `/v1/agents` → 409 → `admit_agent_registration`, `crates/broker/src/relaycast/auth.rs:959`.
+     **Gated** on `identity_key`. Records show `type=human`, empty metadata.
+  2. **Broker-spawned worker** (what `chief-khaliq` and `marketing-lead` used) —
+     node-control `agent.register` → `registerAgentViaNode`,
+     `packages/engine/src/engine/node.ts:1118`. A server-side
+     `onConflictDoUpdate` on `(workspace_id, name)` that overwrites `tokenHash`
+     with `setWhere = status != 'active' OR locationNodeId == this node`. The node
+     id was unchanged across the restart, so it matched. **Never touched the gate
+     and never needed an identity key.** Records carry `metadata.fleet.nodeId`
+     and a `registeredAt` stamp — that stamp *is* the reclaim.
+  3. **SDK fallback** — `registerOrRotate` → 409 → get + `rotateToken`.
+     **Ungated; the name alone suffices.**
+  The populations separate perfectly by path, so the earlier "same gate, opposite
+  outcomes" framing was a category error: it compared a path-1 record to a path-2
+  record and read the difference as a gate decision.
+  **Consequences.** `chief-khaliq` is *not* "one hard kill from a burned name" —
+  that claim is withdrawn; it reclaims through path 2's server-enforced node
+  proof. And the backfill fix is narrow (~4 path-1 records), not a fleet
+  migration. Note also that path 2's `setWhere` already ships the exact
+  `status != 'active'` trap the reclaim brief warns against.
+
+- **Agent-identity work is filed as six issues, 2026-08-07, none labelled for
+  dispatch.** By `relay-name-reclaim-lead`, from
+  `docs/brief-agent-name-reclaim-20260807.md`. Nothing implemented.
+  - **A — relaycast#309** — freeing a name requires deleting history, and the
+    delete is refused for any agent that has ever spoken. **Land this first.**
+  - **B — relay#1452** — the gate has no migration path. **Sequencing decided:
+    land A, release the stranded name, let the create branch stamp on the next
+    honest restart, and hold adopt-and-stamp** until A is in and the legacy
+    population is characterized. The lead argued its own briefed fix *down* after
+    measuring, and was right: a legacy record carries no ownership proof at all,
+    so adoption can only infer ownership from absence — the weakest possible
+    basis for touching the boundary that stops AR-448.
+    **The legacy population is 226 of 864**, not the ~4 the brief assumed and
+    not the "~4" Chief repeated in its own ruling after being told otherwise.
+  - **C — relay#1451** — `node up` spawns `AGENT_RELAY_BIN` unvalidated. The
+    briefed fix was insufficient: routing through the resolver still returns the
+    CLI, because the override branch only does `existsSync` and never checks the
+    binary is a broker. The right predicate already sits unused at
+    `cli/lib/broker-lifecycle.ts:755`.
+  - **D — relaycast#311** — SDK `registerOrRotate` hands over any agent's
+    identity on name alone, reachable from the MCP `register_agent` tool, while
+    the CLI's `agent register`/`agent add` hard-409. That inconsistency is part
+    of the finding, not noise.
+  - **E — relaycast#310** — the PATCH hole below.
+  - **F — relaycast#312** — `GET /v1/agents` reports every live agent as
+    `unknown` while the column holds `active`. **Not cosmetic:** an engineer
+    verifying a guard through the API sees no agent ever active, concludes the
+    disjunct is always true, and concludes the boundary is open. Chief and the
+    lead ran exactly that chain and were one message from escalating a false
+    security finding. A field that reads one way to SQL and another to every
+    consumer is a trap aimed at whoever is trying to verify a security property.
+  **Still open:** is `sweepStaleAgents` actually invoked today? It decides
+  whether path 2's protection is a five-minute window (it flips `active` →
+  `offline` after `STALE_THRESHOLD_MS`, and once flipped the node-identity
+  requirement evaporates) or permanent. Chief's 08-06 note says the sweep has had
+  no caller since the Cloudflare migration and relaycast#306 is still unmerged —
+  if that holds, the window does not exist and `offline` is sediment.
+
+- **The admission gate is a coordination gate, not a security boundary — and one
+  live hole makes that concrete.** `PATCH /v1/agents/:name`
+  (`relaycast packages/engine/src/routes/agent.ts:291`) requires only
+  `requireWorkspaceKey` and shallow-merges arbitrary metadata onto **any** agent,
+  so a key holder can write `identityKey` today and then reclaim through the
+  gate. `POST /agents/:name/rotate-token` (`routes/workspace.ts:415`) is likewise
+  workspace-key-only. **This is not theoretical here:** the workspace key is
+  passed in broker `pty` argv and readable by any local process via `ps` — the
+  same leak flagged for rotation below and reconfirmed twice today. Key from
+  `ps` → PATCH an identity onto any agent → reclaim it. **Rotation does not close
+  this while argv exposure stands.** Chief described that gate as a security
+  boundary all day; it is not. Being filed by the lead.
+  *Also falsified:* relay#1436 was carried here as the threat to the gate. It is
+  not — `registerOrRotate` drops metadata entirely on the conflict branch, so
+  #1436's metadata only lands on create. It is open, checks green, not near
+  merge, and not the risk.
+
+- **The org hierarchy lives on one laptop, and three gaps are now filed.**
+  Khaliq asked for initiatives/epics/projects organized and visible, and for it
+  to be managed from Cloud and trickle down to local. Measured 2026-08-07, it is
+  the reverse and there is nothing hosted to trickle from:
+  - **Cloud has no org primitive at all** — `grep -r reportsTo cloud/packages`
+    returns zero. The whole declared structure is `chief/tools/orgchart/org.json`
+    on this machine. → **cloud#2949**, filed, unlabelled.
+  - **Linear's hierarchy does not reach Chief** — 0 of 234 issues carry a
+    `project_id`, `parent_id`, `cycle_id` or `milestone_id`; the fields are absent
+    from the record, not null. 17 projects and 10 milestones are projected with
+    nothing linking to them, and initiatives/cycles are not projected at all. So
+    no consumer can roll Linear work up by project today. → **relayfile#403**.
+  - **`fleet nodes` returns a non-deterministic subset, and a healthy node can
+    swallow a spawn silently.** `finn-mini` returned `pending` and never
+    dispatched while heartbeating and advertising `spawn:codex`; `barry` returned
+    `dispatched` and the agent was up in 20s. Chased further, the enumeration
+    itself proved unreliable — a node omitted from one response is present in the
+    next, with no offline state ever reported. **Corrected: nothing "died" today.
+    finn-mini and sf-mini were both omissions, not state changes**, and the two
+    "node is down" conclusions Chief drew, plus the corrections to them, were all
+    wrong. There is also no CLI surface to inspect an invocation afterwards.
+    → **relay#1448**, with the enumeration measurement as the root-cause
+    candidate for the silent `pending`.
+  Khaliq's call 2026-08-07: **file, do not build.** `org.json` stays the system of
+  record and the local orgchart tool renders it until he sequences the Cloud work.
+  Chief's own view of all this is `scratchpad/org-board.html`, unpublished.
+
+- **Partnerships is a new org unit, and Herdr is its first seat.**
+  Added to `tools/orgchart/org.json` 2026-08-07 on Khaliq's instruction:
+  `partnerships` (unseated department, reports to `chief-khaliq`) with
+  `herdr-lead` under it. `herdr-lead` is live on fleet node **barry** (codex,
+  id `211430740238159872`), deliberately off Khaliq's laptop, owning
+  `workstreams/herdr-fleet-surface.md`.
+  **Its brief was hand-carried as three DMs, and that is a defect, not a
+  delivery.** barry has no copy of the brain, so a placed agent cannot read its
+  own workstream — which is precisely T7 in that workstream ("place an agent on a
+  mini and have it work in a live-mounted tree with nothing cloned" is documented
+  nowhere). The lead was told to treat T7 as load-bearing for that reason. Until
+  a mount reaches the fleet nodes, every remote appointment costs a manual
+  context transfer and leaves no durable brief.
+
+- **NEW 2026-08-07, and it is the one that threatens continuity: the resident's
+  canonical name can be permanently burned by an unclean shutdown.** On broker
+  11.4.2 the fail-closed admission gate refuses to re-register a name it cannot
+  prove ownership of. The broker flushes state on SIGTERM but does **not**
+  deregister its own name, and the reclaim key is minted at first registration
+  and never persisted locally — so a stranded name is unrecoverable, and
+  `agent-relay agent remove` refuses server-side once the agent has history.
+  This already happened: the node's name `chief` is burned (record frozen at
+  `lastSeen` 09:05:32Z) and the node now runs as **`chief-broker`**.
+  **Why it matters beyond cosmetics:** CLAUDE.md §7 makes the canonical
+  `teams.json` name the definition of Chief's continuity — "if the canonical
+  name cannot be reacquired, keep the existing resident online and page the
+  principal." A burn makes reacquisition *impossible*, not merely hard. So far
+  spawned agents (`chief-khaliq`, `marketing-lead`) have been reclaimed
+  successfully where the broker's own name was not, and nobody knows why that
+  asymmetry exists — which means nobody can say `chief-khaliq` is safe.
+  **Mitigation in place, and it is partial.** A wrapper at
+  `~/.agentworkforce/relay/bin/chief-node-supervisor.sh` is now launchd's
+  `program`; it traps SIGTERM/SIGINT and runs `agent-relay node down` for a
+  clean release, which makes unload/reload repeatable. A SIGKILL, a panic, or a
+  power loss bypasses the trap entirely. **The durable fix is platform-side:
+  persist the reclaim key, or let a node deregister its own name on shutdown.**
+  Not authored by this Chief — it appeared while the resident was down; see the
+  second-writer thread below.
+
+- **RESOLVED 2026-08-07: the impersonation path is closed, verified by probe
+  rather than by release notes.** The thread below feared that a process
+  registering an existing name would be handed the incumbent's address, inbox,
+  and token. Directly tested on the running 11.4.2 broker with a throwaway name:
+  the second registration returns `Agent "…" already exists in this workspace`,
+  exits without a token, and leaves the incumbent untouched. The registration
+  path fails closed. (Probe agent removed afterwards.) The cost of that
+  hardening is the burned-name thread above — the same gate, seen from the other
+  side.
+
+- **RESOLVED 2026-08-07: the broker version drift is fixed and `relay-version`
+  is green.** `BROKER_BINARY_PATH` in the launchd job's `EnvironmentVariables`
+  is checked before the `node_modules` candidates, so the running broker is
+  finally 11.4.2 instead of the shadowed transitive 10.6.7. All thirteen doctor
+  checks now read OK — the first fully green doctor with no ERROR line. The
+  underlying shadowing is unchanged: a version floor on the transitive
+  `@agent-relay/fleet` is still the durable fix, and the pin is a per-machine
+  workaround that a fresh clone will not inherit.
+
+- **PARTIALLY ANSWERED 2026-08-07: a node rename preserves node id and history.**
+  `chief` → `chief-broker` kept `node_5b46ac5e9f427fcedc07f77f95f642eb`, its
+  2026-07-30 `createdAt`, and all 61 attributed agents. So the long-open question
+  "does `--broker-name` orphan the node?" is answered **no — for an unused
+  name**. It does *not* answer the `kjg-laptop` case, which is the hard one
+  precisely because that name already owns a different node id
+  (`node_210851746276208640`). Renaming onto a free name and merging onto an
+  occupied one are different operations, and only the first is now evidenced.
+  What a rename *does* cost is the old Relaycast name, permanently — see above.
+
+- **RESOLVED 2026-08-07: v11.4.2 ships the admission gate.** Khaliq triggered
+  the publish; the release completed 08:51:15Z and both `b4b96dfb3` and
+  `5c2ad8ee3` are confirmed ancestors of the `v11.4.2` tag. Upgrading this
+  machine and restarting the node closes the impersonation path described below.
+  **Trap that nearly cost a wasted restart:**
+  `~/.agentworkforce/relay/update-cache.json` served `latestVersion: 11.4.1`
+  from a check at 07:55Z, an hour before the release. `agent-relay update` would
+  have installed 11.4.1 — without the gate. Delete that cache before trusting
+  `update --check` after any release.
+
+- **The broker-side name-collision gate is absent from every released CLI, and
+  Chief runs a released CLI.** `crates/broker/src/relaycast/auth.rs` — the whole
+  admission gate — does not exist in the v11.4.1 tree; it is `main`-only, via
+  `b4b96dfb3` and `5c2ad8ee3`, both dated after v11.4.1 was tagged
+  (2026-08-03). Chief's node runs 11.4.0. Without the gate the pre-existing
+  behaviour applies: re-registering a name that already exists in the workspace
+  hands over the incumbent's agent. **So a process on this workspace registering
+  as `chief-khaliq` would be given Chief's address, inbox, and token.**
+  *Not yet verified:* whether Relaycast rejects this server-side independently
+  of the broker. Until someone proves it does, treat the path as open — this is
+  a fail-closed question and absence of proof is not coverage.
+  Resolution is one action that unblocks three things: **cut a release
+  containing `b4b96dfb3` and `5c2ad8ee3`.** It closes this path, unblocks
+  AR-448's live stop/start proof, and hardens the `kjg-laptop` rename restart.
+  Khaliq's call; Chief recommended against running untagged `main` on the host
+  that carries the resident.
+
+- **SUPERSEDED 2026-08-07: the drift was never CLI-vs-CLI, it is CLI-vs-broker,
+  and upgrading the CLI cannot fix it.** The old entry here blamed two installed
+  CLIs (mise shim 11.2.0 vs `~/.local/bin` 11.4.0). Both paths now resolve to
+  **11.4.2** and `relay-version` is *still* the doctor's only ERROR, which
+  falsifies that diagnosis. The real cause: the node runs with
+  `WorkingDirectory=…/AgentWorkforce/chief`, so `agent-relay node up` resolves
+  the broker out of this repo's `node_modules` — the running broker is
+  `chief/node_modules/@agent-relay/broker-darwin-arm64/bin/agent-relay-broker` at
+  **10.6.7**, while the managed binary at `~/.agentworkforce/relay/bin` is
+  11.4.2. It arrives transitively and nothing in this repo asks for it:
+  `agentworkforce@4.1.37 → @agentworkforce/cli → @agentworkforce/local-surface →
+  @agent-relay/fleet@10.6.7 → @agent-relay/harness-driver → broker-darwin-arm64`.
+  **Consequence: every `agent-relay update` on this host upgrades a broker that
+  never runs.** The 11.4.2 upgrade did exactly that, which is why the admission
+  gate was absent from the restart it was cut for. The doctor already prints
+  `brokerBinary` naming the node_modules path; it was read as drift rather than
+  as the answer. Fix is a version floor on the transitive `@agent-relay/fleet`,
+  or launching the node from a directory that does not shadow the managed
+  binary. Khaliq's call which.
+
+- **This machine carries two node identities, and the rename is a merge, not a
+  relabel.** Found 2026-08-07 while preparing the rename restart:
+  `chief` / `node_5b46ac5e9f427fcedc07f77f95f642eb` — created 07-30, online, 61
+  agents attributed — and `kjg-laptop` / `node_210851746276208640` — created
+  2026-08-05T20:09:33Z, offline, last heartbeat 07:49:54Z on 08-07. The
+  machine-global `~/.agentworkforce/relay/fleet-enrollments.json` is keyed by
+  `relaycastUrl#workspaceId` (**not** by node name) and its single record claims
+  this machine is `kjg-laptop`/`node_210851746276208640`. The running broker
+  nonetheless reports the `chief` id, so `node up` is not honouring that
+  enrollment — which is itself unexplained. Consequence: `--broker-name
+  kjg-laptop` has three possible outcomes (rename the `chief` record, adopt the
+  enrolled id and orphan 61 agents, or mint a third), and nobody knows which.
+  Khaliq held the rename on that basis. **Answer which id wins before reusing the
+  name**, and find out where `node_5b46ac5e…` is persisted — it is in no local
+  state file, only in worker logs, so it appears to be server-assigned.
+
+- **The `kjg-laptop` rename was written to the plist and never took effect.**
+  Verified 2026-08-07 after the restart: the plist on disk carries
+  `--broker-name kjg-laptop`, but `launchctl print
+  gui/501/com.agentworkforce.chief.node` shows the loaded job's `arguments` are
+  still `{agent-relay, node, up}`, and `fleet status` still reports name `chief`.
+  The job was never unloaded and reloaded, so launchd kept the definition it had
+  at load time. **Editing a plist is not applying it** —
+  `launchctl bootout` + `bootstrap` (or `kickstart -k`) is. Still open, and the
+  open question below (does a rename preserve node id and its agent history?) is
+  still unanswered, because the restart that was supposed to answer it ran the
+  old arguments.
+
+- **Original entry — this machine's fleet node is renaming to `kjg-laptop`
+  (Khaliq, 2026-08-07).**
+  It currently appears as `chief` only because `com.agentworkforce.chief.node.plist`
+  runs plain `agent-relay node up` from `WorkingDirectory=…/AgentWorkforce/chief`,
+  and the node name defaults to the project directory basename — verified against
+  the installed 11.4.0 binary's `--broker-name <name>` help text. So the node is
+  named after a folder, not a role, and the org chart's `chief-khaliq → chief`
+  attribution works only by that coincidence. Held pending the release decision,
+  because the restart is when the missing admission gate would be exercised.
+  *Open question to answer at restart, not by reasoning:* whether the rename
+  preserves node id `node_5b46ac5e…` and the 60 agents of history attributed to
+  it. `node.ts` reads `options.brokerName ?? enrolledNodeName`, which suggests
+  enrollment carries identity and the name is metadata over it — but confirm it.
+
 - **Chief was handed a program on Khaliq's authority, relayed by an agent, and
   is holding.** `sage-nightcto-factory-map-20260731` asked Chief to own the
   Sage/NightCTO distributed-Factory program and relayed a fleet topology (Cloud
@@ -26,13 +293,23 @@
 
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.
-- **RelayAuth cannot mint a session at all, and it is now the single blocker.**
-  Native delegated mint was already broken; as of 2026-08-04 the Cloud mount
-  session Chief fell back to also returns `500 mount_session_failed`. Senses
-  have not refreshed since 2026-07-31T08:13Z, so Chief has no live Linear or
-  GitHub read and no writeback. Everything downstream — the AR-448 checkpoint,
-  Factory control, the Sage program's item 1 — waits on the gated #2857 D1
-  capacity recovery, which needs Khaliq's explicit grant.
+- **RESOLVED 2026-08-07: RelayAuth mints again and the #2857 gate no longer
+  exists.** For five days this was recorded as the single blocker behind the
+  AR-448 checkpoint, Factory control, and the Sage program's item 1, all waiting
+  on a "gated #2857 D1 capacity recovery needing Khaliq's explicit grant."
+  Neither half survived contact: cloud#2857 was closed `NOT_PLANNED` on
+  2026-08-04, so the grant Chief was holding for could never have been given;
+  and the doctor is fully green this morning — mount running, credential
+  refreshed 2026-08-07T07:51:49Z, all three integrations `ready`, hosted Factory
+  brain active with a fresh heartbeat. The senses projection last refreshed
+  2026-08-05T23:57Z, so reads are live rather than the 07-31 snapshot.
+  **Lesson, and it is the expensive one:** Chief carried a blocker for five days
+  without re-testing it, and carried an authorization gate for an issue that had
+  been closed for three. A blocker is a claim about the present; re-verify it on
+  every session start, or it becomes a reason not to work.
+  Now unblocked and unowned: the AR-448 Linear checkpoint (needs the rewrite
+  already decided on 08-04 — the lineage decision, not the stale "PR opened"
+  body), and Factory writeback generally.
 - GitHub integration health resolved on its own: both installations read
   `ready` with events through 2026-08-03, and the doctor no longer reports
   `syncHealthy:false`. Nothing was done to fix it, so if it recurs, treat the
@@ -59,16 +336,36 @@
   `agent-relay cloud login` again to rotate. The general rule stands and Chief
   broke it: never run a command that prints a credential — on 11.2.0 plain
   `--json` is exactly such a command, which is why the mask exists in 11.4.0.
+  **Broke it again 2026-08-07, and the values are current.** Chief ran
+  `ps -eo pid,lstart,command` while diagnosing the restart and the broker's `pty`
+  argv dumped the live workspace key (`rk_live_…`) and both agent tokens
+  (`at_live_…` for `chief-khaliq` and `marketing-lead`) into the resident
+  transcript in plaintext. These are the *post-restart* values, so they are live,
+  not expired like the `cld_at_` above. Flagged for rotation.
+  Two lessons, both cheap: a redaction rule that only covers commands *named*
+  after credentials misses `ps`, and this is the third channel (argv, node log,
+  observer link) to leak the same key — **the argv fix is the one that closes all
+  of them**, so prioritise it over rotation, which alone just re-leaks at the
+  next spawn. Until it lands, treat any full process listing as a credential
+  dump: filter to `pid,lstart,comm` and never include `command`/`args`.
 - **Will's Chief needs its `brainRoot` repointed.** His brain moved from the
   repo root to `principals/will/` on 2026-07-30 (Khaliq's call). Nothing in
   this repo referenced the old paths — skills and scripts are all
   `<brainRoot>`-relative — but if Will's resident runs from its own config, that
   config still points at the root and must be updated before it writes again.
-- **A second writer is active in this repo.** `scripts/factory-control.mjs`,
-  `.claude/settings.json`, and edits to `scripts/chief-doctor.mjs` all appeared
-  mid-session while the resident was online. Harmless so far — all tooling, no
-  brain writes — but §7 assumes one writer, so confirm who owns the maintenance
-  shell before trusting the working tree mid-task.
+- **A second writer is active in this repo, and it now changes production
+  behaviour.** Earlier instances were tooling only (`scripts/factory-control.mjs`,
+  `.claude/settings.json`, `scripts/chief-doctor.mjs`). On 2026-08-07, while the
+  resident was down for the restart, that writer authored
+  `~/.agentworkforce/relay/bin/chief-node-supervisor.sh`, made it launchd's
+  `program`, chose the node's new name `chief-broker`, and diagnosed the burned
+  name — all changes to how Chief boots, none of them recorded in the brain
+  until this entry. The work looks correct and the write-up in the script's own
+  header is better than most; the problem is that the durable record depended on
+  a later session reading a shell script in a bin directory. §7 assumes one
+  writer for exactly this reason. **Confirm with Khaliq who owns that shell**,
+  and require any boot-path change to land in the brain rather than only on
+  disk.
 - **Relay MCP server times out at Chief's spawn.** Root-caused 2026-07-30: the
   broker does pass a correct inline `--mcp-config` declaring an `agent-relay`
   stdio server, but it launches as `npx -y agent-relay mcp`, and the launch
@@ -103,6 +400,15 @@
   **Remaining fix is cloud-side** — claim before spawning, not after, and abort
   the dispatch when the claim write fails. Chief's half (a promote-time guard
   that refuses to re-offer an issue with an open PR) is done.
+  **Status 2026-08-07 — the lineage question changed shape.** AR-448's substance
+  is already in `main` via PR #1429 (`4acdd97d4` precedence ladder, `5c2ad8ee3`
+  restart registration reclaim; both confirmed ancestors of `origin/main`).
+  Neither AR-448-branded commit is in main. So both PRs are now stale patches
+  against a file #1429 rewrote, and the decision is not "merge which one" but
+  "does either add anything main lacks" — mostly #1402's restart/convergence
+  test evidence. Recommend harvesting those tests onto current main as a fresh
+  PR and closing both. Unmet either way: the stop/start regression proof, which
+  needs Khaliq at the keyboard because stopping the broker kills the resident.
   **Status 2026-08-04:** the re-dispatch window is closed — AR-448 reads
   `In Human Review` in the senses projection, though that projection stopped
   refreshing 2026-07-31T08:13Z, so it is the last known state and not a live

@@ -189,6 +189,20 @@ Implementation is complete and inert. Chief holds activation until **both**:
    spec must be non-empty on the deployment, not merely committed. This is the
    long-standing item 2 blocker, now the primary one.
 2. A node advertises `workflow:run` plus the Sage and NightCTO repo tags.
+   **Measured 2026-08-07: zero of 397 node records advertise `workflow:run`,
+   and all four live nodes (`sf-mini`, `finn-mini`, `chief`, `barry`) carry the
+   byte-identical default set** — `spawn:claude/codex/gemini/opencode`,
+   `release`, `relay:delivery-cursor-v1` — with no tags on any of them. No node
+   has ever served a custom node definition. So this gate is not "nearly met",
+   it is untouched, and meeting it is real work: run the node under
+   `node up --config <node-definition>` declaring `workflow:run` and the repo
+   tags, then confirm the control plane advertises them.
+   **Do not read `~/.agentworkforce/relay/fleet-node.json` as evidence for this
+   gate.** That file declares `handlers: [spawn:claude, spawn:codex,
+   workflow:run]` and is a dead artifact from 2026-06-19 — `connected: false`,
+   a pid that no longer exists, and a broker URL on a port nothing listens to.
+   Chief briefly reported it as a live capability claim. The control plane's
+   capability list is the only live truth.
 
 Then, and separately, the Cloud-backed dry-run workspace join must succeed
 before real dispatch. `#217`/`#218` carry no dispatch recipe gate, so they stay

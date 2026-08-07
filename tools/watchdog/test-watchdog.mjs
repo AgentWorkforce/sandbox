@@ -6,12 +6,25 @@
 // are exercised here against synthetic observations and synthetic transcripts.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { classify, turnState, parseCpuTime, codexMarker, claudeMarker } from './fleet-watchdog.mjs';
+import {
+  classify,
+  turnState,
+  parseCpuTime,
+  codexMarker,
+  claudeMarker,
+  expectedAgents,
+  resolveDmTarget,
+  brokerDeliveryFailures,
+  classifyDeliveryFailures,
+  cloudBlindStatus,
+} from './fleet-watchdog.mjs';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-test-'));
 const write = (name, records) => {
@@ -164,6 +177,133 @@ test('ps TIME strings parse to seconds', () => {
   assert.equal(parseCpuTime('1:02:03'), 3723);
   assert.equal(parseCpuTime('2-03:04:05'), 2 * 86400 + 11045);
   assert.equal(parseCpuTime(''), 0);
+});
+
+test('the roster defines expected residents and the Chief page target', () => {
+  const repo = path.join(TMP, 'chief-repo');
+  fs.mkdirSync(repo);
+  fs.writeFileSync(path.join(repo, 'teams.json'), JSON.stringify({
+    principal: { handle: 'khaliqgant' },
+    agents: [
+      { name: 'marketing-lead', cli: 'claude', role: 'marketing lead' },
+      { name: 'chief-khaliq', cli: 'claude', role: 'chief of staff' },
+    ],
+  }));
+  assert.deepEqual(expectedAgents(repo).map((agent) => agent.name), [
+    'marketing-lead',
+    'chief-khaliq',
+  ]);
+  assert.equal(resolveDmTarget([{ slug: 'chief', cwd: repo }]), 'khaliqgant');
+});
+
+test('broker failures expose PTY timeouts and repeated false acknowledgements', () => {
+  const logs = path.join(TMP, 'logs');
+  fs.mkdirSync(logs);
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
+  fs.writeFileSync(path.join(logs, 'chief.log.2026-08-06'), [
+    `${now} WARN worker request timed out before worker responded worker=chief-khaliq kind=write_pty`,
+    `${now} INFO delivery acked via timeout fallback — echo never verified worker=chief-khaliq`,
+    `${now} INFO delivery acked via timeout fallback — echo never verified worker=chief-khaliq`,
+    `${now} INFO delivery acked via timeout fallback — echo never verified worker=chief-khaliq-successor`,
+  ].join('\n'));
+  assert.deepEqual(
+    brokerDeliveryFailures(
+      logs,
+      'chief',
+      ['chief-khaliq', 'chief-khaliq-successor'],
+      Date.now() - 60000,
+    ),
+    {
+      'chief-khaliq': {
+        ptyTimeouts: 1,
+        unverified: 2,
+        lastPtyTimeoutAt: nowMs,
+        lastUnverifiedAt: nowMs,
+      },
+      'chief-khaliq-successor': {
+        ptyTimeouts: 0,
+        unverified: 1,
+        lastPtyTimeoutAt: null,
+        lastUnverifiedAt: nowMs,
+      },
+    },
+  );
+});
+
+test('delivery failures require repetition and clear after resident progress', () => {
+  const failures = {
+    ptyTimeouts: 2,
+    unverified: 3,
+    lastPtyTimeoutAt: 200,
+    lastUnverifiedAt: 300,
+  };
+  assert.equal(
+    classifyDeliveryFailures({
+      ...failures,
+      ptyTimeouts: 1,
+      unverified: 0,
+      lastUnverifiedAt: null,
+    }, 100),
+    null,
+    'one PTY timeout is transient',
+  );
+  assert.equal(classifyDeliveryFailures(failures, 100).verdict, 'PTY_UNREACHABLE');
+  assert.equal(classifyDeliveryFailures(failures, 250).verdict, 'DELIVERY_UNVERIFIED');
+  assert.equal(classifyDeliveryFailures(failures, 400), null);
+  assert.equal(classifyDeliveryFailures(null, 0), null);
+});
+
+test('cloud blindness pages only after consecutive failed sweeps and resets on success', () => {
+  const first = cloudBlindStatus('http_500', 0, 2);
+  assert.equal(first.failureCount, 1);
+  assert.equal(first.row.verdict, 'CLOUD_DEGRADED');
+  assert.equal(first.row.page, false);
+
+  const second = cloudBlindStatus('http_500', first.failureCount, 2);
+  assert.equal(second.failureCount, 2);
+  assert.equal(second.row.verdict, 'CLOUD_BLIND');
+  assert.equal(second.row.page, true);
+
+  assert.deepEqual(cloudBlindStatus(null, second.failureCount, 2), {
+    failureCount: 0,
+    row: null,
+  });
+});
+
+test('dry-run does not alter the watchdog state or log', () => {
+  const root = path.join(TMP, 'dry-run');
+  const launches = path.join(root, 'LaunchAgents');
+  const repo = path.join(root, 'chief');
+  const support = path.join(root, 'support');
+  const state = path.join(support, 'state.json');
+  const log = path.join(root, 'watchdog.log');
+  fs.mkdirSync(launches, { recursive: true });
+  fs.mkdirSync(repo, { recursive: true });
+  fs.mkdirSync(support, { recursive: true });
+  fs.writeFileSync(state, '{"sentinel":"state"}\n');
+  fs.writeFileSync(log, 'sentinel log\n');
+
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(new URL('./fleet-watchdog.mjs', import.meta.url)),
+    '--dry-run',
+    '--quiet',
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      WATCHDOG_LAUNCH_AGENTS: launches,
+      WATCHDOG_CHIEF_REPO: repo,
+      WATCHDOG_SUPPORT_DIR: support,
+      WATCHDOG_STATE_FILE: state,
+      WATCHDOG_LOG_FILE: log,
+      WATCHDOG_IDENTITY_FILE: path.join(support, 'missing-identity.json'),
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(state, 'utf8'), '{"sentinel":"state"}\n');
+  assert.equal(fs.readFileSync(log, 'utf8'), 'sentinel log\n');
 });
 
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));

@@ -60,6 +60,342 @@
   mount, the credential), never the supervisor around it. Same shape as the
   `broker` OK lesson above; a health check must assert the capability, not the
   process.
+- **`lastSeen` is not purely a measurement — infrastructure batch-writes it.**
+  Chief reported 25 agents "dying in the same second" at 2026-08-06T13:00:19Z.
+  Two independent lanes falsified it: Relaycast's `inventory.sync` handler calls
+  `reconcileInventory`, which stamps `status:'active'` and a fresh `lastSeen` on
+  every existing inventory item, so ONE frame gives N agents one timestamp.
+  Confirmed by a second instance the same day — a fleet WS disconnect at
+  17:55:15Z stamped **106** agents with an identical `lastSeenAt`. A shared
+  timestamp across many agents is therefore evidence of a stamp event, not a
+  death event, and those agents were already dead well before it. The rule that
+  every other flag over-reports still holds, but `lastSeen` is a weaker signal
+  than the brain claimed: **the only trustworthy probe is to send a message to a
+  specific agent and watch its own `lastSeen` move.** Population-level timestamp
+  analysis measures the transport, not the agents.
+- **`lastSeen` advancing proves life; `lastSeen` static proves nothing.** Chief
+  correctly learned that every other flag over-reports, then over-applied it and
+  treated a few minutes of no movement as death — replacing four lanes on that
+  basis. Two of the "dead" lanes had already delivered complete work, and a
+  third woke after twenty minutes of silence. A lane that is heads-down is not
+  consuming messages and is indistinguishable from a corpse by this signal.
+  Replace only a lane that has **never once** advanced *and* has produced
+  nothing, and prefer asking to assuming — a duplicate lane in a shared worktree
+  costs more than an idle one.
+- **A liveness filter and a scope widening are one change, not two.** The org
+  chart read the node-local agent list, so it showed 27 rows of which 25 were
+  dead and hid every always-on production agent. Filtering alone left 2 rows;
+  widening alone would have returned 813. Shipping either half would have looked
+  like a regression and been reverted. When a feed is both too narrow and too
+  permissive, the fix is a single change or it is nothing.
+- **Categorising on a field is not filtering on it.** Chief once proposed hiding
+  agents with no `nodeId` and correctly retracted it — 37 live agents, including
+  production automation, carry none. But the same field cleanly separates
+  standing cloud agents from fleet-placed ones, and using it that way is sound:
+  liveness still comes from `lastSeen` alone, and `nodeId` only chooses which
+  style a row that already passed the liveness gate receives. A field that is
+  wrong as a gate can be right as a label.
+- **Curl proves nothing about a client-rendered page.** Byte count, grep hits and
+  a 200 all passed while the demo chart rendered a single row: the app hydrates
+  client-side and the tree collapses on first paint. The served HTML is the
+  shell, not the artifact. Render it in a browser, expand it, and assert both
+  that the right thing appears and that the wrong thing does not — and expect
+  any content health check written against the shell to be counting the shell.
+- **A handoff is a snapshot and decays immediately.** An incoming Chief was told
+  the demo runbook was the largest open risk, asked for six times and never
+  delivered; it had landed seven minutes before the handoff was read. Verify the
+  top item of any handoff against the world before acting on it, or you will
+  dispatch a lane to do finished work.
+- **Correct your own brief the moment the ground moves.** Chief told a lane that
+  "no second level" would be an acceptable answer, then found 44 of 56 agents
+  reporting to another agent; and told the same lane to discriminate on `source`,
+  which stopped being true once the feed widened. Both were caught and corrected
+  before the lane built on them. A brief is a claim about the world, so it
+  inherits the world's falsifiability — reissue it rather than letting a lane
+  discover the error downstream.
+- **A mutation count is not coverage — an early failure hides every assertion
+  behind it.** A lane mutated production code, saw 6 of 8 restart cases fail,
+  and reported that as proof the tests bite. Two reviewers then found the
+  headline assertion was tautological: it compared the test's own
+  `relaycast.register` mock to itself and could not fail. The lane proved the
+  mechanism empirically — under mutation the test died on its *first* assertion
+  (the workspace key), so the address assertion never ran; deleting the earlier
+  assertions and re-running showed it passing. So mutation-testing production
+  code is necessary and not sufficient: **an assertion whose expected value
+  comes from the same fixture that produced it stays green under any production
+  mutation.** Require the report to name which assertions ran, not how many
+  tests went red, and check every assertion in a file for that self-referential
+  shape rather than only the flagged one.
+- **Do not generalise from a test fixture to production.** Arguing that
+  `--require-unified` was an invented check, a lane cited main's `workspace
+  active` fixture (`relaycast: 'rc_ops'` against `relayfile/relayauth:
+  'rw_ops'`) as evidence the convergence invariant is not real. The live
+  workspace resolves all three to an identical `rw_7ccfea89`. The fixture is
+  arbitrary test data nobody thought about. Same class as reading a stale state
+  file as current state, and the stakes are higher: had "the convergence
+  invariant is not real" been recorded, a future session could have stopped
+  enforcing this repo's first platform priority. **When a canonical fixture
+  contradicts an invariant, one of them is wrong — find out which.** Changing
+  the fixture to make the assertion pass, which is what happened here, is the
+  move to catch.
+- **Check whether `main` already covers it before dispatching a harvest.** Chief
+  sent a lane to move #1402's tests onto `main` on the belief AR-448 had landed
+  untested. #1429 had shipped it *with* 224 lines of coverage. One `git show
+  --stat` would have prevented the whole branch, its review cycle, and a lane's
+  day. The cost was recoverable and the lane surfaced two real corrections on
+  the way, but the check is free and belongs before the dispatch, not after.
+- **Workspace convergence is necessary and not sufficient for agent identity.**
+  AR-448 concluded that "agent identity needed no separate fix — Relaycast
+  returns the existing agent when a name is re-registered in a workspace it
+  already belongs to." That premise was recorded here as settled on 2026-07-31
+  and it is wrong twice over. Relay `main` replaced that behaviour with a
+  fail-closed admission gate (`b4b96dfb3`): a name collision is **rejected**
+  unless the caller proves same-work-unit via a SHA-256 identity key compared
+  against the incumbent's metadata, with a node's own restart proving it from a
+  hash of its persisted state directory (`5c2ad8ee3`). The gate's own doc
+  comment names the rejected alternative "exactly the AR-448 duplicate-agent
+  class this gate exists to stop."
+  Two consequences. First, **identity has two halves** — one durable workspace,
+  *and* an admission decision on the name — and AR-448 only ever addressed the
+  first. Second, the old "returns the existing agent" behaviour is a hand-over:
+  it is the same defect as [[a-name-based-roster-lookup-makes-the-name-the-identity]],
+  where adopt-on-match turns a naming coincidence into a silent takeover.
+  Found by a dispatched lane that was asked to adapt a test and escalated a
+  falsified premise instead — which is the behaviour to keep rewarding.
+- **A state file carries no timestamp in the reader's head — check the one it
+  carries on disk.** Chief read `~/.agentworkforce/relay/fleet-node.json`,
+  saw `handlers: [… workflow:run]`, and reported to Khaliq that the node claimed
+  a capability the fleet denied it — suggesting the Sage gate was nearly met.
+  The file was written 2026-06-19, seven weeks earlier: `connected: false`, a
+  dead pid, a broker URL on an abandoned port. The live control plane says zero
+  of 397 nodes advertise `workflow:run`. Third instance of one failure this week
+  (the four-day senses projection, the stale RelayAuth blocker, this): **Chief
+  keeps reading persisted artifacts as current state.** The habit to build is
+  mechanical — before quoting any local state file, read its `updatedAt` and
+  check its pid or connection is live, or prefer the live query outright.
+- **A recorded blocker is a claim about the present tense, so re-test it before
+  you honour it.** Chief carried "RelayAuth cannot mint, waiting on the gated
+  #2857 D1 recovery, needs Khaliq's explicit grant" for five days. On 2026-08-07
+  one doctor run showed every plane green, and cloud#2857 had been closed
+  `NOT_PLANNED` three days earlier — so the authorization Chief was holding for
+  had become unaskable, and the capability it was gating had already returned.
+  The failure mode is specific and comfortable: a blocker justifies not working,
+  so nothing in the day's flow re-examines it, and it decays into an excuse with
+  a citation. Same shape as the handoff-snapshot lesson, applied to Chief's own
+  memory rather than someone else's. Verify the top blocker at session start,
+  and prefer the cheap live probe over the recorded state.
+- **A contract that exists only in a message dies with the mailbox.** Three of
+  six Cloud area leads delivered on 2026-08-06; two wrote PRs and one sent its
+  custody/token-authority contract as a Relay DM only. The DM is the most
+  detailed of the three and the least durable — unreadable to any future
+  session, ungreppable, and gone when the inbox rolls. Require an artifact for
+  any deliverable meant to bind future work; a rollup message reports that the
+  contract exists, it is not the contract.
+- **Upgrading a binary is not upgrading the one that runs.** Chief installed
+  relay v11.4.2 specifically so the restart would exercise the new admission
+  gate, restarted, and got a **10.6.7** broker — because the node's
+  `WorkingDirectory` is this repo and `node up` resolves the broker from local
+  `node_modules`, where a transitive `@agent-relay/fleet@10.6.7` shadows the
+  managed 11.4.2 binary. The upgrade was real and it upgraded a file nothing
+  executes. Same family as verifying a flag against source instead of the
+  installed binary, one level further out: there, the wrong *version* was read;
+  here, the wrong *copy*. The habit is to check the running process's own path
+  and self-reported version (`ps` on the pid, the doctor's `brokerBinary`), never
+  the version of what was just installed. Corollary worth its own line: **when a
+  fix fails to appear after an upgrade, suspect resolution before you suspect the
+  fix.**
+- **Editing a launchd plist does not change the running job.** The `kjg-laptop`
+  rename was written into `com.agentworkforce.chief.node.plist`, the node was
+  restarted, and it came back named `chief` — launchd keeps the definition it
+  loaded and the file on disk is only a template for the next `bootstrap`.
+  `launchctl print` shows the in-memory `arguments`, and that is the thing to
+  read; the plist is a persisted artifact, which puts this in the same class as
+  every other stale-file-read on this list. A restart that does not reload the
+  job proves nothing about the change it was run for.
+- **A test that passes on the wrong build is not a pass.** AR-448 criterion 3
+  came back green — resident kept its address across a real restart — and the
+  workstream had predicted a *failure* on any released broker for want of
+  `5c2ad8ee3`. Both facts together mean the green came from the old permissive
+  re-registration path, i.e. from the impersonation behaviour the gate exists to
+  remove. **A result that contradicts the prediction is a finding about the
+  setup, not a bonus.** Reconcile the surprise before recording the pass, or a
+  vulnerability gets written into the brain as a passing acceptance criterion.
+- **A test double encodes the author's beliefs, so a green suite confirms your
+  model of the system, not the system.** `relay-pty-drive-lead` built a PTY
+  reopen gate keyed on a worker's `pid`, with eight named assertions that each
+  failed against pre-fix code. Then it ran one live repro: the real worker
+  returned **`pid: null, workerPid: 30209`** — `pid` is the harness pid and stays
+  null until the ready handshake. **Its fakes had modelled `pid` as always
+  present**, so the gate would have refused every reopen against exactly the
+  workers drive attaches to, and the whole recovery would have been dead on
+  arrival. Fail-closed, so not dangerous — and invisible through three levels of
+  green. The same run also falsified a shared assumption: the broker does **not**
+  close the input socket when a worker dies; the socket only fails on the next
+  write, so an idle drive session over a dead worker looks healthy until the
+  human types. Neither fact was reachable from source. This sharpens the existing
+  fixture-tautology rule: it is not only that expected values can come from the
+  fixture that produced them, it is that **the fixture's *shape* is a claim about
+  production, and an unverified shape makes every test built on it self-
+  consistent and wrong.** One live run against the real thing is worth the twenty
+  minutes.
+- **A delegate that fails silently in the affirmative is more dangerous than one
+  that fails.** `x-reply-radar` was asked twice to audit our own X account, with
+  "I cannot query own-account history" explicitly offered as an acceptable
+  answer. Both times it returned a **generic topical feed keyed on the caller's
+  message text** — three plausible-looking results, shaped like an answer, about
+  nothing that was asked. A less careful caller books that as coverage and
+  reports a public surface "clean" when it is unknown. `marketing-lead` caught it
+  and reported the gap instead, which is why the X blast radius is recorded as
+  **UNKNOWN, not clean**. The rule: **when a delegate returns something shaped
+  like an answer, check that it answers the question you asked.** An off-target
+  response is a capability gap to report, never coverage to launder. Silence is
+  self-announcing; a plausible wrong answer is not.
+- **A correction phrased as "delete on sight" cannot tell an assertion from a
+  quotation.** Chief told `marketing-lead` to kill a retired claim wherever it
+  appeared. Every surviving occurrence was the claim being **quoted inside the
+  evidence document that falsifies it** — "The claim under test was: > …",
+  followed by "both halves are wrong". Executing the instruction would have left
+  an evidence file refuting a claim it no longer stated, destroying the audit
+  trail. The lane declined and asked first. **Phrase retractions as "this must
+  never appear again as a live claim"**, which preserves quotation in evidence,
+  changelogs and post-mortems — where keeping the wrong thing next to why it was
+  wrong is the entire point.
+- **"Optimistic" and "invented" are different failures and call for different
+  responses.** The public "sub-200ms end-to-end" figure turned out to have no
+  measurement behind it at all: someone took a 315.5ms *round-trip* median and
+  halved it. Chasing provenance rather than just correcting the number is what
+  reframed this from "our benchmark was wrong" to "a number was fabricated by
+  halving" — and only the second prompts the question *what else was invented?*,
+  which is exactly how a **"0ms Latency Overhead"** line was found sitting in the
+  investor deck since January. When a number is wrong, find out where it came
+  from before deciding how far the problem spreads.
+- **A status field is only a signal if something revokes it — find the revoker
+  before trusting the value.** `relay-name-reclaim-lead`'s formulation, and it is
+  sharper than the rule already in this file. Chief's version was "test a
+  candidate signal against the living population", which is the symptom; this is
+  the cause. Relaycast's `agents.status` is written `active` on registration and
+  `offline` only by explicit disconnect/teardown paths. **`sweepStaleAgents` has
+  no caller** — one reference in the tree, its own definition; relaycast#306 to
+  restore it is still open. Proven against production rather than source: **305
+  of 329 `active` records have `lastSeen` older than five minutes, and the oldest
+  has been `active` for 23.9 days.** A five-minute sweep would make that 24.
+  So `active` does not mean alive; it means *came up once and nothing said
+  otherwise*, and any code branching on `offline` is branching on sediment.
+- **A fix can open a hole, and neither issue can see it alone.** relaycast#306
+  restores the presence sweep. Doing so flips stale records to `offline` — and
+  the resident-roster registration path guards its token overwrite with
+  `ne(status,'active') OR locationNodeId == this node`. Every record #306 flips
+  makes that first disjunct true, so **a presence fix would silently loosen an
+  identity boundary**, converting a node-bound reclaim into name-alone takeover.
+  Invisible from inside #306 (a presence bug) and invisible from inside the
+  identity issues (which do not touch presence). The lesson generalises: when two
+  open changes touch the same field for different reasons, check whether one is
+  the other's precondition — and **put the warning on the issue where the merge
+  decision happens**, not in the issue where it was discovered. A caveat filed
+  next to the analysis arrives after the merge.
+- **The code you are reading is not necessarily the code that is running, and
+  that failed three separate ways in one day.** (1) A broker upgraded to 11.4.2
+  while a shadowed 10.6.7 copy was the one executing. (2) A `status` column
+  holding `active` for 329 agents while every API consumer rendered it
+  `unknown` — a lane and Chief both concluded a security guard was open, and
+  were one message from escalating it. (3) A dispatched lead could not find the
+  `active`→`unknown` mapping anywhere in the local relaycast tree, meaning **the
+  deployed engine carries code the checkout does not**. The lead drew the right
+  line unprompted: *empirical results against the live system stand; every
+  `file:line` claim is provisional until checked against the deployed build.*
+  Adopt that as the standard for any source-derived claim, and say which side of
+  the line each claim falls on when reporting — otherwise a reviewer who cannot
+  find your line number concludes you were careless rather than that they are
+  reading a different build.
+- **Before explaining why one mechanism treated two things differently, check
+  they went through the same mechanism.** Chief spent a morning unable to explain
+  why the admission gate stranded `chief` while `chief-khaliq` reclaimed its id
+  twice — both legacy records with no stamped identity key, opposite outcomes.
+  Chief wrote it into the brain as an unexplained asymmetry, published a
+  "one hard kill from the same fate" warning off it, and briefed a lane on it.
+  A dispatched lead resolved it in under an hour: **there are three registration
+  paths and the gate covers one.** The two records were never running the same
+  code, so there was no asymmetry to explain. The tell was available the whole
+  time and Chief had already read it — `chief` is `type=human` with empty
+  metadata, `chief-khaliq` is `type=agent` carrying `metadata.fleet.nodeId`.
+  Two records that differ in *shape* usually differ in *origin*. **When a single
+  mechanism appears to behave inconsistently, first enumerate the callers** —
+  the inconsistency is far more often two code paths than one confused one.
+- **"Released", "stopped" and "gone" are three different states, and no single
+  call delivers all three.** Managing a worker on 2026-08-07: `fleet release`
+  returned `status=pending, dispatchedNodeId=null` against a `node_direct_*`
+  handler and never completed — the agent kept running and looping. `agent-relay
+  node agent release`, the *local broker's* graceful stop run on the machine that
+  owns the PTY, stopped it in under 10 seconds. On a third agent, `fleet release`
+  reported success and set offline metadata while **leaving the roster row in
+  place**. So: prefer the node-local release for any agent on a reachable node,
+  and prove termination independently. **The strongest proof is the PTY log going
+  flat** — it was growing 4.4KB/20s and went to exactly 0 bytes — because it is
+  downstream of every API that might lie. Also do not resolve "kill the pid" from
+  a stale request: a pid frees immediately and the OS recycles it, so a blind
+  `kill` on an already-dead worker can take out an unrelated process.
+- **A busy agent producing nothing is stuck; a silent agent producing artifacts
+  is working.** Three workers looked ambiguous on `lastSeen` the same hour.
+  `marketing-lead` was quiet for 65 minutes and answered "idle, not death" when
+  probed; a respawned worker was quiet and was mid-task, reading its inputs. The
+  third had a log growing 4.4KB/20s and **148 `MCP startup failed` lines**, and a
+  grep of its entire 638KB transcript for every keyword of its own task — `ntp`,
+  `median`, `p95`, `trial`, `latency`, `mount`, `harness` — returned **zero
+  hits**. It never began. Liveness signals separated none of these; the
+  discriminator is *artifacts*, checked in the worktree, plus a keyword grep of
+  the transcript for the task's own vocabulary. Cheap, and it distinguishes
+  heads-down from stuck where every timestamp fails.
+- **A diff-based review gate is blind to new files, so it passes hardest on the
+  code that needs it most.** `veto_diff_review` reads `git diff HEAD`, which
+  excludes untracked files. Run against T3's fleet-picker candidate it reviewed a
+  README, a TOML and a `package.json` description — 67 lines of prose — while the
+  entire feature, 670 lines across four new untracked files, was invisible to it.
+  A clean verdict there would have been reported in good faith and meant nothing.
+  The failure is self-selecting: a *new* capability is exactly the change that
+  arrives as untracked files, so the gate is weakest precisely where the risk is
+  highest. **`git add -N` before any diff-based review**, and when a report says a
+  gate passed, ask what the gate actually read. Same family as
+  [[a-gate-nobody-invokes-is-not-a-gate]] — there the gate was never called; here
+  it was called and saw nothing. A gate that launders an unreviewed change as
+  reviewed is worse than no gate at all.
+- **A missing row is not a dead thing — an enumeration can be non-deterministic.**
+  `agent-relay fleet nodes` returns a *subset* of live nodes that varies between
+  calls seconds apart. Eight samples at 12s intervals, written to disk and
+  byte-counted to rule out truncation, came back as complete well-formed JSON at
+  three exact sizes: 4 nodes, 3-without-`sf-mini`, 3-without-`finn-mini`. Every
+  node that appeared read `online`/`live`/`handlersLive`; none ever appeared as
+  offline; and both "missing" nodes were heartbeating throughout on a ~60s
+  cadence. Chief and a dispatched lead each concluded a node had died, each
+  briefed the other on it, and *both corrections were also wrong* — inside eleven
+  minutes. The existing rule (every liveness flag over-reports, only `lastSeen`
+  measures) covers rows that are *present*; this is its blind spot. **Absence is
+  not evidence.** Test the specific thing — read the named node's own
+  `lastHeartbeatAt` across ≥2 beats — rather than inferring state from whether it
+  showed up in a list. Same family as the stale-state-file reads: the artifact in
+  hand was treated as a complete picture of the world.
+- **A fail-closed gate takes hostages, so ask what it costs when it fires on
+  you.** The brain spent days wanting the 11.4.2 admission gate shipped, because
+  without it a stranger could claim `chief-khaliq` and be handed Chief's mailbox.
+  The gate landed, works, and was verified by probe — and the first thing it did
+  was permanently burn the node's own name `chief`, because the broker does not
+  deregister on SIGTERM and the reclaim key is never persisted. The security
+  property and the outage are the *same mechanism* seen from two sides. Chief
+  had reasoned about the gate purely as protection and never asked what happens
+  when the legitimate owner cannot prove ownership either. **When arguing for a
+  fail-closed control, work out the recovery path for the honest caller before
+  it ships, not after it strands you.**
+- **A restart can pass every assertion and still not answer the question.** Rows
+  1 and 4 of the verification passed — gated broker, identity preserved — and
+  the script's own text invited recording criterion 3 as closed. But the same
+  state directory that proved ownership of the broker's children failed to prove
+  ownership of the broker itself, and that asymmetry is unexplained. A pass
+  whose mechanism contradicts a failure sitting beside it is one observation of
+  an unknown system, not two. This is the third consecutive restart on this
+  machine where the headline result was true and the conclusion drawn from it
+  would have been wrong; the habit that keeps working is to reconcile every
+  surprise in the run before writing the verdict, including the surprises the
+  script did not think to check for — the node's name changed under a script
+  that asserted it would not.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking
