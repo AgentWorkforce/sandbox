@@ -21,11 +21,22 @@ Production proactive agents already run on this pattern — `hn-monitor`,
 instance of a proven shape, not new infrastructure.
 
 **Why it is worth building now.** Open-PR pressure is the largest untended
-number in the org: **3,121 open PRs across 350 repos**, cloud alone carrying
-1,127. Nothing watches them. The Cloud focus-area appointment was created to
-address exactly this and did not survive one night. A standing agent is the
-cheaper answer than an org chart, because it does not need to be re-appointed
-every morning.
+number in the org: **303 open PRs org-wide, 77 in cloud** (live GitHub API,
+2026-08-07). Nothing watches them.
+
+*Corrected the same day, and the error is instructive.* Chief first sized this
+at "3,121 open PRs, cloud alone 1,127" by counting **files in the Relayfile
+projection's `pulls/` directory** — 1,127 records of which **868 are closed** —
+and multiplying that across 350 repo directories. Wrong denominator on a stale
+source. `pr-shepherd-lead` refused to design against a number it could not
+reproduce and escalated instead. Worse: Chief's own brain already recorded
+"open-PR pressure in cloud is 77" two hours earlier, and the contradiction went
+unnoticed. **The design is unchanged — the taxonomy and ladder are the same at
+300 or 3,000 — only the sizing moves.**
+
+The Cloud focus-area appointment was created to address this pressure and did
+not survive one night. A standing agent is the cheaper answer than an org chart,
+because it does not need to be re-appointed every morning.
 
 ## What V1 must do
 
