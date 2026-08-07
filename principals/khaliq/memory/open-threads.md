@@ -12,10 +12,17 @@
     from the record, not null. 17 projects and 10 milestones are projected with
     nothing linking to them, and initiatives/cycles are not projected at all. So
     no consumer can roll Linear work up by project today. → **relayfile#403**.
-  - **A healthy node can swallow a spawn silently** — `finn-mini` returned
-    `pending` and never dispatched while heartbeating normally and advertising
-    `spawn:codex`; `barry` returned `dispatched` and the agent was up in 20s.
-    There is no CLI surface to inspect an invocation afterwards. → **relay#1448**.
+  - **`fleet nodes` returns a non-deterministic subset, and a healthy node can
+    swallow a spawn silently.** `finn-mini` returned `pending` and never
+    dispatched while heartbeating and advertising `spawn:codex`; `barry` returned
+    `dispatched` and the agent was up in 20s. Chased further, the enumeration
+    itself proved unreliable — a node omitted from one response is present in the
+    next, with no offline state ever reported. **Corrected: nothing "died" today.
+    finn-mini and sf-mini were both omissions, not state changes**, and the two
+    "node is down" conclusions Chief drew, plus the corrections to them, were all
+    wrong. There is also no CLI surface to inspect an invocation afterwards.
+    → **relay#1448**, with the enumeration measurement as the root-cause
+    candidate for the silent `pending`.
   Khaliq's call 2026-08-07: **file, do not build.** `org.json` stays the system of
   record and the local orgchart tool renders it until he sequences the Cloud work.
   Chief's own view of all this is `scratchpad/org-board.html`, unpublished.

@@ -220,6 +220,21 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **A missing row is not a dead thing — an enumeration can be non-deterministic.**
+  `agent-relay fleet nodes` returns a *subset* of live nodes that varies between
+  calls seconds apart. Eight samples at 12s intervals, written to disk and
+  byte-counted to rule out truncation, came back as complete well-formed JSON at
+  three exact sizes: 4 nodes, 3-without-`sf-mini`, 3-without-`finn-mini`. Every
+  node that appeared read `online`/`live`/`handlersLive`; none ever appeared as
+  offline; and both "missing" nodes were heartbeating throughout on a ~60s
+  cadence. Chief and a dispatched lead each concluded a node had died, each
+  briefed the other on it, and *both corrections were also wrong* — inside eleven
+  minutes. The existing rule (every liveness flag over-reports, only `lastSeen`
+  measures) covers rows that are *present*; this is its blind spot. **Absence is
+  not evidence.** Test the specific thing — read the named node's own
+  `lastHeartbeatAt` across ≥2 beats — rather than inferring state from whether it
+  showed up in a list. Same family as the stale-state-file reads: the artifact in
+  hand was treated as a complete picture of the world.
 - **A fail-closed gate takes hostages, so ask what it costs when it fires on
   you.** The brain spent days wanting the 11.4.2 admission gate shipped, because
   without it a stranger could claim `chief-khaliq` and be handed Chief's mailbox.
