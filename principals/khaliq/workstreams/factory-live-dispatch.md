@@ -9,15 +9,6 @@ repos: [cloud, relay, relayfile]
 **Goal:** A ready human-owned Linear issue safely dispatches a Cloud Factory
 recipe that creates agent-owned GitHub work and reports checkpoints to Linear.
 
-**Now:** The hosted Factory brain is active, online, and dispatching. Cloud PR
-#2871 deployed the current-only Fleet roster, strict `[factory]` plus readiness
-gate, real deployed-user ownership, stale-run quarantine, and hosted heartbeat.
-Cloud PR #2873 deployed workspace-scoped Relaycast spawning with deterministic
-Factory/provider invocation reconciliation. AR-448 launched three agents and
-completed successfully with merge disabled. Relay AR-445/446/447 and the
-Cloud/Relay schedule-lifecycle task are prepared, but their Linear promotion is
-blocked by the gated RelayAuth D1 capacity incident.
-
 **Now, measured 2026-08-07 — the contract is healthy and the pipe is dry.**
 `npm run factory:status` is green: contract resolved, `issueSource: github`,
 readiness label `factory-ready`, hosted brain `cloud-factory-brain` active,
@@ -67,6 +58,14 @@ measured yes/no and unblocks the Sage program's activation gate 2.
   RelayAuth D1 blocker, which was resolved days earlier and had gone unnoticed
   here — the same stale-blocker failure recorded in `memory/learnings.md`.
 
+- 2026-07-30 — The state this workstream reported as its Now until the 08-07
+  audit: hosted brain active and dispatching; PR #2871 deployed the current-only
+  Fleet roster, the strict `[factory]` plus readiness gate, real deployed-user
+  ownership, stale-run quarantine and hosted heartbeat; PR #2873 deployed
+  workspace-scoped Relaycast spawning with deterministic invocation
+  reconciliation; AR-448 launched three agents and completed with merge
+  disabled. AR-445/446/447 and the schedule-lifecycle task were prepared and
+  held behind the RelayAuth D1 incident, which has since resolved.
 - 2026-07-30 — Cloud PR #2873 corrected the live dispatch transport from raw
   action invocation (which rejects workspace keys) to the supported
   workspace-scoped agent spawn API. It preserves Factory's deterministic ID
