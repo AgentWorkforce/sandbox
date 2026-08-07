@@ -220,6 +220,30 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **A status field is only a signal if something revokes it — find the revoker
+  before trusting the value.** `relay-name-reclaim-lead`'s formulation, and it is
+  sharper than the rule already in this file. Chief's version was "test a
+  candidate signal against the living population", which is the symptom; this is
+  the cause. Relaycast's `agents.status` is written `active` on registration and
+  `offline` only by explicit disconnect/teardown paths. **`sweepStaleAgents` has
+  no caller** — one reference in the tree, its own definition; relaycast#306 to
+  restore it is still open. Proven against production rather than source: **305
+  of 329 `active` records have `lastSeen` older than five minutes, and the oldest
+  has been `active` for 23.9 days.** A five-minute sweep would make that 24.
+  So `active` does not mean alive; it means *came up once and nothing said
+  otherwise*, and any code branching on `offline` is branching on sediment.
+- **A fix can open a hole, and neither issue can see it alone.** relaycast#306
+  restores the presence sweep. Doing so flips stale records to `offline` — and
+  the resident-roster registration path guards its token overwrite with
+  `ne(status,'active') OR locationNodeId == this node`. Every record #306 flips
+  makes that first disjunct true, so **a presence fix would silently loosen an
+  identity boundary**, converting a node-bound reclaim into name-alone takeover.
+  Invisible from inside #306 (a presence bug) and invisible from inside the
+  identity issues (which do not touch presence). The lesson generalises: when two
+  open changes touch the same field for different reasons, check whether one is
+  the other's precondition — and **put the warning on the issue where the merge
+  decision happens**, not in the issue where it was discovered. A caveat filed
+  next to the analysis arrives after the merge.
 - **The code you are reading is not necessarily the code that is running, and
   that failed three separate ways in one day.** (1) A broker upgraded to 11.4.2
   while a shadowed 10.6.7 copy was the one executing. (2) A `status` column
