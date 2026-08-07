@@ -220,6 +220,37 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **A delegate that fails silently in the affirmative is more dangerous than one
+  that fails.** `x-reply-radar` was asked twice to audit our own X account, with
+  "I cannot query own-account history" explicitly offered as an acceptable
+  answer. Both times it returned a **generic topical feed keyed on the caller's
+  message text** — three plausible-looking results, shaped like an answer, about
+  nothing that was asked. A less careful caller books that as coverage and
+  reports a public surface "clean" when it is unknown. `marketing-lead` caught it
+  and reported the gap instead, which is why the X blast radius is recorded as
+  **UNKNOWN, not clean**. The rule: **when a delegate returns something shaped
+  like an answer, check that it answers the question you asked.** An off-target
+  response is a capability gap to report, never coverage to launder. Silence is
+  self-announcing; a plausible wrong answer is not.
+- **A correction phrased as "delete on sight" cannot tell an assertion from a
+  quotation.** Chief told `marketing-lead` to kill a retired claim wherever it
+  appeared. Every surviving occurrence was the claim being **quoted inside the
+  evidence document that falsifies it** — "The claim under test was: > …",
+  followed by "both halves are wrong". Executing the instruction would have left
+  an evidence file refuting a claim it no longer stated, destroying the audit
+  trail. The lane declined and asked first. **Phrase retractions as "this must
+  never appear again as a live claim"**, which preserves quotation in evidence,
+  changelogs and post-mortems — where keeping the wrong thing next to why it was
+  wrong is the entire point.
+- **"Optimistic" and "invented" are different failures and call for different
+  responses.** The public "sub-200ms end-to-end" figure turned out to have no
+  measurement behind it at all: someone took a 315.5ms *round-trip* median and
+  halved it. Chasing provenance rather than just correcting the number is what
+  reframed this from "our benchmark was wrong" to "a number was fabricated by
+  halving" — and only the second prompts the question *what else was invented?*,
+  which is exactly how a **"0ms Latency Overhead"** line was found sitting in the
+  investor deck since January. When a number is wrong, find out where it came
+  from before deciding how far the problem spreads.
 - **A status field is only a signal if something revokes it — find the revoker
   before trusting the value.** `relay-name-reclaim-lead`'s formulation, and it is
   sharper than the rule already in this file. Chief's version was "test a
