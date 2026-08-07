@@ -70,6 +70,55 @@ have a real gap beneath them today. V1 should be built to degrade honestly —
 group by repo and by CODEOWNERS where team data is absent, and say so — rather
 than waiting for those to land.
 
+## A proactive agent's output is its permanent context
+
+Khaliq's direction, 2026-08-07, and it applies to **every** proactive agent, not
+just this one:
+
+The mechanism, in Khaliq's words and worth keeping exact because it is
+buildable as stated:
+
+1. What the agent posts is **digested and kept**, not fired into Slack and lost.
+   Those digests are stored in **Relayfile**, so they survive restarts and travel
+   with the agent to any host.
+2. The agent **ships with `ai-hist`** (`../relayhistory`), and **its session
+   JSONL gets synced** into that store.
+3. **The agent knows it can use the `ai-hist` CLI to search its own history.**
+   That is the part that makes it work — the memory is not passive context
+   stuffed into a prompt, it is a *tool the agent reaches for*.
+4. So a user can ask about **any past post** — stored as a digest — **and the
+   agent can recall the conversation around it.**
+
+`ai-hist` is a Rust CLI with full-text search over Claude Code, Codex, Cursor,
+**Grok**, Agent Relay, and *compacted persona trajectory* history in local
+SQLite. Its stated purpose is exactly the right one: transcript search recovers
+*what* was said, `ai-hist` captures *why*. Grok and Agent Relay are both already
+supported, which covers `x-reply-radar` (`harness: grok`) directly.
+
+**The test of whether this is built:** ask the agent about something it posted
+weeks ago and get a real answer with the surrounding reasoning — not "I don't
+retain that."
+
+**Most of the substrate already exists**, which makes this an assembly job rather
+than an invention:
+
+- `/digests` is already a mounted Relayfile senses path and already in Chief's
+  scope list.
+- `ai-hist` already supports Grok and Agent Relay and already models compacted
+  persona trajectories — exactly the two shapes a proactive agent produces.
+- The multi-host mount skill needed to put that context on any node landed today
+  (skills#94).
+
+**And one piece of it is broken right now**, which is the first thing to fix:
+the `/digests` mount is **wedged** — `digests/today.md` is dated 2026-08-05 while
+the daemon reports `lag=0`, `pending=0` and writes state continuously. A memory
+substrate that silently stops accepting writes is worse than none, because the
+agent will believe it remembered. Prove writes land before building on it.
+
+This is the answer to "what does a proactive agent know?" — it should know what
+it has said and why, and be able to be asked. Pairs with the preference that
+every agent be both proactive and addressable.
+
 ## V2 — through production
 
 Owns the change after merge: watch PostHog for alerts attributable to the
