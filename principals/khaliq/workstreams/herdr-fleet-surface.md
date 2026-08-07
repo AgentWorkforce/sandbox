@@ -22,10 +22,45 @@ pane opened on the Chief project and running `agent-relay node agent attach`
 streams the live Claude TUI, and `pane.report_agent` gives that pane a correct
 Herdr agent status. Screen detection alone does not work there — see T3.
 
-**Next:** Ship the repo so the marketplace can index it, replace the
-measurement-floor-bound latency claim with a hard number, then build the fleet
-picker that turns broker agents into Herdr panes. Node enrollment and cloud
-sandbox panes follow once the picker proves the pane model.
+**Delivered 2026-08-07 by `herdr-lead` (codex, on fleet node `barry`). Five
+tasks, five artifacts, nothing merged.**
+
+| Task | State |
+|---|---|
+| T2 latency | **relayfile PR #405** + issue **#406** (batch/parallel receive) |
+| T3 fleet picker | **herdr-relay-bridge PR #1** |
+| T4 Herdr as placement target | **herdr-relay-bridge PR #2**, stacked on #1 |
+| T6 retire fork copy | committed `7b657a6` |
+| T7 multi-host mount skill | **skills PR #94** |
+
+T1's marketplace topic remains deliberately unapplied — Khaliq's call.
+T5 (cloud sandbox panes) is undispatched. `herdr-lead` has stood down.
+
+**T2 falsified the claim it was sent to measure.** "Sub-200ms end-to-end" is
+false for realistic change sets: **repo-shaped (11 files, ~14KB) median 216.7ms**
+against **small-file 20.2ms**, and that is a LAN best case with the server on the
+sender. It also retired the hedge that protected the claim — a 25-pair instrument
+control at median 1.225ms proved the harness was never slower than the signal —
+and established the root cause: receive-side materialization is **sequential per
+file**, so cost scales with file count, ~19ms marginal per file at 4.5ms RTT. The
+hosted topology remains **unmeasured**, and the PR makes no product claim in
+either direction. Provenance found separately: the original sub-200ms figure was
+a 315.5ms round-trip median **halved**, never a measurement.
+
+**T4 proved the pane model without touching node identity.** A placement
+targeting `chief-broker` + `spawn:claude` returned `surface=herdr-pane`,
+confirmed in both `node agent list` and `herdr agent list`. Its worker found that
+the only routes to a separate Herdr node were renaming the live `chief-broker`
+or an unauthorized `cloud enroll`, and **escalated rather than renaming a
+production node to make its brief work** — the destructive path was available and
+would have "succeeded". Chief ruled capability-carried Herdr-ness instead. One of
+its tests is named `serving never renames live node`.
+
+**Next:** Khaliq's merge gate on five artifacts, and his call on the marketplace
+topic. Then T5. Two known residues disclosed in PR #2: an inert `herdr` tag on
+the live node record, cleared by the next honest re-registration, and a plugin
+link pointing at a temporary worktree whose durable destination is the main
+checkout once #1 merges.
 
 ## Repository decision
 
