@@ -26,13 +26,23 @@
 
 - Verify `agent-relay node up` resolves the configured Cloud workspace after a
   full stop/start and preserves Chief's durable address.
-- **RelayAuth cannot mint a session at all, and it is now the single blocker.**
-  Native delegated mint was already broken; as of 2026-08-04 the Cloud mount
-  session Chief fell back to also returns `500 mount_session_failed`. Senses
-  have not refreshed since 2026-07-31T08:13Z, so Chief has no live Linear or
-  GitHub read and no writeback. Everything downstream — the AR-448 checkpoint,
-  Factory control, the Sage program's item 1 — waits on the gated #2857 D1
-  capacity recovery, which needs Khaliq's explicit grant.
+- **RESOLVED 2026-08-07: RelayAuth mints again and the #2857 gate no longer
+  exists.** For five days this was recorded as the single blocker behind the
+  AR-448 checkpoint, Factory control, and the Sage program's item 1, all waiting
+  on a "gated #2857 D1 capacity recovery needing Khaliq's explicit grant."
+  Neither half survived contact: cloud#2857 was closed `NOT_PLANNED` on
+  2026-08-04, so the grant Chief was holding for could never have been given;
+  and the doctor is fully green this morning — mount running, credential
+  refreshed 2026-08-07T07:51:49Z, all three integrations `ready`, hosted Factory
+  brain active with a fresh heartbeat. The senses projection last refreshed
+  2026-08-05T23:57Z, so reads are live rather than the 07-31 snapshot.
+  **Lesson, and it is the expensive one:** Chief carried a blocker for five days
+  without re-testing it, and carried an authorization gate for an issue that had
+  been closed for three. A blocker is a claim about the present; re-verify it on
+  every session start, or it becomes a reason not to work.
+  Now unblocked and unowned: the AR-448 Linear checkpoint (needs the rewrite
+  already decided on 08-04 — the lineage decision, not the stale "PR opened"
+  body), and Factory writeback generally.
 - GitHub integration health resolved on its own: both installations read
   `ready` with events through 2026-08-03, and the doctor no longer reports
   `syncHealthy:false`. Nothing was done to fix it, so if it recurs, treat the
@@ -103,6 +113,15 @@
   **Remaining fix is cloud-side** — claim before spawning, not after, and abort
   the dispatch when the claim write fails. Chief's half (a promote-time guard
   that refuses to re-offer an issue with an open PR) is done.
+  **Status 2026-08-07 — the lineage question changed shape.** AR-448's substance
+  is already in `main` via PR #1429 (`4acdd97d4` precedence ladder, `5c2ad8ee3`
+  restart registration reclaim; both confirmed ancestors of `origin/main`).
+  Neither AR-448-branded commit is in main. So both PRs are now stale patches
+  against a file #1429 rewrote, and the decision is not "merge which one" but
+  "does either add anything main lacks" — mostly #1402's restart/convergence
+  test evidence. Recommend harvesting those tests onto current main as a fresh
+  PR and closing both. Unmet either way: the stop/start regression proof, which
+  needs Khaliq at the keyboard because stopping the broker kills the resident.
   **Status 2026-08-04:** the re-dispatch window is closed — AR-448 reads
   `In Human Review` in the senses projection, though that projection stopped
   refreshing 2026-07-31T08:13Z, so it is the last known state and not a live

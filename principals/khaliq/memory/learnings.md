@@ -60,6 +60,88 @@
   mount, the credential), never the supervisor around it. Same shape as the
   `broker` OK lesson above; a health check must assert the capability, not the
   process.
+- **`lastSeen` is not purely a measurement — infrastructure batch-writes it.**
+  Chief reported 25 agents "dying in the same second" at 2026-08-06T13:00:19Z.
+  Two independent lanes falsified it: Relaycast's `inventory.sync` handler calls
+  `reconcileInventory`, which stamps `status:'active'` and a fresh `lastSeen` on
+  every existing inventory item, so ONE frame gives N agents one timestamp.
+  Confirmed by a second instance the same day — a fleet WS disconnect at
+  17:55:15Z stamped **106** agents with an identical `lastSeenAt`. A shared
+  timestamp across many agents is therefore evidence of a stamp event, not a
+  death event, and those agents were already dead well before it. The rule that
+  every other flag over-reports still holds, but `lastSeen` is a weaker signal
+  than the brain claimed: **the only trustworthy probe is to send a message to a
+  specific agent and watch its own `lastSeen` move.** Population-level timestamp
+  analysis measures the transport, not the agents.
+- **`lastSeen` advancing proves life; `lastSeen` static proves nothing.** Chief
+  correctly learned that every other flag over-reports, then over-applied it and
+  treated a few minutes of no movement as death — replacing four lanes on that
+  basis. Two of the "dead" lanes had already delivered complete work, and a
+  third woke after twenty minutes of silence. A lane that is heads-down is not
+  consuming messages and is indistinguishable from a corpse by this signal.
+  Replace only a lane that has **never once** advanced *and* has produced
+  nothing, and prefer asking to assuming — a duplicate lane in a shared worktree
+  costs more than an idle one.
+- **A liveness filter and a scope widening are one change, not two.** The org
+  chart read the node-local agent list, so it showed 27 rows of which 25 were
+  dead and hid every always-on production agent. Filtering alone left 2 rows;
+  widening alone would have returned 813. Shipping either half would have looked
+  like a regression and been reverted. When a feed is both too narrow and too
+  permissive, the fix is a single change or it is nothing.
+- **Categorising on a field is not filtering on it.** Chief once proposed hiding
+  agents with no `nodeId` and correctly retracted it — 37 live agents, including
+  production automation, carry none. But the same field cleanly separates
+  standing cloud agents from fleet-placed ones, and using it that way is sound:
+  liveness still comes from `lastSeen` alone, and `nodeId` only chooses which
+  style a row that already passed the liveness gate receives. A field that is
+  wrong as a gate can be right as a label.
+- **Curl proves nothing about a client-rendered page.** Byte count, grep hits and
+  a 200 all passed while the demo chart rendered a single row: the app hydrates
+  client-side and the tree collapses on first paint. The served HTML is the
+  shell, not the artifact. Render it in a browser, expand it, and assert both
+  that the right thing appears and that the wrong thing does not — and expect
+  any content health check written against the shell to be counting the shell.
+- **A handoff is a snapshot and decays immediately.** An incoming Chief was told
+  the demo runbook was the largest open risk, asked for six times and never
+  delivered; it had landed seven minutes before the handoff was read. Verify the
+  top item of any handoff against the world before acting on it, or you will
+  dispatch a lane to do finished work.
+- **Correct your own brief the moment the ground moves.** Chief told a lane that
+  "no second level" would be an acceptable answer, then found 44 of 56 agents
+  reporting to another agent; and told the same lane to discriminate on `source`,
+  which stopped being true once the feed widened. Both were caught and corrected
+  before the lane built on them. A brief is a claim about the world, so it
+  inherits the world's falsifiability — reissue it rather than letting a lane
+  discover the error downstream.
+- **A state file carries no timestamp in the reader's head — check the one it
+  carries on disk.** Chief read `~/.agentworkforce/relay/fleet-node.json`,
+  saw `handlers: [… workflow:run]`, and reported to Khaliq that the node claimed
+  a capability the fleet denied it — suggesting the Sage gate was nearly met.
+  The file was written 2026-06-19, seven weeks earlier: `connected: false`, a
+  dead pid, a broker URL on an abandoned port. The live control plane says zero
+  of 397 nodes advertise `workflow:run`. Third instance of one failure this week
+  (the four-day senses projection, the stale RelayAuth blocker, this): **Chief
+  keeps reading persisted artifacts as current state.** The habit to build is
+  mechanical — before quoting any local state file, read its `updatedAt` and
+  check its pid or connection is live, or prefer the live query outright.
+- **A recorded blocker is a claim about the present tense, so re-test it before
+  you honour it.** Chief carried "RelayAuth cannot mint, waiting on the gated
+  #2857 D1 recovery, needs Khaliq's explicit grant" for five days. On 2026-08-07
+  one doctor run showed every plane green, and cloud#2857 had been closed
+  `NOT_PLANNED` three days earlier — so the authorization Chief was holding for
+  had become unaskable, and the capability it was gating had already returned.
+  The failure mode is specific and comfortable: a blocker justifies not working,
+  so nothing in the day's flow re-examines it, and it decays into an excuse with
+  a citation. Same shape as the handoff-snapshot lesson, applied to Chief's own
+  memory rather than someone else's. Verify the top blocker at session start,
+  and prefer the cheap live probe over the recorded state.
+- **A contract that exists only in a message dies with the mailbox.** Three of
+  six Cloud area leads delivered on 2026-08-06; two wrote PRs and one sent its
+  custody/token-authority contract as a Relay DM only. The DM is the most
+  detailed of the three and the least durable — unreadable to any future
+  session, ungreppable, and gone when the inbox rolls. Require an artifact for
+  any deliverable meant to bind future work; a rollup message reports that the
+  contract exists, it is not the contract.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking
