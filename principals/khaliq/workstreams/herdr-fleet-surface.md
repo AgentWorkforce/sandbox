@@ -258,6 +258,34 @@ the fork, discarding the uncommitted changes rather than committing them.
 repository's contributor guardrail, the acting account is not the maintainer, so
 agents must not open issues or PRs there.
 
+### T8 — Cross-node attach (filed, unowned, sequenced after T4)
+
+- **repo:** relay (possibly cloud — see the issue)
+- **issue:** relay#1449
+- **depends on:** T4
+
+**Do not assume T4 delivers this. It does not.** T4 makes the Herdr host a
+*placement target* — work dispatched to it materialises as a pane. Khaliq asked
+the reverse question on 2026-08-07: can I attach, from my laptop, to
+`herdr-lead` already running on `barry`? The answer today is no, and nothing in
+this workstream or in relay is building it.
+
+Verified rather than assumed: `attach` lives in
+`packages/cli/src/cli/commands/local-agent.ts`, resolves through
+`resolveBrokerConnection` → a project-scoped local `connection.json`, and its
+`--broker-url`/`--api-key`/`--state-dir` overrides all mean "a different *local*
+connection file". Only `fleet spawn` takes `--node`. No relay branch or commit
+has touched attach in the last week.
+
+The consequence is a supervision hole: every off-machine appointment can be
+dispatched but not watched, and the org chart correctly greys out Drive for
+every remote row (`tools/orgchart/serve.mjs` separates presence from local
+attachability on purpose).
+
+The transport already exists — `cloud/ARCHITECTURE.md:136` streams a sandbox's
+terminal with the client connecting directly, which is what T5 builds on. This
+is that mechanism aimed at a fleet node.
+
 ### T7 — Document relayfile-on-a-fleet-node (the missing skill) — DEFERRED to T5
 
 - **repo:** skills
