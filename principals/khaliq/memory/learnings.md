@@ -220,6 +220,30 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **"Released", "stopped" and "gone" are three different states, and no single
+  call delivers all three.** Managing a worker on 2026-08-07: `fleet release`
+  returned `status=pending, dispatchedNodeId=null` against a `node_direct_*`
+  handler and never completed — the agent kept running and looping. `agent-relay
+  node agent release`, the *local broker's* graceful stop run on the machine that
+  owns the PTY, stopped it in under 10 seconds. On a third agent, `fleet release`
+  reported success and set offline metadata while **leaving the roster row in
+  place**. So: prefer the node-local release for any agent on a reachable node,
+  and prove termination independently. **The strongest proof is the PTY log going
+  flat** — it was growing 4.4KB/20s and went to exactly 0 bytes — because it is
+  downstream of every API that might lie. Also do not resolve "kill the pid" from
+  a stale request: a pid frees immediately and the OS recycles it, so a blind
+  `kill` on an already-dead worker can take out an unrelated process.
+- **A busy agent producing nothing is stuck; a silent agent producing artifacts
+  is working.** Three workers looked ambiguous on `lastSeen` the same hour.
+  `marketing-lead` was quiet for 65 minutes and answered "idle, not death" when
+  probed; a respawned worker was quiet and was mid-task, reading its inputs. The
+  third had a log growing 4.4KB/20s and **148 `MCP startup failed` lines**, and a
+  grep of its entire 638KB transcript for every keyword of its own task — `ntp`,
+  `median`, `p95`, `trial`, `latency`, `mount`, `harness` — returned **zero
+  hits**. It never began. Liveness signals separated none of these; the
+  discriminator is *artifacts*, checked in the worktree, plus a keyword grep of
+  the transcript for the task's own vocabulary. Cheap, and it distinguishes
+  heads-down from stuck where every timestamp fails.
 - **A diff-based review gate is blind to new files, so it passes hardest on the
   code that needs it most.** `veto_diff_review` reads `git diff HEAD`, which
   excludes untracked files. Run against T3's fleet-picker candidate it reviewed a
