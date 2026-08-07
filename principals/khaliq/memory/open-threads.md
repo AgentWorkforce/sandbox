@@ -1,5 +1,59 @@
 # Open threads
 
+- **NEW 2026-08-07, and it is the one that threatens continuity: the resident's
+  canonical name can be permanently burned by an unclean shutdown.** On broker
+  11.4.2 the fail-closed admission gate refuses to re-register a name it cannot
+  prove ownership of. The broker flushes state on SIGTERM but does **not**
+  deregister its own name, and the reclaim key is minted at first registration
+  and never persisted locally — so a stranded name is unrecoverable, and
+  `agent-relay agent remove` refuses server-side once the agent has history.
+  This already happened: the node's name `chief` is burned (record frozen at
+  `lastSeen` 09:05:32Z) and the node now runs as **`chief-broker`**.
+  **Why it matters beyond cosmetics:** CLAUDE.md §7 makes the canonical
+  `teams.json` name the definition of Chief's continuity — "if the canonical
+  name cannot be reacquired, keep the existing resident online and page the
+  principal." A burn makes reacquisition *impossible*, not merely hard. So far
+  spawned agents (`chief-khaliq`, `marketing-lead`) have been reclaimed
+  successfully where the broker's own name was not, and nobody knows why that
+  asymmetry exists — which means nobody can say `chief-khaliq` is safe.
+  **Mitigation in place, and it is partial.** A wrapper at
+  `~/.agentworkforce/relay/bin/chief-node-supervisor.sh` is now launchd's
+  `program`; it traps SIGTERM/SIGINT and runs `agent-relay node down` for a
+  clean release, which makes unload/reload repeatable. A SIGKILL, a panic, or a
+  power loss bypasses the trap entirely. **The durable fix is platform-side:
+  persist the reclaim key, or let a node deregister its own name on shutdown.**
+  Not authored by this Chief — it appeared while the resident was down; see the
+  second-writer thread below.
+
+- **RESOLVED 2026-08-07: the impersonation path is closed, verified by probe
+  rather than by release notes.** The thread below feared that a process
+  registering an existing name would be handed the incumbent's address, inbox,
+  and token. Directly tested on the running 11.4.2 broker with a throwaway name:
+  the second registration returns `Agent "…" already exists in this workspace`,
+  exits without a token, and leaves the incumbent untouched. The registration
+  path fails closed. (Probe agent removed afterwards.) The cost of that
+  hardening is the burned-name thread above — the same gate, seen from the other
+  side.
+
+- **RESOLVED 2026-08-07: the broker version drift is fixed and `relay-version`
+  is green.** `BROKER_BINARY_PATH` in the launchd job's `EnvironmentVariables`
+  is checked before the `node_modules` candidates, so the running broker is
+  finally 11.4.2 instead of the shadowed transitive 10.6.7. All thirteen doctor
+  checks now read OK — the first fully green doctor with no ERROR line. The
+  underlying shadowing is unchanged: a version floor on the transitive
+  `@agent-relay/fleet` is still the durable fix, and the pin is a per-machine
+  workaround that a fresh clone will not inherit.
+
+- **PARTIALLY ANSWERED 2026-08-07: a node rename preserves node id and history.**
+  `chief` → `chief-broker` kept `node_5b46ac5e9f427fcedc07f77f95f642eb`, its
+  2026-07-30 `createdAt`, and all 61 attributed agents. So the long-open question
+  "does `--broker-name` orphan the node?" is answered **no — for an unused
+  name**. It does *not* answer the `kjg-laptop` case, which is the hard one
+  precisely because that name already owns a different node id
+  (`node_210851746276208640`). Renaming onto a free name and merging onto an
+  occupied one are different operations, and only the first is now evidenced.
+  What a rename *does* cost is the old Relaycast name, permanently — see above.
+
 - **RESOLVED 2026-08-07: v11.4.2 ships the admission gate.** Khaliq triggered
   the publish; the release completed 08:51:15Z and both `b4b96dfb3` and
   `5c2ad8ee3` are confirmed ancestors of the `v11.4.2` tag. Upgrading this
@@ -175,11 +229,19 @@
   this repo referenced the old paths — skills and scripts are all
   `<brainRoot>`-relative — but if Will's resident runs from its own config, that
   config still points at the root and must be updated before it writes again.
-- **A second writer is active in this repo.** `scripts/factory-control.mjs`,
-  `.claude/settings.json`, and edits to `scripts/chief-doctor.mjs` all appeared
-  mid-session while the resident was online. Harmless so far — all tooling, no
-  brain writes — but §7 assumes one writer, so confirm who owns the maintenance
-  shell before trusting the working tree mid-task.
+- **A second writer is active in this repo, and it now changes production
+  behaviour.** Earlier instances were tooling only (`scripts/factory-control.mjs`,
+  `.claude/settings.json`, `scripts/chief-doctor.mjs`). On 2026-08-07, while the
+  resident was down for the restart, that writer authored
+  `~/.agentworkforce/relay/bin/chief-node-supervisor.sh`, made it launchd's
+  `program`, chose the node's new name `chief-broker`, and diagnosed the burned
+  name — all changes to how Chief boots, none of them recorded in the brain
+  until this entry. The work looks correct and the write-up in the script's own
+  header is better than most; the problem is that the durable record depended on
+  a later session reading a shell script in a bin directory. §7 assumes one
+  writer for exactly this reason. **Confirm with Khaliq who owns that shell**,
+  and require any boot-path change to land in the brain rather than only on
+  disk.
 - **Relay MCP server times out at Chief's spawn.** Root-caused 2026-07-30: the
   broker does pass a correct inline `--mcp-config` declaring an `agent-relay`
   stdio server, but it launches as `npx -y agent-relay mcp`, and the launch

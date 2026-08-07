@@ -220,6 +220,29 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **A fail-closed gate takes hostages, so ask what it costs when it fires on
+  you.** The brain spent days wanting the 11.4.2 admission gate shipped, because
+  without it a stranger could claim `chief-khaliq` and be handed Chief's mailbox.
+  The gate landed, works, and was verified by probe — and the first thing it did
+  was permanently burn the node's own name `chief`, because the broker does not
+  deregister on SIGTERM and the reclaim key is never persisted. The security
+  property and the outage are the *same mechanism* seen from two sides. Chief
+  had reasoned about the gate purely as protection and never asked what happens
+  when the legitimate owner cannot prove ownership either. **When arguing for a
+  fail-closed control, work out the recovery path for the honest caller before
+  it ships, not after it strands you.**
+- **A restart can pass every assertion and still not answer the question.** Rows
+  1 and 4 of the verification passed — gated broker, identity preserved — and
+  the script's own text invited recording criterion 3 as closed. But the same
+  state directory that proved ownership of the broker's children failed to prove
+  ownership of the broker itself, and that asymmetry is unexplained. A pass
+  whose mechanism contradicts a failure sitting beside it is one observation of
+  an unknown system, not two. This is the third consecutive restart on this
+  machine where the headline result was true and the conclusion drawn from it
+  would have been wrong; the habit that keeps working is to reconcile every
+  surprise in the run before writing the verdict, including the surprises the
+  script did not think to check for — the node's name changed under a script
+  that asserted it would not.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking

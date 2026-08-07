@@ -108,11 +108,51 @@ not reload the job. The rename question therefore remains untested, and the
 happy answer above about node identity was measured on the *unrenamed* node, so
 it says nothing about whether a rename preserves it.
 
-**Next:** the credential-redaction salvage, still authorized and unbuilt (the
-`rk_test` masking trap above still applies), and a re-run of criterion 3 after
-the broker version is resolved.
+**The broker pin worked, and criterion 3 passed on a gated broker — measured
+2026-08-07 09:46:59Z.** The `BROKER_BINARY_PATH` pin took: the running broker is
+**11.4.2**, so `5c2ad8ee3` was in play for the first time. Both identity rows
+held across the restart:
+
+- node id `node_5b46ac5e9f427fcedc07f77f95f642eb` — unchanged, `createdAt`
+  still 2026-07-30, so 61 agents of history survive.
+- `chief-khaliq` agent id `210283808172122112` — unchanged, `lastSeen` moving.
+  `marketing-lead` (`210364195033862144`) likewise.
+
+**Do not read that as criterion 3 closed, because the mechanism contradicts the
+outcome.** Three facts have to sit together:
+
+1. The broker's *own* Relaycast name `chief` was **refused** on re-registration
+   and is now permanently stranded — its record is frozen at `lastSeen`
+   2026-08-07T09:05:32Z. The gate's refusal is the documented one: the broker
+   flushes state on SIGTERM but never deregisters its name, and the reclaim key
+   is not persisted locally, so the name cannot be recovered. The node runs as
+   **`chief-broker`** only because a burned name forced a new one.
+2. The broker's *children* were granted their ids back at 09:47:07Z, from the
+   same state directory that could not prove ownership of the broker's own name.
+3. An independent probe (register a throwaway name, then re-register it with no
+   ownership proof) was **refused** — `Agent "…" already exists in this
+   workspace` — and handed back no token. So the CLI registration path fails
+   closed on 11.4.2.
+
+So the gate demonstrably fails closed on two paths and demonstrably granted a
+reclaim on a third, and **nothing here establishes which proof the spawn path
+satisfied.** Until that is known, criterion 3 is *passing in outcome on a gated
+broker* — strictly better than the 09:05Z run, which passed via the old
+permissive hand-back — and still unproven in mechanism. The question to answer
+is the asymmetry itself: why can a broker prove ownership for its children and
+not for itself?
+
+**Next:** resolve the asymmetry above (platform question, not Chief's to fix);
+the credential-redaction salvage, still authorized and unbuilt (the `rk_test`
+masking trap above still applies).
 
 ## History
+
+- 2026-08-07 — Second restart, on the `BROKER_BINARY_PATH` pin. Broker is
+  11.4.2 for the first time and `relay-version` cleared; the doctor is green on
+  all thirteen checks. Node id and both resident agent ids preserved. The cost
+  was the node's Relaycast name: `chief` is burned and unreclaimable, and the
+  node now answers to `chief-broker`.
 
 - 2026-08-07 — Ran the post-restart verification left pending by the session the
   restart killed. Node id and resident agent id both preserved; broker turned out
