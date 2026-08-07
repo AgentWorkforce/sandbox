@@ -220,6 +220,24 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **A test double encodes the author's beliefs, so a green suite confirms your
+  model of the system, not the system.** `relay-pty-drive-lead` built a PTY
+  reopen gate keyed on a worker's `pid`, with eight named assertions that each
+  failed against pre-fix code. Then it ran one live repro: the real worker
+  returned **`pid: null, workerPid: 30209`** — `pid` is the harness pid and stays
+  null until the ready handshake. **Its fakes had modelled `pid` as always
+  present**, so the gate would have refused every reopen against exactly the
+  workers drive attaches to, and the whole recovery would have been dead on
+  arrival. Fail-closed, so not dangerous — and invisible through three levels of
+  green. The same run also falsified a shared assumption: the broker does **not**
+  close the input socket when a worker dies; the socket only fails on the next
+  write, so an idle drive session over a dead worker looks healthy until the
+  human types. Neither fact was reachable from source. This sharpens the existing
+  fixture-tautology rule: it is not only that expected values can come from the
+  fixture that produced them, it is that **the fixture's *shape* is a claim about
+  production, and an unverified shape makes every test built on it self-
+  consistent and wrong.** One live run against the real thing is worth the twenty
+  minutes.
 - **A delegate that fails silently in the affirmative is more dangerous than one
   that fails.** `x-reply-radar` was asked twice to audit our own X account, with
   "I cannot query own-account history" explicitly offered as an acceptable
