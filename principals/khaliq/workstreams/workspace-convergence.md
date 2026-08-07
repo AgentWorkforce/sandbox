@@ -35,15 +35,90 @@ and a smaller test.
 **Still genuinely unmet:** acceptance criterion 3, a stop/start regression proof
 that the resident agent keeps its address and mailbox. Nothing in `main` proves
 it, and it cannot be self-tested — stopping the broker kills the resident Chief,
-so it needs Khaliq at the keyboard.
+so it needs Khaliq at the keyboard. **And it cannot pass on a released broker
+at all:** the fix that makes a restarting node reclaim its own name rather than
+collide with its stale registration (`5c2ad8ee3`) is in no release tag. A live
+re-verify on 11.4.0 is expected to fail for that reason and is not evidence
+against the harvested tests.
 
-**Next:** Khaliq decides between harvesting #1402's restart/convergence tests
-onto current `main` as a fresh PR (Chief's recommendation) and merging either PR
-as-is. Then a real broker stop/start on this machine closes criterion 3. The
-RelayAuth prerequisite is **gone** — minting works again as of 2026-08-07.
+**AR-448's central premise is falsified, and this is the workstream's real
+result.** AR-448 recorded that agent identity needed no separate fix because
+Relaycast returns the existing agent on re-registration in a workspace it
+already belongs to. Relay `main` replaced that with a fail-closed admission
+gate: a name collision is rejected unless the caller proves same-work-unit via
+a SHA-256 identity key, a node's own restart proving it from a hash of its
+persisted state directory. So **workspace convergence is necessary and not
+sufficient** — identity has a second half, the admission decision on the name,
+which landed a week after AR-448 as its own fix. A consequence worth keeping:
+two checkouts sharing one workspace is a supported state that AR-448 read as
+identity-preserving and the gate now reads as an impersonation attempt.
+
+**AR-448 is closed out. All three PRs are closed, none merged, and that is the
+correct outcome.** #1402 and #1403 were stale against a file #1429 rewrote.
+#1447 — Chief's harvest — was closed on Khaliq's decision because its premise
+was wrong: #1429 shipped the ladder *with* 224 lines of coverage
+(`broker-lifecycle.test.ts` +104, `node.test.ts` +66, `project-workspace-key.test.ts`
++54), so there was no untested behaviour to harvest evidence onto. What review
+then removed from the remainder: a tautological headline assertion, a
+convergence test that seeded two isolated stores with the same literal string,
+and a `--require-unified` flag that duplicated the doctor's check and
+double-exited on failure. Khaliq's read — "documentation I don't want and a
+misleading flag" — was right before the evidence was in.
+
+**The invariant itself is intact and holds live**, verified 2026-08-07:
+`relaycast`, `relayfile`, and `relayauth` all resolve to `rw_7ccfea89`. A lane's
+argument that the invariant might be invented rested on a test fixture, not on
+production, and is falsified — see [[learnings]]. This matters because the
+invariant is the repo's first platform priority.
+
+**Next:** one salvage, authorized 2026-08-07 and not yet built — coverage
+asserting that a key passed as `--workspace-key`, and the key the broker
+returns, stay out of the logs. Neither is covered by main's existing assertions
+(`broker-lifecycle.test.ts:643-644`, `:466`). Two tests, existing harness, no
+production change. **Trap to avoid:** the harness returns `rk_test`, and
+`maskSecret` emits only `rk_…` for a body of ≤8 characters, so
+`not.toContain('rk_test')` passes without proving masking works — the test needs
+a full-length `rk_live_…` key or it is inert.
+
+**Criterion 3 is satisfied in outcome and unproven in mechanism, measured
+2026-08-07 09:05:30Z.** The node restarted for real — it killed the session that
+triggered it, and this Chief came up on the other side. Both decisive rows held:
+
+- node id `node_5b46ac5e9f427fcedc07f77f95f642eb` — **unchanged**, so 61 agents
+  of history and `--node` targeting survive.
+- `chief-khaliq` agent id `210283808172122112` — **unchanged**. The resident kept
+  its address and mailbox across a genuine broker stop/start.
+
+**But it did not run on v11.4.2, so it proves the opposite of what was planned.**
+The running broker is **10.6.7** — see the version finding below. `5c2ad8ee3`
+was not in it. This workstream predicted a released broker would *fail* for want
+of the restart-reclaim fix, and it passed anyway, which means the identity was
+preserved by the **old permissive re-registration behaviour** — the same
+behaviour `b4b96dfb3`'s doc comment calls the AR-448 duplicate class, and the
+same one `open-threads` describes as an open impersonation path. So this run is
+weak evidence *for* that thread, not against it. Criterion 3 needs re-running
+once the broker actually carries the gate, and the expected pass then comes from
+the hashed same-work-unit proof rather than from an unconditional hand-back.
+
+**The rename to `kjg-laptop` did not take, and the node is still `chief`.** The
+plist carries `--broker-name kjg-laptop` (written 11:04:34 local), but launchd's
+loaded job was never unloaded, so its in-memory `arguments` are still
+`{agent-relay, node, up}` — verified with `launchctl print`. Editing a plist does
+not reload the job. The rename question therefore remains untested, and the
+happy answer above about node identity was measured on the *unrenamed* node, so
+it says nothing about whether a rename preserves it.
+
+**Next:** the credential-redaction salvage, still authorized and unbuilt (the
+`rk_test` masking trap above still applies), and a re-run of criterion 3 after
+the broker version is resolved.
 
 ## History
 
+- 2026-08-07 — Ran the post-restart verification left pending by the session the
+  restart killed. Node id and resident agent id both preserved; broker turned out
+  to be 10.6.7, not the 11.4.2 the upgrade installed; the `kjg-laptop` rename
+  never reached launchd. Two of the four things the restart was meant to prove
+  were not exercised at all.
 - 2026-08-07 — Established that AR-448's outcome largely shipped through PR
   #1429, not through either AR-448 PR, by testing each commit for ancestry in
   `origin/main` rather than reading PR titles. Chief had reported the lineage

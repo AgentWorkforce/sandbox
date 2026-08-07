@@ -1,5 +1,78 @@
 # Open threads
 
+- **RESOLVED 2026-08-07: v11.4.2 ships the admission gate.** Khaliq triggered
+  the publish; the release completed 08:51:15Z and both `b4b96dfb3` and
+  `5c2ad8ee3` are confirmed ancestors of the `v11.4.2` tag. Upgrading this
+  machine and restarting the node closes the impersonation path described below.
+  **Trap that nearly cost a wasted restart:**
+  `~/.agentworkforce/relay/update-cache.json` served `latestVersion: 11.4.1`
+  from a check at 07:55Z, an hour before the release. `agent-relay update` would
+  have installed 11.4.1 — without the gate. Delete that cache before trusting
+  `update --check` after any release.
+
+- **The broker-side name-collision gate is absent from every released CLI, and
+  Chief runs a released CLI.** `crates/broker/src/relaycast/auth.rs` — the whole
+  admission gate — does not exist in the v11.4.1 tree; it is `main`-only, via
+  `b4b96dfb3` and `5c2ad8ee3`, both dated after v11.4.1 was tagged
+  (2026-08-03). Chief's node runs 11.4.0. Without the gate the pre-existing
+  behaviour applies: re-registering a name that already exists in the workspace
+  hands over the incumbent's agent. **So a process on this workspace registering
+  as `chief-khaliq` would be given Chief's address, inbox, and token.**
+  *Not yet verified:* whether Relaycast rejects this server-side independently
+  of the broker. Until someone proves it does, treat the path as open — this is
+  a fail-closed question and absence of proof is not coverage.
+  Resolution is one action that unblocks three things: **cut a release
+  containing `b4b96dfb3` and `5c2ad8ee3`.** It closes this path, unblocks
+  AR-448's live stop/start proof, and hardens the `kjg-laptop` rename restart.
+  Khaliq's call; Chief recommended against running untagged `main` on the host
+  that carries the resident.
+
+- **SUPERSEDED 2026-08-07: the drift was never CLI-vs-CLI, it is CLI-vs-broker,
+  and upgrading the CLI cannot fix it.** The old entry here blamed two installed
+  CLIs (mise shim 11.2.0 vs `~/.local/bin` 11.4.0). Both paths now resolve to
+  **11.4.2** and `relay-version` is *still* the doctor's only ERROR, which
+  falsifies that diagnosis. The real cause: the node runs with
+  `WorkingDirectory=…/AgentWorkforce/chief`, so `agent-relay node up` resolves
+  the broker out of this repo's `node_modules` — the running broker is
+  `chief/node_modules/@agent-relay/broker-darwin-arm64/bin/agent-relay-broker` at
+  **10.6.7**, while the managed binary at `~/.agentworkforce/relay/bin` is
+  11.4.2. It arrives transitively and nothing in this repo asks for it:
+  `agentworkforce@4.1.37 → @agentworkforce/cli → @agentworkforce/local-surface →
+  @agent-relay/fleet@10.6.7 → @agent-relay/harness-driver → broker-darwin-arm64`.
+  **Consequence: every `agent-relay update` on this host upgrades a broker that
+  never runs.** The 11.4.2 upgrade did exactly that, which is why the admission
+  gate was absent from the restart it was cut for. The doctor already prints
+  `brokerBinary` naming the node_modules path; it was read as drift rather than
+  as the answer. Fix is a version floor on the transitive `@agent-relay/fleet`,
+  or launching the node from a directory that does not shadow the managed
+  binary. Khaliq's call which.
+
+- **The `kjg-laptop` rename was written to the plist and never took effect.**
+  Verified 2026-08-07 after the restart: the plist on disk carries
+  `--broker-name kjg-laptop`, but `launchctl print
+  gui/501/com.agentworkforce.chief.node` shows the loaded job's `arguments` are
+  still `{agent-relay, node, up}`, and `fleet status` still reports name `chief`.
+  The job was never unloaded and reloaded, so launchd kept the definition it had
+  at load time. **Editing a plist is not applying it** —
+  `launchctl bootout` + `bootstrap` (or `kickstart -k`) is. Still open, and the
+  open question below (does a rename preserve node id and its agent history?) is
+  still unanswered, because the restart that was supposed to answer it ran the
+  old arguments.
+
+- **Original entry — this machine's fleet node is renaming to `kjg-laptop`
+  (Khaliq, 2026-08-07).**
+  It currently appears as `chief` only because `com.agentworkforce.chief.node.plist`
+  runs plain `agent-relay node up` from `WorkingDirectory=…/AgentWorkforce/chief`,
+  and the node name defaults to the project directory basename — verified against
+  the installed 11.4.0 binary's `--broker-name <name>` help text. So the node is
+  named after a folder, not a role, and the org chart's `chief-khaliq → chief`
+  attribution works only by that coincidence. Held pending the release decision,
+  because the restart is when the missing admission gate would be exercised.
+  *Open question to answer at restart, not by reasoning:* whether the rename
+  preserves node id `node_5b46ac5e…` and the 60 agents of history attributed to
+  it. `node.ts` reads `options.brokerName ?? enrolledNodeName`, which suggests
+  enrollment carries identity and the name is metadata over it — but confirm it.
+
 - **Chief was handed a program on Khaliq's authority, relayed by an agent, and
   is holding.** `sage-nightcto-factory-map-20260731` asked Chief to own the
   Sage/NightCTO distributed-Factory program and relayed a fleet topology (Cloud
@@ -69,6 +142,18 @@
   `agent-relay cloud login` again to rotate. The general rule stands and Chief
   broke it: never run a command that prints a credential — on 11.2.0 plain
   `--json` is exactly such a command, which is why the mask exists in 11.4.0.
+  **Broke it again 2026-08-07, and the values are current.** Chief ran
+  `ps -eo pid,lstart,command` while diagnosing the restart and the broker's `pty`
+  argv dumped the live workspace key (`rk_live_…`) and both agent tokens
+  (`at_live_…` for `chief-khaliq` and `marketing-lead`) into the resident
+  transcript in plaintext. These are the *post-restart* values, so they are live,
+  not expired like the `cld_at_` above. Flagged for rotation.
+  Two lessons, both cheap: a redaction rule that only covers commands *named*
+  after credentials misses `ps`, and this is the third channel (argv, node log,
+  observer link) to leak the same key — **the argv fix is the one that closes all
+  of them**, so prioritise it over rotation, which alone just re-leaks at the
+  next spawn. Until it lands, treat any full process listing as a credential
+  dump: filter to `pid,lstart,comm` and never include `command`/`args`.
 - **Will's Chief needs its `brainRoot` repointed.** His brain moved from the
   repo root to `principals/will/` on 2026-07-30 (Khaliq's call). Nothing in
   this repo referenced the old paths — skills and scripts are all

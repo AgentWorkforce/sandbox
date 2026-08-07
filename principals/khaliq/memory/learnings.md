@@ -113,6 +113,55 @@
   before the lane built on them. A brief is a claim about the world, so it
   inherits the world's falsifiability — reissue it rather than letting a lane
   discover the error downstream.
+- **A mutation count is not coverage — an early failure hides every assertion
+  behind it.** A lane mutated production code, saw 6 of 8 restart cases fail,
+  and reported that as proof the tests bite. Two reviewers then found the
+  headline assertion was tautological: it compared the test's own
+  `relaycast.register` mock to itself and could not fail. The lane proved the
+  mechanism empirically — under mutation the test died on its *first* assertion
+  (the workspace key), so the address assertion never ran; deleting the earlier
+  assertions and re-running showed it passing. So mutation-testing production
+  code is necessary and not sufficient: **an assertion whose expected value
+  comes from the same fixture that produced it stays green under any production
+  mutation.** Require the report to name which assertions ran, not how many
+  tests went red, and check every assertion in a file for that self-referential
+  shape rather than only the flagged one.
+- **Do not generalise from a test fixture to production.** Arguing that
+  `--require-unified` was an invented check, a lane cited main's `workspace
+  active` fixture (`relaycast: 'rc_ops'` against `relayfile/relayauth:
+  'rw_ops'`) as evidence the convergence invariant is not real. The live
+  workspace resolves all three to an identical `rw_7ccfea89`. The fixture is
+  arbitrary test data nobody thought about. Same class as reading a stale state
+  file as current state, and the stakes are higher: had "the convergence
+  invariant is not real" been recorded, a future session could have stopped
+  enforcing this repo's first platform priority. **When a canonical fixture
+  contradicts an invariant, one of them is wrong — find out which.** Changing
+  the fixture to make the assertion pass, which is what happened here, is the
+  move to catch.
+- **Check whether `main` already covers it before dispatching a harvest.** Chief
+  sent a lane to move #1402's tests onto `main` on the belief AR-448 had landed
+  untested. #1429 had shipped it *with* 224 lines of coverage. One `git show
+  --stat` would have prevented the whole branch, its review cycle, and a lane's
+  day. The cost was recoverable and the lane surfaced two real corrections on
+  the way, but the check is free and belongs before the dispatch, not after.
+- **Workspace convergence is necessary and not sufficient for agent identity.**
+  AR-448 concluded that "agent identity needed no separate fix — Relaycast
+  returns the existing agent when a name is re-registered in a workspace it
+  already belongs to." That premise was recorded here as settled on 2026-07-31
+  and it is wrong twice over. Relay `main` replaced that behaviour with a
+  fail-closed admission gate (`b4b96dfb3`): a name collision is **rejected**
+  unless the caller proves same-work-unit via a SHA-256 identity key compared
+  against the incumbent's metadata, with a node's own restart proving it from a
+  hash of its persisted state directory (`5c2ad8ee3`). The gate's own doc
+  comment names the rejected alternative "exactly the AR-448 duplicate-agent
+  class this gate exists to stop."
+  Two consequences. First, **identity has two halves** — one durable workspace,
+  *and* an admission decision on the name — and AR-448 only ever addressed the
+  first. Second, the old "returns the existing agent" behaviour is a hand-over:
+  it is the same defect as [[a-name-based-roster-lookup-makes-the-name-the-identity]],
+  where adopt-on-match turns a naming coincidence into a silent takeover.
+  Found by a dispatched lane that was asked to adapt a test and escalated a
+  falsified premise instead — which is the behaviour to keep rewarding.
 - **A state file carries no timestamp in the reader's head — check the one it
   carries on disk.** Chief read `~/.agentworkforce/relay/fleet-node.json`,
   saw `handlers: [… workflow:run]`, and reported to Khaliq that the node claimed
@@ -142,6 +191,35 @@
   session, ungreppable, and gone when the inbox rolls. Require an artifact for
   any deliverable meant to bind future work; a rollup message reports that the
   contract exists, it is not the contract.
+- **Upgrading a binary is not upgrading the one that runs.** Chief installed
+  relay v11.4.2 specifically so the restart would exercise the new admission
+  gate, restarted, and got a **10.6.7** broker — because the node's
+  `WorkingDirectory` is this repo and `node up` resolves the broker from local
+  `node_modules`, where a transitive `@agent-relay/fleet@10.6.7` shadows the
+  managed 11.4.2 binary. The upgrade was real and it upgraded a file nothing
+  executes. Same family as verifying a flag against source instead of the
+  installed binary, one level further out: there, the wrong *version* was read;
+  here, the wrong *copy*. The habit is to check the running process's own path
+  and self-reported version (`ps` on the pid, the doctor's `brokerBinary`), never
+  the version of what was just installed. Corollary worth its own line: **when a
+  fix fails to appear after an upgrade, suspect resolution before you suspect the
+  fix.**
+- **Editing a launchd plist does not change the running job.** The `kjg-laptop`
+  rename was written into `com.agentworkforce.chief.node.plist`, the node was
+  restarted, and it came back named `chief` — launchd keeps the definition it
+  loaded and the file on disk is only a template for the next `bootstrap`.
+  `launchctl print` shows the in-memory `arguments`, and that is the thing to
+  read; the plist is a persisted artifact, which puts this in the same class as
+  every other stale-file-read on this list. A restart that does not reload the
+  job proves nothing about the change it was run for.
+- **A test that passes on the wrong build is not a pass.** AR-448 criterion 3
+  came back green — resident kept its address across a real restart — and the
+  workstream had predicted a *failure* on any released broker for want of
+  `5c2ad8ee3`. Both facts together mean the green came from the old permissive
+  re-registration path, i.e. from the impersonation behaviour the gate exists to
+  remove. **A result that contradicts the prediction is a finding about the
+  setup, not a bonus.** Reconcile the surprise before recording the pass, or a
+  vulnerability gets written into the brain as a passing acceptance criterion.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking
