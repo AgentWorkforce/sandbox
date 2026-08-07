@@ -216,10 +216,18 @@ writes stuck since 2026-08-05**. The live mount is a different path entirely,
 `~/relayfile-dev-collab`, served by a running `relayfile-cli mount` process.
 finn-mini had no mount directory at all, only a leftover log.
 
-So before placing: confirm a `relayfile-cli mount` **process** is running for the
-intended workspace, confirm the path it serves matches the path the agent will
-use, and confirm the outbox is draining rather than accumulating. Do not infer
-liveness from the directory existing or from file count.
+**A running process is not proof either** — corrected 2026-08-07 against the
+`multi-host-live-mount` skill (PR skills#94), which measured a daemon up 3h06m,
+`lag: 0s`, `pending: 0`, and all four `state.json` files rewritten within four
+minutes, while the newest content was 1h31m old and `digests/today.md` was two
+days stale. Every process- and state-file signal measures the daemon's own
+activity, not the freshness of the bytes it serves.
+
+So before placing, run that skill's content-level assertion
+(`assert-mirror-current.sh`), which compares mounted content against current
+cloud revisions. Confirm separately that the path being asserted is the path the
+agent will actually use — on sf-mini two mount directories exist and the dead one
+is the one carrying `.relay/state.json`.
 
 **Acceptance:** `agent-relay node agent list` from the Chief project shows a
 Herdr-hosted agent, and a `placement.spawn` targeting the Herdr node produces a
