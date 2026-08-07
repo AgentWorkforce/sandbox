@@ -220,6 +220,19 @@
   remove. **A result that contradicts the prediction is a finding about the
   setup, not a bonus.** Reconcile the surprise before recording the pass, or a
   vulnerability gets written into the brain as a passing acceptance criterion.
+- **A diff-based review gate is blind to new files, so it passes hardest on the
+  code that needs it most.** `veto_diff_review` reads `git diff HEAD`, which
+  excludes untracked files. Run against T3's fleet-picker candidate it reviewed a
+  README, a TOML and a `package.json` description — 67 lines of prose — while the
+  entire feature, 670 lines across four new untracked files, was invisible to it.
+  A clean verdict there would have been reported in good faith and meant nothing.
+  The failure is self-selecting: a *new* capability is exactly the change that
+  arrives as untracked files, so the gate is weakest precisely where the risk is
+  highest. **`git add -N` before any diff-based review**, and when a report says a
+  gate passed, ask what the gate actually read. Same family as
+  [[a-gate-nobody-invokes-is-not-a-gate]] — there the gate was never called; here
+  it was called and saw nothing. A gate that launders an unreviewed change as
+  reviewed is worse than no gate at all.
 - **A missing row is not a dead thing — an enumeration can be non-deterministic.**
   `agent-relay fleet nodes` returns a *subset* of live nodes that varies between
   calls seconds apart. Eight samples at 12s intervals, written to disk and

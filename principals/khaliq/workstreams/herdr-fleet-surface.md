@@ -200,9 +200,23 @@ pane*, and accept placements by creating a pane and starting the agent in it.
 Dispatch then flows both ways: Chief or Cloud places work and it materialises as
 a local pane; work dispatched from Herdr runs on a mini or in Cloud.
 
+**Precondition — verify the target node's mount is the live one.** A stale mount
+directory is indistinguishable from a live one by inspection, and an agent placed
+against it works on an old tree while appearing healthy. Observed on sf-mini
+2026-08-07: `~/relay-dev-collab-mount` has 38 entries, no `.git`, and looks
+mounted — but it is workspace `relay-dev-collab` in `mode: poll` with **8 outbox
+writes stuck since 2026-08-05**. The live mount is a different path entirely,
+`~/relayfile-dev-collab`, served by a running `relayfile-cli mount` process.
+finn-mini had no mount directory at all, only a leftover log.
+
+So before placing: confirm a `relayfile-cli mount` **process** is running for the
+intended workspace, confirm the path it serves matches the path the agent will
+use, and confirm the outbox is draining rather than accumulating. Do not infer
+liveness from the directory existing or from file count.
+
 **Acceptance:** `agent-relay node agent list` from the Chief project shows a
 Herdr-hosted agent, and a `placement.spawn` targeting the Herdr node produces a
-visible pane running that agent.
+visible pane running that agent, in a verified-live mount.
 
 **Note:** no node in the fleet currently advertises `workflow:run` (0 of 397 node
 records as of 2026-08-07). Do not assume that capability exists.
@@ -244,10 +258,14 @@ the fork, discarding the uncommitted changes rather than committing them.
 repository's contributor guardrail, the acting account is not the maintainer, so
 agents must not open issues or PRs there.
 
-### T7 — Document relayfile-on-a-fleet-node (the missing skill)
+### T7 — Document relayfile-on-a-fleet-node (the missing skill) — DEFERRED to T5
 
 - **repo:** skills
 - **cwd:** `/Users/khaliqgant/Projects/AgentWorkforce/skills`
+- **status:** deferred. The minis are already mounted, so T4 does not need this
+  written first. Revisit when T5 brings cloud sandboxes in, where mounts are
+  created per run rather than standing. The T4 precondition below is the cheap
+  substitute in the meantime.
 
 Two skills exist and neither covers the thing T4 and T5 depend on:
 
