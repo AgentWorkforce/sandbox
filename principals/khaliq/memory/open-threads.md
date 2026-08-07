@@ -47,6 +47,22 @@
   or launching the node from a directory that does not shadow the managed
   binary. Khaliq's call which.
 
+- **This machine carries two node identities, and the rename is a merge, not a
+  relabel.** Found 2026-08-07 while preparing the rename restart:
+  `chief` / `node_5b46ac5e9f427fcedc07f77f95f642eb` — created 07-30, online, 61
+  agents attributed — and `kjg-laptop` / `node_210851746276208640` — created
+  2026-08-05T20:09:33Z, offline, last heartbeat 07:49:54Z on 08-07. The
+  machine-global `~/.agentworkforce/relay/fleet-enrollments.json` is keyed by
+  `relaycastUrl#workspaceId` (**not** by node name) and its single record claims
+  this machine is `kjg-laptop`/`node_210851746276208640`. The running broker
+  nonetheless reports the `chief` id, so `node up` is not honouring that
+  enrollment — which is itself unexplained. Consequence: `--broker-name
+  kjg-laptop` has three possible outcomes (rename the `chief` record, adopt the
+  enrolled id and orphan 61 agents, or mint a third), and nobody knows which.
+  Khaliq held the rename on that basis. **Answer which id wins before reusing the
+  name**, and find out where `node_5b46ac5e…` is persisted — it is in no local
+  state file, only in worker logs, so it appears to be server-assigned.
+
 - **The `kjg-laptop` rename was written to the plist and never took effect.**
   Verified 2026-08-07 after the restart: the plist on disk carries
   `--broker-name kjg-laptop`, but `launchctl print
