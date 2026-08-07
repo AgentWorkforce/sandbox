@@ -1,5 +1,39 @@
 # Open threads
 
+- **The org hierarchy lives on one laptop, and three gaps are now filed.**
+  Khaliq asked for initiatives/epics/projects organized and visible, and for it
+  to be managed from Cloud and trickle down to local. Measured 2026-08-07, it is
+  the reverse and there is nothing hosted to trickle from:
+  - **Cloud has no org primitive at all** — `grep -r reportsTo cloud/packages`
+    returns zero. The whole declared structure is `chief/tools/orgchart/org.json`
+    on this machine. → **cloud#2949**, filed, unlabelled.
+  - **Linear's hierarchy does not reach Chief** — 0 of 234 issues carry a
+    `project_id`, `parent_id`, `cycle_id` or `milestone_id`; the fields are absent
+    from the record, not null. 17 projects and 10 milestones are projected with
+    nothing linking to them, and initiatives/cycles are not projected at all. So
+    no consumer can roll Linear work up by project today. → **relayfile#403**.
+  - **A healthy node can swallow a spawn silently** — `finn-mini` returned
+    `pending` and never dispatched while heartbeating normally and advertising
+    `spawn:codex`; `barry` returned `dispatched` and the agent was up in 20s.
+    There is no CLI surface to inspect an invocation afterwards. → **relay#1448**.
+  Khaliq's call 2026-08-07: **file, do not build.** `org.json` stays the system of
+  record and the local orgchart tool renders it until he sequences the Cloud work.
+  Chief's own view of all this is `scratchpad/org-board.html`, unpublished.
+
+- **Partnerships is a new org unit, and Herdr is its first seat.**
+  Added to `tools/orgchart/org.json` 2026-08-07 on Khaliq's instruction:
+  `partnerships` (unseated department, reports to `chief-khaliq`) with
+  `herdr-lead` under it. `herdr-lead` is live on fleet node **barry** (codex,
+  id `211430740238159872`), deliberately off Khaliq's laptop, owning
+  `workstreams/herdr-fleet-surface.md`.
+  **Its brief was hand-carried as three DMs, and that is a defect, not a
+  delivery.** barry has no copy of the brain, so a placed agent cannot read its
+  own workstream — which is precisely T7 in that workstream ("place an agent on a
+  mini and have it work in a live-mounted tree with nothing cloned" is documented
+  nowhere). The lead was told to treat T7 as load-bearing for that reason. Until
+  a mount reaches the fleet nodes, every remote appointment costs a manual
+  context transfer and leaves no durable brief.
+
 - **NEW 2026-08-07, and it is the one that threatens continuity: the resident's
   canonical name can be permanently burned by an unclean shutdown.** On broker
   11.4.2 the fail-closed admission gate refuses to re-register a name it cannot
