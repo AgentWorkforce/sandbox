@@ -25,16 +25,29 @@ Eligible today: `cloud#2935`, `relay#1433`, `chief#19`, `internal-agents#48` —
 all created 08-05, none touched since 08-06, and no Factory-authored PR exists
 in any routed repo. So the last two days produced zero runs.
 
-**Factory does not distribute across fleet nodes, and this is not a config
-flip.** Dispatch is hosted: the Cloud brain spawns agents through
-workspace-scoped Relaycast spawn. The design for node-placed execution exists
-(a node advertising `workflow:run` plus `repo:<owner/name>` tags, with
-node-local `factory.node.json` clone paths), but measured live on 2026-08-07:
-**0 of 402 node records advertise `workflow:run`**, and all three live nodes —
-`finn-mini`, `chief-broker`, `barry` — carry the byte-identical default set
-`spawn:claude/codex/gemini/opencode`, `release`, `relay:delivery-cursor-v1`,
-with no repo tags. No node has ever served a custom node definition. This is
-the same gate the Sage program has been waiting on.
+**Factory dispatch is hosted today — the Cloud brain spawns agents through
+workspace-scoped Relaycast spawn — but it is NOT blocked on a missing node
+capability.** Chief asserted that it was, and Khaliq falsified it the same day.
+
+`factory/src/triage/schema.ts:6` declares
+`capability: z.enum(['spawn:codex', 'spawn:claude', 'workflow:run'])` — three
+acceptable values, not one requirement. `workflow:run` is specific to the
+**workflow role** and additionally demands `--workflow <path>`
+(`src/cli/fleet.ts:543`); it is the relayflow case. **Every live node already
+advertises `spawn:claude` and `spawn:codex`**, and repo access comes from
+`clonePath` on the agent spec, not from a node tag.
+
+So "0 of 402 nodes advertise `workflow:run`" is true and irrelevant — Chief
+measured a real number and drew a wrong conclusion from it. The Sage program's
+activation gate 2 is *Sage-specific* (it names the Sage and NightCTO repo tags);
+conflating that gate with a general distribution blocker was the error.
+
+**What actually stands between Factory and distributed execution is filesystem
+access, not capability.** A placed agent needs the repo, and remote nodes do not
+carry it — proven the hard way on 2026-08-07 when a lead placed on `barry` had no
+access to its own brief. The answer is the Relayfile mount, which is already in
+production (sf-mini runs a peer-mode mount today) and whose operating skill
+landed the same day as skills#94.
 
 **Second blocker for distribution, learned the hard way the same day:** remote
 nodes do not carry the repos. A lead placed on `barry` had no access to its own
@@ -45,10 +58,10 @@ is not enough.
 
 **Next:** two independent moves, neither started, both needing Khaliq's word
 because each starts real work. (1) Add the `[factory]` prefix to the 17 inert
-issues, which begins dispatching genuine backlog. (2) Bring up **one** node with
-a real node definition declaring `workflow:run` and two repo tags, and confirm
-the control plane advertises them — that converts an untested design into a
-measured yes/no and unblocks the Sage program's activation gate 2.
+issues, which begins dispatching genuine backlog. (2) Prove one distributed
+Factory run end to end. The capability is already there; what needs proving is
+that a placed agent can reach the repo — via the Relayfile mount, not a clone.
+Sage's activation gate 2 is separate and Sage-specific.
 
 ## History
 
