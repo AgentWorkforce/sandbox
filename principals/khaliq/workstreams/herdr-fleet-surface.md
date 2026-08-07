@@ -127,6 +127,13 @@ exceeds the signal"*, never *"sub-100ms"*.
 
 Add a plugin entrypoint that lists broker agents and opens each as a Herdr pane.
 
+**Scope limit — this picker is local-only, and that is not a shortcut.** `attach`
+resolves a project-scoped *local* `connection.json`; only `fleet spawn` takes
+`--node` (see T8 / relay#1449). So the picker can open panes for agents on this
+machine's broker and cannot reach `herdr-lead` on `barry` or anything on the
+minis. Build it for the local broker, name the limitation in its UI rather than
+failing opaquely on a remote agent, and revisit once T8 lands.
+
 Mechanism, all verified except the final attach:
 
 - `agent-relay node agent list` returns JSON with `name`, `current_state`, `team`,
@@ -324,6 +331,83 @@ already caused a four-day-old projection to read as current (see
 "placed agent working in a live-mounted tree, nothing cloned", and can prove the
 mount is current rather than assume it.
 
+### T9 — Herdr-origin usage tagging, a lower trial ceiling, and the conversion moment
+
+- **repos:** relay, cloud, herdr-relay-bridge
+- **recipe:** `agent:team` — three repos, one contract between them
+- **cwds:** `/Users/khaliqgant/Projects/AgentWorkforce/relay`,
+  `/Users/khaliqgant/Projects/AgentWorkforce/cloud`,
+  `/Users/khaliqgant/Projects/AgentWorkforce/herdr-relay-bridge`
+
+`setup` creates a Relay workspace with no account, key or signup. That is the
+funnel and it is deliberate, but it also means anonymous, unattributed users on
+the standard free tier. This task tags them, gives them a much lower ceiling than
+raw Relay usage, and turns hitting it into a registration prompt.
+
+**Tagging is already possible — do not invent a field.** `origin_actor` is a path
+`{app}/{type}[/{name}]` carried by `RelaycastTelemetryOptions`.
+`AgentRelayCreateWorkspaceInput` extends that interface, so the plugin can set it
+at workspace creation and on the client. Cloud already splits it into analytics
+dimensions in `packages/relaycast/src/lib/telemetry.ts:40`
+(`deriveOriginActorProps`). Use `herdr/agent/relay-bridge`.
+
+**The lower ceiling should be a plan tier, not an origin branch.** Entitlements
+resolve by table lookup on the workspace's plan
+(`cloud/packages/relaycast/src/adapters/cloudflare/entitlements.ts`):
+
+```ts
+const plan = workspace.plan || 'free';
+return PLAN_LIMITS[plan] ?? PLAN_LIMITS['free'];
+```
+
+So adding `PLAN_LIMITS['herdr-trial']` with a much lower `api_calls` and
+persisting `plan: 'herdr-trial'` at creation needs **zero change to `getLimits`**.
+Registration then just moves the workspace to a higher tier. The alternative —
+persisting `origin_actor` on the workspace and branching inside `getLimits` —
+mixes telemetry into billing and should be rejected.
+
+For scale: `PLAN_LIMITS.free.api_calls` is currently `100_000`
+(`@relaycast/engine`, `packages/engine/src/providers/static-entitlements.ts:8`,
+published v5.0.5). At roughly one call per forwarded status that is far beyond a
+trial, which is the whole reason a separate tier is worth having. Pick the
+`herdr-trial` number for conversion, not for cost.
+
+**The stopgap must be server-side; only the nudge may be client-side.**
+`dist/bridge.mjs` is plain JavaScript on the user's disk — any counter in it is a
+suggestion anyone can delete. The tier is the enforcement; the plugin's job is
+only to make the moment legible.
+
+Work, in dependency order:
+
+1. **relay** — add the `herdr-trial` tier to `PLAN_LIMITS`. This is a published
+   package (`@relaycast/engine`), so it needs a release, not just an edit; plan
+   the version bump and cloud's dependency update together.
+2. **cloud** — persist `plan: 'herdr-trial'` when a workspace is created carrying
+   the herdr origin. Note `CLOUD_DEFAULT_PLAN = 'free'` and that
+   `entitlements.test.ts:56` asserts unrecognised plans fall back to free — so an
+   unreleased or misspelled tier fails **open**, silently granting the full free
+   ceiling. Add a test that the tier resolves to its own limits, not the fallback.
+3. **herdr-relay-bridge** — pass `originActor: 'herdr/agent/relay-bridge'` at
+   `createWorkspace` and on the client; detect the plan-limit error specifically
+   and print the registration path; emit one non-repeating nudge before the
+   ceiling, reading remaining quota from the limit response rather than counting
+   locally, so one number governs both and they cannot drift.
+
+The bridge currently reports every delivery failure as
+`could not forward a Herdr status update`. Left alone, hitting the ceiling reads
+as a broken plugin rather than an invitation — fixing that is the point of the
+task, not a detail.
+
+**Nudge copy:** one line, once, in the pane. Include the registration path and a
+star ask for `AgentWorkforce/relay` — the SDK repo, not the plugin repo, since
+that is the product the funnel exists for. A nudge that repeats is the fastest
+route to an uninstall and a public marketplace complaint.
+
+**Acceptance:** a workspace created by `setup` is attributable as herdr-origin in
+analytics; it resolves `herdr-trial` limits rather than free; the ceiling is
+enforced server-side and survives editing `dist/bridge.mjs`; and reaching it
+produces a readable registration prompt in the pane.
+
 ## Findings that set the strategy
 
 **Do not integrate with AgentBox or Crabbox. Both were considered and rejected on
@@ -378,4 +462,8 @@ and a Chief that dispatches and queries. Nothing in the 521 has it.
   agent binary. `pane.report_agent` is the mechanism instead, verified live. The
   lesson generalises — a Herdr pane hosting an agent *through a wrapper* is
   invisible to detection, so any future surface that wraps an agent process must
-  report status rather than expect it to be inferred.
+  report status rather than expect it to be inferred. Established that the
+  zero-signup onboarding needs a matching trial ceiling (T8): anonymous
+  workspaces are already bounded by the free tier's 100k api_calls, but that is a
+  cost ceiling, not a conversion moment, and the unattributed-user problem it
+  leaves is the one worth solving.

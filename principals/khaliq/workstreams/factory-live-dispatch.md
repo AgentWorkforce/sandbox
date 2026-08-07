@@ -1,7 +1,7 @@
 ---
 status: active
 owner: khaliq-chief
-updated: 2026-07-30
+updated: 2026-08-07
 repos: [cloud, relay, relayfile]
 ---
 # Factory live dispatch
@@ -18,12 +18,54 @@ completed successfully with merge disabled. Relay AR-445/446/447 and the
 Cloud/Relay schedule-lifecycle task are prepared, but their Linear promotion is
 blocked by the gated RelayAuth D1 capacity incident.
 
-**Next:** After the authorized #2857 D1 recovery restores RelayAuth token
-minting and Relayfile provider writeback, promote AR-445/446/447 and create the
-cross-repository schedule-lifecycle team task from its declarative spec. Then
-verify four fresh hosted runs without a new `factory.failure`.
+**Now, measured 2026-08-07 — the contract is healthy and the pipe is dry.**
+`npm run factory:status` is green: contract resolved, `issueSource: github`,
+readiness label `factory-ready`, hosted brain `cloud-factory-brain` active,
+`mergePolicy: never`. Nine repos routed. And nothing is flowing.
+
+**21 open `factory-ready` issues across five repos; only 4 can ever dispatch.**
+The safety gate requires *both* `requireLabel: factory-ready` and
+`requireTitlePrefix: "[factory]"`. Seventeen carry the label and no prefix, so
+they sit in a queue that structurally cannot drain — cloud ×5, relay ×6,
+factory ×6, some since 2026-07-20. The label is the visible signal and the
+prefix is the silent one, which is why nobody noticed.
+
+Eligible today: `cloud#2935`, `relay#1433`, `chief#19`, `internal-agents#48` —
+all created 08-05, none touched since 08-06, and no Factory-authored PR exists
+in any routed repo. So the last two days produced zero runs.
+
+**Factory does not distribute across fleet nodes, and this is not a config
+flip.** Dispatch is hosted: the Cloud brain spawns agents through
+workspace-scoped Relaycast spawn. The design for node-placed execution exists
+(a node advertising `workflow:run` plus `repo:<owner/name>` tags, with
+node-local `factory.node.json` clone paths), but measured live on 2026-08-07:
+**0 of 402 node records advertise `workflow:run`**, and all three live nodes —
+`finn-mini`, `chief-broker`, `barry` — carry the byte-identical default set
+`spawn:claude/codex/gemini/opencode`, `release`, `relay:delivery-cursor-v1`,
+with no repo tags. No node has ever served a custom node definition. This is
+the same gate the Sage program has been waiting on.
+
+**Second blocker for distribution, learned the hard way the same day:** remote
+nodes do not carry the repos. A lead placed on `barry` had no access to its own
+brief and needed 17KB hand-carried through three DMs. Distributed execution
+needs the Relayfile mount on each node — see `herdr-fleet-surface.md` T7, which
+delivered that skill — or clones on every host. Capability advertisement alone
+is not enough.
+
+**Next:** two independent moves, neither started, both needing Khaliq's word
+because each starts real work. (1) Add the `[factory]` prefix to the 17 inert
+issues, which begins dispatching genuine backlog. (2) Bring up **one** node with
+a real node definition declaring `workflow:run` and two repo tags, and confirm
+the control plane advertises them — that converts an untested design into a
+measured yes/no and unblocks the Sage program's activation gate 2.
 
 ## History
+
+- 2026-08-07 — Audited the live pipeline for the first time since 07-30. Found
+  the eligible/inert split (4 of 21) and established that no node can host a
+  Factory workload. The workstream's previous Next was written against the
+  RelayAuth D1 blocker, which was resolved days earlier and had gone unnoticed
+  here — the same stale-blocker failure recorded in `memory/learnings.md`.
 
 - 2026-07-30 — Cloud PR #2873 corrected the live dispatch transport from raw
   action invocation (which rejects workspace keys) to the supported
