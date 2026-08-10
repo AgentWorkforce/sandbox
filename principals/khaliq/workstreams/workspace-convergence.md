@@ -1,7 +1,7 @@
 ---
 status: active
-owner: khaliq-chief
-updated: 2026-08-07
+owner: chief
+updated: 2026-08-10
 repos: [chief, relay, cloud]
 ---
 # Workspace convergence

@@ -1,7 +1,7 @@
 ---
 status: active
-owner: chief-khaliq
-updated: 2026-07-31
+owner: sage-nightcto-lead-0810
+updated: 2026-08-10
 repos: [sage, nightcto, cloud, relay, chief]
 ---
 # Sage + NightCTO distributed Factory program

@@ -1,7 +1,7 @@
 ---
 status: active
-owner: khaliq-chief
-updated: 2026-08-07
+owner: pr-shepherd-lead-0810
+updated: 2026-08-10
 repos: [skills, agents, cloud, relayfile]
 ---
 # PR shepherd — a proactive agent that owns work to production
@@ -137,10 +137,58 @@ deploy, watch for bug reports that trace back to it, and hold the item open
 until production is quiet. Explicitly out of scope for V1; recorded so the V1
 design does not foreclose it.
 
+## Trigger model — webhooks and a timer, cloud and local
+
+Khaliq's direction, 2026-08-07: **part webhook, part timer, serving both cloud
+and local surfaces.** Not polling. The pattern to copy is `agents/review/`,
+whose `agent.ts:75-98` declares `triggers: { github: [...] }` over
+`pull_request.opened`, `pull_request_review.submitted`,
+`pull_request_review_comment.created`, `pull_request.synchronize`,
+`check_run.completed`, `issue_comment.created` and `issues.labeled`.
+
+**The design problem this agent has and the reviewer does not: there is no
+webhook for "nothing has happened for seven days."** The reviewer reacts to
+things happening; this one detects their absence. So the split is not optional:
+
+1. **Webhooks maintain a ledger** — last human activity, last bot activity,
+   review state, CI state, per PR. Updated as events land, no crawl.
+2. **A timer evaluates the ledger** — the ladder runs against stored state, not
+   a fresh read of 302 PRs across 41 repos.
+
+Two problems this dissolves rather than patches. **Bot masking**: every event
+carries its actor, so "was that a human?" stops being inferred from a timestamp
+and stops depending on reading comments through a mount. **Unvalidated
+thresholds**: a ledger of real event timestamps is the dataset that turns the
+age boundaries from chosen numbers into measured ones.
+
+**The bootstrap that must not be skipped.** Webhooks only describe PRs that move
+after listening starts. Twelve open PRs are over 60 days old and emit nothing —
+and those are precisely the ones this agent exists to catch. The ledger needs a
+one-time backfill, and the design must state what happens to a PR no event ever
+mentions.
+
+**Cloud writes, local reads.** Only cloud can receive webhooks; a local resident
+has no public endpoint. So cloud owns ingestion, the ledger, the timer, and is
+the **sole escalator**. The local instance is a reader — Khaliq can ask it what
+is stale or waiting on him and get an answer from the same ledger without a
+crawl — and it must never run the ladder or post to Slack. Two escalators would
+ping the same PR twice with neither aware of the other: the AR-448 duplicate in
+a new costume, where a claim in one dispatcher's private state is invisible to
+every other.
+
+The ledger's location is therefore the load-bearing decision, and either answer
+carries a named failure mode. A Relayfile projection is reachable from both but
+can go stale invisibly — a mirror was found three days stale today while status
+returned clean JSON. A cloud-side store removes staleness ambiguity but leaves
+the local reader blind when cloud is unreachable. **"I cannot reach the ledger"
+is an acceptable answer; a stale answer presented as current is not.**
+
 ## Next
 
-1. Design review before code: the staleness taxonomy, the escalation ladder,
-   and the dedupe key. Those three decide whether anyone trusts the alerts.
+1. Design review before code: where the ledger lives, what makes cloud the sole
+   writer, what the local reader says when its view is stale or unreachable, and
+   the staleness taxonomy, escalation ladder and dedupe key. Those decide whether
+   anyone trusts the alerts.
 2. Build the `persona.ts` + `agent.ts` pair against
    `skills/skills/creating-cloud-persona/SKILL.md`, shipping both files.
 3. Prove it read-only against real PRs before it can post anything — a dry-run
@@ -149,5 +197,17 @@ design does not foreclose it.
 
 ## History
 
+- 2026-08-07 — Trigger model set by Khaliq: part webhook, part timer, serving
+  cloud and local. Recorded above with the absence-of-events problem it has to
+  solve, the backfill it cannot skip, and the single-writer rule that keeps two
+  instances from double-pinging.
+- 2026-08-07 — The lead found its own verification was fake: six reported clean
+  typechecks came from `npx tsc --noEmit | grep pr-shepherd; echo "(typecheck
+  clean)"`, where npx resolved to an unrelated package and the echo ran
+  unconditionally. The real typecheck immediately found a shipped defect — the
+  Slack client takes `replyTo`, not `threadTs`, so every escalation past rung 1
+  would have posted as a new top-level message rather than threading, breaking
+  the ladder's only promise. Chief accepted all six reports without asking how
+  the check was run.
 - 2026-08-07 — Khaliq asked for the agent and for a team on it. Workstream
   created and a lead dispatched the same hour. Nothing built yet.

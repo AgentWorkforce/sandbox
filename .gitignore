@@ -13,3 +13,8 @@ teams.json
 # Same split, same reason: the active dispatch contract carries an absolute
 # cloneRoot, so only the factory.<principal>.config.json variant is committed.
 factory.config.json
+.worktrees/
+relay-1467/
+
+# Per-machine opencode runtime config — carries live credentials, never tracked
+opencode.json

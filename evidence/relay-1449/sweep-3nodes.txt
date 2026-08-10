@@ -1,0 +1,11 @@
+# Cross-node attach sweep — 3 remote nodes x 3 modes
+invoker: chief-broker on Khaliqs-MacBook-Pro.local, agent-relay 11.4.2
+node=finn-mini mode=view        start=2026-08-10T11:58:09Z exit=1 stderr=Error: no agent named 'r1449-target-finn-0810'
+node=finn-mini mode=drive       start=2026-08-10T11:58:09Z exit=1 stderr=Error: no agent named 'r1449-target-finn-0810'
+node=finn-mini mode=passthrough start=2026-08-10T11:58:10Z exit=1 stderr=Error: no agent named 'r1449-target-finn-0810'
+node=barry     mode=view        start=2026-08-10T11:58:11Z exit=1 stderr=Error: no agent named 'r1449-target-barry-0810'
+node=barry     mode=drive       start=2026-08-10T11:58:11Z exit=1 stderr=Error: no agent named 'r1449-target-barry-0810'
+node=barry     mode=passthrough start=2026-08-10T11:58:12Z exit=1 stderr=Error: no agent named 'r1449-target-barry-0810'
+node=sf-mini   mode=view        start=2026-08-10T11:58:12Z exit=1 stderr=Error: no agent named 'r1449-target-sf-0810'
+node=sf-mini   mode=drive       start=2026-08-10T11:58:13Z exit=1 stderr=Error: no agent named 'r1449-target-sf-0810'
+node=sf-mini   mode=passthrough start=2026-08-10T11:58:14Z exit=1 stderr=Error: no agent named 'r1449-target-sf-0810'

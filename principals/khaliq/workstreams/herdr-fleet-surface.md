@@ -1,7 +1,7 @@
 ---
 status: active
-owner: khaliq-chief
-updated: 2026-08-07
+owner: herdr-lead-0810
+updated: 2026-08-10
 repos: [herdr-relay-bridge, herdr, relayfile, relay, sandbox, cloud]
 ---
 # Herdr fleet surface
@@ -22,19 +22,45 @@ pane opened on the Chief project and running `agent-relay node agent attach`
 streams the live Claude TUI, and `pane.report_agent` gives that pane a correct
 Herdr agent status. Screen detection alone does not work there — see T3.
 
-**Delivered 2026-08-07 by `herdr-lead` (codex, on fleet node `barry`). Five
-tasks, five artifacts, nothing merged.**
+**Merge gate cleared. Verified against each repository's own state 2026-08-10 —
+every artifact except T6 is merged.**
 
-| Task | State |
+| Task | State, verified at source |
 |---|---|
-| T2 latency | **relayfile PR #405** + issue **#406** (batch/parallel receive) |
-| T3 fleet picker | **herdr-relay-bridge PR #1** |
-| T4 Herdr as placement target | **herdr-relay-bridge PR #2**, stacked on #1 |
-| T6 retire fork copy | committed `7b657a6` |
-| T7 multi-host mount skill | **skills PR #94** |
+| T2 latency | **relayfile#405 MERGED** 2026-08-08T19:58:40Z · issue **#406 still OPEN** |
+| T3 fleet picker | **herdr-relay-bridge#1 MERGED** 2026-08-07T12:41:31Z |
+| T4 Herdr as placement target | **herdr-relay-bridge#2 MERGED** 2026-08-07T16:15:48Z |
+| T5 cloud sandbox panes | **herdr-relay-bridge#3 MERGED** 2026-08-08T20:51:10Z — **acceptance NOT claimed**, see below |
+| T6 retire fork copy | **NOT DELIVERED** — see below |
+| T7 multi-host mount skill | **skills#94 MERGED** 2026-08-07T18:22:08Z as `265f50a` |
 
-T1's marketplace topic remains deliberately unapplied — Khaliq's call.
-T5 (cloud sandbox panes) is undispatched. `herdr-lead` has stood down.
+CI green on `herdr-relay-bridge` `main` at `4e9435c`, per-workflow via
+`gh run list --branch main`, not a rollup.
+
+**T5 shipped code but did not prove the capability, and said so.** PR #3 adds a
+`cloud` entrypoint that warms a Daytona box in Relayfile mode and opens its
+broker as a pane, reusing the T3/T4 pane model. `npm test` 65 passed / 1
+Windows-only skip / exit 0. Its author explicitly declined the acceptance:
+the live probe reached Cloud auth, a real box and its broker endpoint, but the
+host's coding credentials were expired and **Herdr is not installed on it**, so
+the visible-pane-plus-local-edit proof was never taken. That probe is what found
+the missing required-mount guard — hosted Cloud marked a box ready while
+`/workspace` was unavailable — fixed by **cloud#2957, MERGED 2026-08-08T19:59:26Z
+and present on cloud `main`**. So the code dependency is satisfied and only the
+live proof is outstanding.
+
+**T6 is recorded as done and is not.** `plugins/agent-relay/` still exists on
+`AgentWorkforce/herdr` `origin/master`. Commit `7b657a6` deletes it but sits
+unpushed on local `feat/agent-relay-sdk`, which has diverged from its own remote
+(6 ahead, 1 behind). Worse, **herdr#3 is OPEN against `master`** and would add
+thirteen files *into that same directory* — the trusted Relay Room and Relayfile
+work, replayed onto master because herdr#2 merged into the feature base instead.
+Its `check-contributor` leg is FAILING. T6 and herdr#3 are contradictory
+intentions on one path and only Khaliq can pick.
+
+T1's marketplace topic remains deliberately unapplied — verified: the repo is
+public, not a fork, and `repositoryTopics` is null, so it is still unlisted.
+`herdr-lead` stood down 2026-08-07; a new lead took the workstream 2026-08-10.
 
 **T2 falsified the claim it was sent to measure.** "Sub-200ms end-to-end" is
 false for realistic change sets: **repo-shaped (11 files, ~14KB) median 216.7ms**
@@ -56,11 +82,43 @@ production node to make its brief work** — the destructive path was available 
 would have "succeeded". Chief ruled capability-carried Herdr-ness instead. One of
 its tests is named `serving never renames live node`.
 
-**Next:** Khaliq's merge gate on five artifacts, and his call on the marketplace
-topic. Then T5. Two known residues disclosed in PR #2: an inert `herdr` tag on
-the live node record, cleared by the next honest re-registration, and a plugin
-link pointing at a temporary worktree whose durable destination is the main
-checkout once #1 merges.
+**Next**, in priority order. The workstream is alive: the previous Next emptied
+because the merge gate it described cleared, not because the work finished.
+
+1. **Prove T5, or retract it.** cloud#2957 is merged, so the only thing between
+   herdr-relay-bridge#3 and its acceptance is a run on a host that has Herdr
+   installed and a healthy coding credential. Take the proof its author refused
+   to fake: a Daytona sandbox agent visible as a drivable Herdr pane, and a file
+   edited locally appearing inside the sandbox with no clone and no push. This
+   Mac is the only known Herdr host. Until it is taken, T5 is code, not a
+   capability.
+2. **Resolve the `plugins/agent-relay/` collision on the herdr fork — Khaliq's
+   call, and it blocks T6.** Either retire the directory on `master` (T6 as
+   written, requiring `7b657a6` be rebased onto `master` and pushed, not left on
+   a diverged feature branch), or land herdr#3 and formally retire T6 because the
+   fork copy is now a *different* plugin. Do not do both, and do not push either
+   until Khaliq picks. herdr#3's failing `check-contributor` leg needs an answer
+   in the same decision.
+3. **Re-scope T3's local-only limitation against relay#1449.** Chief reports
+   cross-node attach proven live. The fleet picker was built local-only on the
+   verified premise that `attach` resolves only a project-scoped local
+   `connection.json`, and it *names that limitation in its own UI*. If #1449
+   changed the premise, that UI text is now a lie and the picker can reach the
+   minis and `barry`. Confirm the new mechanism with Chief before designing to
+   it — this is Chief's workstream and must not be duplicated here.
+4. **T9 is undispatched and has zero code anywhere.** Verified: no occurrence of
+   `herdr-trial` or `herdr/agent/relay-bridge` on `HEAD` in relay, cloud, or
+   herdr-relay-bridge. The zero-signup funnel is live with no trial ceiling and
+   no attribution behind it.
+5. **T1 listing** stays parked on Khaliq's call, with the description rewrite in
+   the T1 section to be decided at the same time.
+
+Not this workstream's to close: **relayfile#406** (serial receive path) is open
+and belongs to relayfile; **relay#1449** is Chief's.
+
+Two residues disclosed in PR #2 remain untracked: an inert `herdr` tag on the
+live node record, cleared by the next honest re-registration, and a plugin link
+pointing at a temporary worktree whose durable destination is the main checkout.
 
 ## Repository decision
 
@@ -149,10 +207,41 @@ arrival timestamp locally, with clocks compared via NTP offset rather than
 assumed equal. Report median and p95 across at least 20 trials, for a small file
 and for a realistic repo-sized change set.
 
-**Acceptance:** a committed result file with methodology, raw trials, clock-offset
-handling, and median/p95 — quotable in a deck without a caveat. Until it exists,
-the public claim stays *"sub-200ms end-to-end including measurement overhead that
-exceeds the signal"*, never *"sub-100ms"*.
+**Acceptance — MET 2026-08-07, and the holding instruction below is RETIRED.**
+The committed result file exists at
+`relayfile/docs/evidence/mount-latency-20260807/` (PR relayfile#405): methodology,
+raw trials, clock-offset handling with per-trial interpolation, median and p95.
+
+**No number from it is quotable in a deck without a caveat, and that is the
+finding rather than a failure of the run.** Measured: small ~300B file E2E median
+**20.2ms**; repo-shaped 11 files/~14KB E2E median **216.7ms** — so cost scales
+with *file count*, not bytes, because receive-side materialization is sequential
+per file (relayfile#406). Both figures are a LAN best case with the server on the
+sender, so only one leg crossed a network; **the hosted path remains unmeasured**
+and the PR makes no product claim in either direction.
+
+**The old holding instruction is withdrawn and must not be reinstated.** It read:
+*"until it exists, the public claim stays 'sub-200ms end-to-end including
+measurement overhead that exceeds the signal'."* Two things killed it. The
+measurement condition was satisfied, so it stopped being a hold and became a live
+directive to publish a retired hedge. And the hedge itself was **falsified** — a
+25-pair instrument control returned median **1.225ms**, roughly 6% of the
+small-file signal, so the harness was never slower than the signal it measured.
+
+**Provenance, which is the durable lesson:** the original "sub-200ms" figure was
+never a measurement. Someone took a 315.5ms *round-trip* median from 2026-07-26
+and halved it. It reached no public surface — verified workforce-wide across
+~150 repos — but the same habit put **"0ms Latency Overhead"** into the investor
+deck, which did.
+
+**Standing rule:** that wording must never appear again **as a live claim**.
+Quotation inside evidence files, changelogs and post-mortems is correct and
+must survive — an audit trail needs the wrong thing kept next to why it was
+wrong. Positioning direction, agreed with `marketing-lead`: retire the latency
+number entirely rather than replacing it with a better one. Lead on *"your agents
+work on the live tree, nothing is cloned"* — a capability gap no competitor
+closes with faster hardware, and one no follow-up measurement can falsify the way
+one just falsified a number.
 
 ### T3 — Chief fleet picker
 
@@ -488,6 +577,39 @@ team layer: named agents that message each other, a registry of callable actions
 and a Chief that dispatches and queries. Nothing in the 521 has it.
 
 ## History
+
+- 2026-08-10 — **State audit after the lead went silent; workstream confirmed
+  alive.** Every artifact re-verified against its own repository rather than
+  against this file, because a change-detector cannot see termination. Findings
+  that contradicted the record: T5 had *shipped* (bridge#3, merged 2026-08-08)
+  while this file still called it undispatched, and T6 was recorded delivered
+  while `plugins/agent-relay/` is still on the fork's `master` with the deletion
+  commit unpushed on a diverged branch. Both corrected above.
+
+  **A literal-string grep nearly produced a false regression report.** Chief
+  asked that three rules from skills#94 survive. Grepping merged `main` for
+  `followlinks` returns nothing, which reads as the symlink fix having been lost
+  — it was not. The merged assertion abandoned `os.walk` entirely for a manual
+  `scandir` walk with explicit `follow_symlinks=True` on both the dir and file
+  legs, and it fails closed on cycles and read errors, which is stronger than
+  what the rule asked for. All three rules are present and correct in `265f50a`:
+  symlink-following coverage, projection mode (`full|on-demand`) validated
+  *before* the freshness assertion, and `(workspace, mirror root)` as the
+  identity unit. Grep the concept, not the string.
+
+- 2026-08-07 — **PR #2 merged on Khaliq's gate** — squash `fd143a3a`, 16:15:48Z.
+  The Herdr host now serves as a fleet node. Twelve review threads, including two
+  that landed mid-work, all answered; zero unresolved at merge; `Test` green on
+  ubuntu, macos and windows, verified per platform rather than from the rollup,
+  and re-verified against `git ls-remote` immediately before merging with
+  `--match-head-commit`. Two things the lane got right and worth keeping: the
+  privacy audit went wider than the one flagged evidence file, catching host and
+  workspace identifiers and live-looking key prefixes across docs and fixtures —
+  a merged commit is permanent, so the wider pass was the only correct scope; and
+  it *rejected* strict cross-client session attribution as unimplementable
+  (`node agent new` exposes no placement identity either way) and documented the
+  out-of-band limitation rather than faking the guarantee.
+
 
 - 2026-08-07 — Bridge plugin built and live-verified end to end, twice. Against
   an isolated workspace: setup created workspace, channel and 0600 config with no

@@ -1,0 +1,7 @@
+
+╭─────────────────────────────────────╮
+│  Update available: 11.4.2 → 11.5.0  │
+│  Run: npm install -g agent-relay    │
+╰─────────────────────────────────────╯
+
+Error: no agent named 'definitely-no-such-agent-xyz123'

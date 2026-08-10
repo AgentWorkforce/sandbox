@@ -1,0 +1,6 @@
+### BRACKETED PROOF — target r1449-target-sf-0810 on sf-mini (host SF-Mac-Mini)
+### Nonce r1449-SF-9c40b2e5... echoed by target at ~11:58:2xZ (proves alive+interactive)
+invoker: Khaliqs-MacBook-Pro.local / node chief-broker / agent-relay 11.4.2
+mode=view        start=2026-08-10T11:59:33Z end=2026-08-10T11:59:34Z exit=1 stderr=Error: no agent named 'r1449-target-sf-0810'
+mode=drive       start=2026-08-10T11:59:34Z end=2026-08-10T11:59:34Z exit=1 stderr=Error: no agent named 'r1449-target-sf-0810'
+mode=passthrough start=2026-08-10T11:59:34Z end=2026-08-10T11:59:35Z exit=1 stderr=Error: no agent named 'r1449-target-sf-0810'

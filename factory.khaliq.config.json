@@ -6,11 +6,20 @@
       "chief",
       "cloud",
       "factory",
+      "herdr-relay-bridge",
       "hoopsheet",
       "internal-agents",
       "pear",
       "relay",
+      "relayauth",
+      "relaycast",
+      "relaycast-cloud",
       "relayfile",
+      "relayfile-cloud",
+      "relayflows",
+      "relayhistory",
+      "sandbox",
+      "skills",
       "workforce"
     ],
     "cloneRoot": "/Users/khaliqgant/Projects/AgentWorkforce"
@@ -28,6 +37,9 @@
     }
   },
   "mergePolicy": "never",
+  "slack": {
+    "channel": "factory"
+  },
   "babysitter": {
     "enabled": true
   },

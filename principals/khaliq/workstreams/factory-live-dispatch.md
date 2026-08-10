@@ -1,10 +1,13 @@
 ---
 status: active
-owner: khaliq-chief
-updated: 2026-08-07
+owner: factory-live-lead-0810
+updated: 2026-08-10
 repos: [cloud, relay, relayfile]
 ---
 # Factory live dispatch
+
+**2026-08-10: `factory#225` merged (`40f9be5ec4`) and `factory#223` merged (`67a5a57b4a`) as Khaliq's Option A split — routed-PR intake and discovery only, activation disabled, execution half removed rather than flagged off. Lifecycle design tracked in `factory#230`, unlabelled and unowned.**
+
 
 **Goal:** A ready human-owned Linear issue safely dispatches a Cloud Factory
 recipe that creates agent-owned GitHub work and reports checkpoints to Linear.
