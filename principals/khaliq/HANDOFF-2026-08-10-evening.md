@@ -20,12 +20,50 @@ collision, and must prove ownership. If the stored verifier is absent or does no
 match, relay **refuses to hand over the credentials** (`agent_identity_mismatch`,
 HTTP 409) and **the name is burned with no way back.**
 
-| node | broker | `identity_key` | state |
+**STATE AS OF 21:50Z — three nodes were upgraded and restarted this evening.**
+
+| node | broker now | `identity_key` | control plane |
 |---|---|---|---|
-| `chief-broker` | 11.4.2 | **PRESENT**, exact match | **READY** |
-| `barry` | 11.3.1 | ABSENT | needs backfill |
-| `finn-mini` | 11.4.0 | ABSENT | needs backfill |
-| `sf-mini` | 11.1.1 | ABSENT | needs backfill |
+| `chief-broker` | 11.4.2 | self-stamped at registration, verified | untouched — **upgrade last** |
+| `barry` | **11.5.1** | correct | **active**, id `210867721395138560` reclaimed |
+| `finn-mini` | **11.4.3** | correct | **active**, id `205917852717920256` reclaimed |
+| `sf-mini` | **11.5.1** | corrected 21:41Z | **NOT REGISTERING** — see below |
+
+**The reclaim mechanism is proven.** `finn-mini` and `barry` both restarted, hit their own
+names as collisions, presented the backfilled identity and got their records back with the
+**same agent id**. `barry` also proves **11.5.1**'s derivation works.
+
+**`sf-mini` needs one more thing and it is a credential decision.** Its broker runs, its
+plist is repaired (explicit `--state-dir /Users/khaliqgant/.agentworkforce/relay`, binary
+repointed to `~/.local/bin/agent-relay`), and its key now matches that path. But it does
+**not** register: its plist passes no workspace key, unlike `barry` and `finn-mini` whose
+wrapper scripts supply one. Its `last_seen` is **2026-07-23** — this node has been invisible
+to the control plane for eighteen days, long predating tonight. Plist backup:
+`~/Library/LaunchAgents/com.agentrelay.fleet-node.plist.bak-statedir-20260810`.
+
+### THE EXPENSIVE LESSON — we stamped `sf-mini` with a WRONG key and nearly restarted on it
+
+The first backfill derived `sf-mini`'s path from its plist `WorkingDirectory`. **The running
+broker resolved a different project root** (`/Users/khaliqgant`), so the real state file was
+`/Users/khaliqgant/.agentworkforce/relay/state-sf-mini.json` — while we stamped the verifier
+for a **fossil** at `…/Projects/AgentWorkforce/relay/.agentworkforce/relay/state-sf-mini.json`,
+last written 13:55Z and 2.4× smaller.
+
+**`test -f` returned 0 on the fossil.** The existence check cannot tell a live file from a
+dead one. The discriminating check — comparing **UTC** mtimes across every candidate — showed
+the three live files were all written within 20 seconds of each other, at the moment their
+brokers spawned the probes. **Correlate the file to an event you caused; do not ask whether
+it exists.**
+
+**Two agreeing measurements of the same wrong input are not corroboration.** My independent
+recomputation matched the lane's exactly, because we both derived from the same bad path.
+
+**And `stat %Sm` prints LOCAL time.** I labelled it `Z` and nearly drew a second wrong
+conclusion from it. `barry` is UTC−4, the others UTC+2. Use `date -u -r <file>`.
+
+**The refusal is milder than this document first claimed.** On mismatch the broker is
+*refused* and the record is left intact and re-stampable — a broker that will not start, not
+a destroyed name. The genuinely unrecoverable case is narrower than "burned".
 
 Verified by authenticated GET per record, not by `list_agents` — **`list_agents`
 sanitised the field and made a present value read as absent.** Agent ids:
