@@ -16,6 +16,83 @@ tracked only in chat context while agents died in silent batches, and the gap
 surfaced because he asked, not because Chief noticed. **An assignment that lives
 only in a conversation is not an assignment.**
 
+## Now — 2026-08-10 19:30Z — chief PRs merged under a squash-only gate; restart prep underway
+
+**Khaliq granted merge authority on the chief PRs** ("you have permission to merge all
+the chief prs"). Four landed on `main`; one merged into another PR's branch; three remain
+conflicted. `main` tip is now **`ff6361c`**.
+
+**Merged to `main`, all `--squash --match-head-commit`:** `#28` → `d4fed15`,
+`#15` → `940d6f7`, `#6` → `c87d812`, `#17` → `ff6361c`.
+
+**`#24` merged but NOT to `main`.** Its base was `chief/orgchart-hierarchy`, not `main` —
+a **stacked** PR. It landed at `0c3b9cd5` inside **`#25`'s branch**, and
+`git merge-base --is-ancestor 0c3b9cd5 origin/main` returns false. It is neither lost nor
+shipped; it now rides inside `#25`. **`gh pr view` reporting `MERGED` says nothing about
+which base it merged into** — I nearly recorded five PRs on `main` when the true count is
+four. Read `baseRefName` before believing a merge landed where you assumed.
+
+**Still open, all DIRTY because `main` moved four commits under them** — assigned to
+`chief-prs-lead-0810` in cost order: `#5` (`chief/node-plist-keepalive`, **0** unresolved
+threads), `#23` (`chief/yc-demo-brain`, **2**), `#25` (`chief/orgchart-hierarchy`, **4**,
+and carries `#24`). Their DIRTY state is mechanical, not a defect in the work.
+
+### The squash was load-bearing, and it is now a gate rather than a convention
+
+Khaliq accepted the `opencode.json` credential exposure **bounded to one feature branch
+plus clones**. `261db56` sits in `#28`'s commit list while `opencode.json` is **absent
+from its net diff** (add and delete cancel), so a squash keeps the blob off `main` while a
+merge-commit or rebase would carry it onto `main` permanently — silently widening a
+boundary the principal never agreed to widen.
+
+`AgentWorkforce/chief` had `allow_merge_commit: true` and `allow_rebase_merge: true`, so
+the green button offered all three methods. **I set the repo to squash-only before merging
+anything.** Verified in both directions after every merge: `opencode.json` is absent from
+`origin/main`'s tree, and `261db56` is **not reachable** from `origin/main`.
+
+**Rule: an accepted risk has a boundary, and the boundary needs a mechanism.** "We agreed
+to merge this one way" is a convention until the other ways are switched off. The steward
+caught this as a live gap at 19:19Z; it was one API call to close.
+
+### `relayfile#413` — the body described the commits, GitHub renders the diff
+
+I opened `#413` to carry two test files. Its branch was cut while the shared worktree sat
+on `evidence/mount-latency-one-way-20260807`, so the PR actually carries **23 files,
++2616/−4**: the 2 intended tests, **20 files of the `mount-latency-20260807` evidence
+bundle**, and a doc edit. The body said "Tests only" over a 2-file table.
+
+Harmless while it was draft — but **I marked it ready**, which is what put it in front of
+two reviewers and would have landed an unreviewed evidence bundle on `main` as a side
+effect of a test PR. Corrected: body rewritten to the real diff, title now carries
+**DO NOT MERGE — branch needs re-cut**, and the required sequence is stated (re-cut the
+tests onto clean `main`; open the evidence bundle as its own PR; then merge).
+
+**"Zero production changes" stayed true throughout** — every contaminating file is docs or
+evidence. A true claim can still sit on top of a misdescribed diff.
+
+### Restart preparation
+
+Broadcast to every lane: push branches, move findings out of scratchpads and DMs into
+GitHub issues or `chief/evidence/`, return a three-part close (STATE / WHERE IT LIVES /
+NEXT), and surface `BLOCKED ON CHIEF` items now. **Scratchpads and DMs are the two
+surfaces that do not survive a restart** — four finished deliverables were recovered from
+scratchpads today by luck rather than design.
+
+Unblocked this sweep rather than reported: `relaycast-cloud-7-lead-0810` (its brief
+targeted 6.3.x→7.0.0, but **8.0.0 published 17:19:38Z** and `relaycast-cloud#55` merged
+17:24:26Z, so it was enumerating a skipped version — a lane doing the wrong work correctly
+is indistinguishable from a lane doing the right work, and only Chief could see it);
+`r1382-codex-0810` (red-check accepted directly, since its lead has been silent since
+14:30:22Z — a specialist should not idle on a finished red-check because its lead parked).
+
+### Still Khaliq's, carried and unanswered
+
+Daytona **B-vs-C** and whether `DAYTONA_API_KEY` enters an agent environment at all
+(measured: **no `DAYTONA_*` var is set** in this agent env, so `resolveDaytonaAuthCredentials()`
+cannot succeed today); the relayfile credential re-ruling, whose hard condition is already
+false; `sage-nightcto` park-or-run; lifecycle question 1 (CRE/preq — only Julian can
+define); herdr T6 vs `herdr#3`; and a human reviewer for `relay#1465`.
+
 ## Now — 2026-08-10 17:20Z — three root causes found; all three were mis-framed first
 
 Twelve leads appointed at 12:31–12:33Z on Khaliq's instruction to reactivate every

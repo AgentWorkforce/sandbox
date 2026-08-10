@@ -11,24 +11,38 @@ Chief has never ruled on which of us stands down. Do not merge the two files bli
 **`check_inbox` / `list_dms` are BROKEN** (relay#1471). They fail with a raw SQL error
 that reads exactly like an empty inbox. Never use them.
 
-`mcp__agent-relay__search_messages` is the only message instrument, and it fails
-silently in the affirmative on **four** independent axes. Every one of these cost a
-wrong report today:
+`mcp__agent-relay__search_messages` has **ONE** real defect. I previously recorded four
+here; `retrieval-lead-0810` red-checked all four against the installed 11.4.2 and
+refuted three, and I re-verified the refutation myself. **The three retractions are
+below — do not act on the old framing.**
 
-1. **`query` is required and is a real text match.** `*` matches nothing globally; a
-   junk or degenerate query returns `[]` indistinguishable from silence. Chief lost an
-   hour to this and wrongly told Khaliq two lanes were silent. **Two real single-word
-   terms minimum.**
-2. **Results are RELEVANCE-ranked and truncate at `limit`.** The newest message is
-   often absent. Every timestamp you read is a **floor, never a maximum**.
-3. **The `channel` filter is blind to recent traffic.** `{channel:"general", query:"the",
-   limit:15}` returned fifteen results, all weeks old, including none of the messages
-   just delivered to me. Keyword and `from` filters find the same messages fine.
-4. **`{from: <lane>}` alone measures one side of a conversation.** A blocked lane and a
-   lane deep in unreported work emit exactly the same thing — nothing. **Always also
-   search `{from: chief}` with a term specific to that lane's topic, and ask what the
-   lane was last *told*.** A brief ending "produce an enumerated breaking-change
-   surface" predicts hours of silence, and that silence is compliance.
+1. **REAL — results are ranked by relevance (SQLite FTS5 `bm25()`) with no recency
+   parameter, and `limit` truncates by rank.** The newest messages are often absent, so
+   every timestamp you read is a **floor, never a maximum**. Use `limit ≥ 25` and sort
+   by `createdAt` yourself. Prefer **single-term** queries.
+2. **RETRACTED — "a junk/single-char query returns `[]` like silence."** Single-character
+   queries work. `*` returns nothing because it is a literal text search and no message
+   contains it. Correct behaviour.
+3. **RETRACTED — "multi-word returns empties indistinguishable from silence."**
+   Multi-word is **implicit AND**; an over-constrained query legitimately returns `[]`.
+4. **RETRACTED — "the `channel` filter is blind to recent traffic."** It is not.
+   `{channel:"general", query:"the", limit:15}` returned only old messages, but at
+   `limit:60` the same query returns today's — including the two messages I had claimed
+   were invisible. Five of sixty results were from today; ranking pushed them past 15.
+   **I was watching defect 1 through a channel filter and calling it a new bug.**
+
+**A lane came one step from switching the implicit AND to OR because of my report**,
+which would have flooded every multi-word query with junk. Before reporting an
+instrument defect, construct an input whose correct output you already know, and pick a
+**discriminating** probe rather than a confirming one.
+
+**Still true, and it is a METHOD error of mine rather than a tool defect:**
+`{from: <lane>}` alone measures one side of a conversation. A blocked lane and a lane
+deep in unreported work emit the same nothing. **Also search `{from: chief}` with a term
+specific to that lane's topic, and ask what the lane was last *told*.** A brief ending
+"produce an enumerated breaking-change surface" predicts hours of silence, and that
+silence is compliance. This is why I called `relaycast-cloud-7` blocked five times after
+chief had already unblocked it.
 
 **Use `gh` as a second instrument.** `gh search prs --owner AgentWorkforce --updated
 ">=<ts>"`, `gh pr list --head <branch>`, `gh api .../branches`. A merged PR or a moved
@@ -88,7 +102,24 @@ khaliqgant**. main now pins `^8.0.0`. 6.3.2 was 08-02, 7.0.0 was 08-07.
 - **Unowned:** "verify the live engine" and removing relay#1472's load shim. Until the
   shim comes out, relay#1445 still emits the false zero it was written to remove.
 
-## 🔴 OPEN, HIGHEST — credentials in pushed git history (reported 17:05Z)
+## ✅ CLOSED BY RULING — credentials in git history. DO NOT RE-RAISE.
+
+**Khaliq ruled 2026-08-10 (chief `0d5f9a2`): `chief` is a private repo, the exposure is
+ACCEPTED, no rotation.** Four reviewers were right on the facts and overruled on the
+risk, which is the principal's call. Treat as a decided risk acceptance, not an open
+finding. The detail below is history, kept only so nobody re-derives it.
+
+**The one live consequence — merge `#28` with `--squash`.** `opencode.json` is absent
+from the net diff (add and delete cancel), so squash keeps `261db56` off `main`, while
+a merge-commit or rebase carries it onto `main` permanently. **That is currently a
+convention, not a gate:** `AgentWorkforce/chief` has `allow_merge_commit: true` and
+`allow_rebase_merge: true`, and #28 is `isDraft:false`, `CLEAN`, mergeable now — so the
+green button offers all three methods. Khaliq accepted an exposure bounded to one
+feature branch plus clones; a non-squash merge silently moves that boundary to `main`
+forever, which is not what he was asked. Cheap fix: disable merge-commit and rebase on
+`chief` until #28 lands. Reported 19:19Z; steward made no settings change.
+
+## (historical) credentials in pushed git history — reported 17:05Z, now ruled
 
 `chief` commit **`261db56`, 2026-08-08T21:29:27Z**, committed `opencode.json` with three
 **literal** values (not `${...}` references): `RELAY_AGENT_TOKEN` (40 chars),
@@ -139,7 +170,17 @@ input, or it is wedged behind something a DM cannot clear. Two for two = systema
 on 11.4.2 returns `{spawned:true}` and launches nothing — and `factory-lead` is a
 broker self-registration, the class where a re-registration mismatch burns the name.
 
-**Chief's relayfile draft-PR ruling (13:10:25Z) has no live executor.** No relayfile PR
+**RESOLVED 18:44Z — `relayfile#413` opened.** Chief's 13:10:25Z ruling executed 5h34m
+later. Meets every constraint: DRAFT, no labels, base `main` head `3e6ada31`, and the
+flaky-test warning is the lead line in a blockquote. **One gap:** the body says "Tests
+only" over a 2-file table, but the diff against `main` carries **23 files, +2616/-4** —
+the branch was cut while the shared worktree sat on `evidence/mount-latency-one-way-20260807`,
+so it inherits 20 files of the `mount-latency-20260807` evidence bundle plus a doc edit.
+"Zero production changes" stays true and it is draft, so nothing is dangerous — but if
+it is ever marked ready, that evidence bundle lands on `main` reviewed by nobody as
+evidence. The author described the *commits*; the PR renders the *diff*.
+
+**(historical) Chief's relayfile draft-PR ruling (13:10:25Z) had no live executor.** No relayfile PR
 exists — none created today, `fix/relay-state-json-two-writers` tip unmoved at
 `3e6ada31`. At 12:46:39Z, twenty-four minutes *before* the ruling, the lead released its
 specialist: "Do NOT open one… Stand by or exit." The ruling landed on an empty chair.
