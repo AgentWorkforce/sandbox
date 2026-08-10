@@ -20,26 +20,54 @@ collision, and must prove ownership. If the stored verifier is absent or does no
 match, relay **refuses to hand over the credentials** (`agent_identity_mismatch`,
 HTTP 409) and **the name is burned with no way back.**
 
-**STATE AS OF 21:50Z — three nodes were upgraded and restarted this evening.**
+**STATE AS OF 22:05Z — all three minis upgraded, restarted and ACTIVE in `rw_7ccfea89`.**
 
-| node | broker now | `identity_key` | control plane |
+| node | broker | agent id | control plane |
 |---|---|---|---|
-| `chief-broker` | 11.4.2 | self-stamped at registration, verified | untouched — **upgrade last** |
-| `barry` | **11.5.1** | correct | **active**, id `210867721395138560` reclaimed |
-| `finn-mini` | **11.4.3** | correct | **active**, id `205917852717920256` reclaimed |
-| `sf-mini` | **11.5.1** | corrected 21:41Z | **NOT REGISTERING** — see below |
+| `chief-broker` | 11.4.2 | `211418990402400256` | self-stamped; **upgrade LAST** |
+| `barry` | **11.5.1** | `210867721395138560` | **active**, reclaimed |
+| `finn-mini` | **11.4.3** | `205917852717920256` | **active**, reclaimed |
+| `sf-mini` | **11.5.1** | `205920120209797120` | **active** 22:04:21Z — first time since **2026-07-23** |
 
-**The reclaim mechanism is proven.** `finn-mini` and `barry` both restarted, hit their own
-names as collisions, presented the backfilled identity and got their records back with the
-**same agent id**. `barry` also proves **11.5.1**'s derivation works.
+**The reclaim mechanism is proven on three nodes.** Each restarted, hit its own name as a
+collision, presented the backfilled identity, and got its record back with the **same agent
+id**. `barry` proves 11.5.1's derivation specifically.
 
-**`sf-mini` needs one more thing and it is a credential decision.** Its broker runs, its
-plist is repaired (explicit `--state-dir /Users/khaliqgant/.agentworkforce/relay`, binary
-repointed to `~/.local/bin/agent-relay`), and its key now matches that path. But it does
-**not** register: its plist passes no workspace key, unlike `barry` and `finn-mini` whose
-wrapper scripts supply one. Its `last_seen` is **2026-07-23** — this node has been invisible
-to the control plane for eighteen days, long predating tonight. Plist backup:
-`~/Library/LaunchAgents/com.agentrelay.fleet-node.plist.bak-statedir-20260810`.
+### `sf-mini` was never broken — it was serving a workspace nobody watched
+
+**Root cause, and it is documented in `finn-mini`'s own wrapper comment:** running
+`agent-relay node up` from inside a **git repo** makes it *rewrite that repo's*
+`.agentworkforce/relay/workspace-key.json` pin (**relay#1432 item 4**). `sf-mini`'s plist set
+`WorkingDirectory` to the **relay repo**, so the CLI wrote a fresh pin there and faithfully
+joined a different workspace. The broker was healthy the whole time; it simply reported
+somewhere else.
+
+That box had **three** workspace identities: the relay-repo pin (`…6f31`, workspace
+`209946833753862144`), a home pin (`…0af8`, workspace `209992517857177600`, its own `sf-mini`
+record `209993022532612096`), and the real fleet key `…9812` / `rw_7ccfea89`.
+
+**The fix needed no credential copying.** The correct key was already on the box at
+`workspaces.json` `.workspaces.default.key`, and `fleet-enrollments.json` already held the
+`nt_` node token and `nodeId` for `https://cast.agentrelay.com#rw_7ccfea89`. I had proposed
+propagating chief's key; checking first made that unnecessary.
+
+**All three minis are now structurally identical** — each runs
+`~/.agentworkforce/relay/bin/start-<node>-fleet-node`, which reads its token and key from the
+0600 stores, exports `RELAY_WORKSPACE_KEY` / `RELAY_NODE_ID` / `RELAY_NODE_TOKEN`, and `cd`s
+to a **neutral, non-git** run dir before `node up`. **The neutral cwd is load-bearing, not
+cosmetic.** Plist backups on `sf-mini`: `…bak-statedir-20260810`, `…bak-wrapper-20260810`.
+
+**`launchd` sets `WorkingDirectory` BEFORE exec** — a wrapper's own `mkdir -p` runs too late
+and the job dies `EX_CONFIG (78)`. Create the run dir when you write the plist.
+
+### SANDBOX WORK — NOT STARTED, and the ordering is a safety property
+
+`sf-mini` is the chosen sandbox: 71 repos, 17G, **24Gi free of 228Gi** — the tightest disk on
+the fleet. **relayfile is not installed there and there is no mount daemon.** The sequence
+must be: install → configure the mount → **prove an agent reads a repo the box does not have
+locally** → *only then* delete repos. Deleting before the mount is proven strands the machine.
+That proof is the unmet deliverable in `relayfile-coordination`. Relay development currently
+lives on `sf-mini` (`relay/target/release`) and would have to move first.
 
 ### THE EXPENSIVE LESSON — we stamped `sf-mini` with a WRONG key and nearly restarted on it
 

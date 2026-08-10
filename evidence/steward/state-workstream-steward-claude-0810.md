@@ -81,6 +81,26 @@ threads): it updates all six version-pin sites, and the `Dockerfile` derives its
 `ARG RELAYCAST_ENGINE_VERSION` with a **build-time assertion** that `package.json`'s pin
 matches — a real gate, not a convention.
 
+## ❌ RETRACTED 21:47Z — `ratify-demo#4` SDK pin was a non-issue
+
+`repo-2/package-lock.json` resolves `@relaycast/sdk` and `@relaycast/types` at **6.3.2**
+while registry latest is **8.0.0**. Nobody chose it — the declared change is
+`@identities-ai/ratify-protocol` `file:../..` → `1.0.0-alpha.16`; the relaycast pins are
+stale lockfile state that rode along when the SDK moved to npm.
+
+**The gap contains the fix that matters for this demo.** `relaycast#318` added `data`
+and `metadata` to `VERBATIM_VALUE_KEYS` so the SDK's snake/camel transform stops
+rewriting caller-supplied structured payloads — its own comment: a `RevocationList`
+whose `revoked_certs` arrives as `revokedCerts` cannot be reconstructed byte-for-byte,
+so its signature no longer verifies. **6.3.2 predates that.**
+
+**RESOLVED: the demo never uses `@relaycast/sdk`.** `repo-2/package.json` declares
+`@agent-relay/sdk ^11.1.1` and `@identities-ai/ratify-protocol`; no file imports
+`@relaycast/*`. `repo-1/src/relay/client.ts` imports `@agent-relay/sdk` and sends via
+action invocation (`callAction(agent, name, input)`), not `dm()` with `data`. The 6.3.2
+entries are transitive lockfile residue. **A dependency in a lockfile is not a
+dependency in the code.** My mechanism described a path this code never takes.
+
 ## OPEN
 
 **Both parked-process wakes still unanswered.** `factory-lead` (nothing since
