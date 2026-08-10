@@ -34,5 +34,18 @@
   of Factory's contract.** It was removed so the active Chief-owned contract is
   the only definition Chief reads. Keeping two definitions of "dispatchable"
   is how Chief came to assert a Linear-only model that the platform never had.
+- **YC demo, 2026-08-06 — happened.** Agent Relay was demoed as a working agent
+  *team*, using the product on our own workforce rather than a synthetic
+  scenario. The live org chart was the centrepiece, rendering one real hierarchy
+  — org → project → workstream → worker — with expandable top-level rows, IDs in
+  metadata, and readable worker labels. Khaliq demoed variant 07 from the
+  production Cloud dashboard, not the local `tools/orgchart/` tool. See
+  `workstreams/yc-demo-org-chart.md` for what shipped and how it was verified.
+- **Agent naming convention (Khaliq, 2026-08-06):** spawns are normalized at
+  dispatch to `<project>-<workstream>-<role>`. Names like
+  `codex/notion-portable-fleet-mount-20260806` are the pattern this replaces —
+  they carry project, task, and date fused into one opaque string, which is why
+  the org chart cannot place them in a tree. Inferring readable labels for
+  existing agents is a compatibility shim, not the destination.
 - **Watchdog** — prospective/design partner in Norway for an early proactive
   agent team deployment.

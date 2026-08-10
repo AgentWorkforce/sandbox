@@ -33,6 +33,46 @@
   any target repo. One file read (`hoopsheet` sets `issueSource: "github"`)
   would have falsified it. Repo-local docs describe intent; the owning
   component's config describes capability, and capability wins.
+- **Chief's acceptance must not function as a stop signal.** Told to Chief by
+  a delegate on 2026-08-06: "praise landing on work that is not yet settled is
+  exactly when it is worth re-reading — *accepted* is a good moment to check
+  what the acceptance rests on." It proved itself twice the same night. Chief
+  accepted a lead tier, and that agent went back and found it inherited an
+  unvalidated predicate. Chief accepted a metadata design, and that agent
+  falsified its own decision against the installed binary. Both corrections
+  came from the delegate, never from Chief — so Chief's acceptance was the
+  thing most likely to have closed each question early. A coordinator who only
+  ratifies is a bottleneck that feels like agreement.
+- **A spawn confirmation is not an agent, and the failure has two distinct
+  signatures.** On 2026-08-06 five consecutive variant lanes were dispatched
+  with `spawned: true` and four produced nothing at all. The signatures differ
+  and they mean different things:
+  *pending > 0, unchanged* — the agent exists and is not reading its queue
+  (three lanes on finn-mini). *pending = 0, `lastSeen` equal to created,
+  invocation unchanged* — the queue drained but nothing followed, consistent
+  with the CLI never launching (barry). Both nodes reported
+  `status=online, live=true, handlers=true` throughout. **Diagnose which
+  signature you have before replacing a lane**, because the second one is a
+  reason to change CLI or node and the first is not. And never report a lane
+  recovered from a dispatch receipt — only a pushed ref or a moved SHA counts.
+- **A revocation receipt is a refused authentication, not a missing record.**
+  Chief spent an hour chasing the wrong evidence: process released, agent
+  offline, absent from roster. None of those say anything about whether a
+  credential still works. The only receipt that means anything is the
+  credential being presented and **authentication being refused**. Define the
+  receipt before choosing the mechanism, or you will collect evidence of the
+  wrong thing and believe you are done.
+- **Skipped is not passed, in CI as everywhere else.** When a coverage gate
+  failed on cloud#2944, every later step in that job reported *skipped*. A
+  reader scanning for red sees a wall of grey and moves on. Same family as an
+  unevaluated check exiting zero — which is why the fleet proof deliberately
+  exits non-zero on an unevaluated assertion.
+- **A live registration is not progress.** A design lane read as healthy and
+  registered while it had stopped consuming messages hours earlier, with five
+  deliveries pending and one commit to show. Presence proves a process exists,
+  not that work is moving. Count committed branches and booted routes; verify
+  from disk and git, never from an agent's status or its own claim. Same shape
+  as the broker/supervisor/mount lessons, one layer up in the org.
 - **Never launder relayed authority into direct confirmation in the brain.** An
   agent reporting "the principal authorized X" is evidence that the agent
   believes it, not that it happened. Record the claim with its provenance — who
@@ -458,6 +498,102 @@
   surprise in the run before writing the verdict, including the surprises the
   script did not think to check for — the node's name changed under a script
   that asserted it would not.
+- **A tool's surface is not the platform's contract — read the owning
+  component's types.** Twice now in opposite directions. On 2026-08-04 Chief
+  read relay's `main` source, saw `--reveal-token`, and assumed the installed
+  11.2.0 binary accepted it; every hosted Cloud call failed. On 2026-08-06
+  Chief read the MCP spawn tool schema, saw no metadata parameter, and declared
+  the platform incapable of typed identity metadata — while
+  `CreateAgentRequest.metadata` sat in the SDK and 451 of 745 live agents
+  already carried metadata. Presence in source does not prove the installed
+  thing accepts it; absence from a tool schema does not prove the platform
+  lacks it. Check the layer that actually owns the capability, and say which
+  layer you checked.
+- **A delegate correcting Chief is the system working, and the correction has
+  to travel.** The metadata finding above came from an appointed lead reading
+  the SDK when Chief had inferred from a tool surface. Chief endorsed it, told
+  the lead to record the correction, corrected the director it had already
+  misinformed, and fixed the durable record. A lead who only confirms what
+  Chief already believes is not a lead.
+- **The whole family: silent substitution that reports success.** Four
+  instances in one night, and they are one bug wearing different clothes.
+  `register_agent` accepted `metadata`, returned OK, and wrote nothing — a
+  short-circuit that was right about tokens and wrong about writes. A worker
+  handed a path that did not exist on its machine invented its own worktree and
+  reported that two live defects "don't exist on any reachable branch." A tile
+  labelled Chiefs counted deployed personas. A lead tier crowned whatever
+  matched a name regex. In every case the system substituted something
+  reachable for the thing specified and returned success, so the failure read
+  as diligence. **When a component cannot do what was asked, it must say so
+  loudly — never quietly do the nearest thing it can.** Design so the
+  incoherent case is unrepresentable, not merely discouraged.
+- **"Unchecked" is not "false."** An absent observation is not a negative
+  result, and collapsing them is the same silent substitution one level up.
+  A verification flag needs three states — verified, failed, not-looked-at —
+  because a defaulted `false` claims knowledge nobody has. This is the general
+  form of the doctor lessons: assert the artifact, and when you did not assert
+  it, say that instead of implying you did.
+- **Crown a designation, never an inference.** A regex noticing the substring
+  "chief" in a name nobody chose for that reason is an accident of spelling and
+  must never confer authority. But an agent appointed in writing and registered
+  as `<project>-<workstream>-<role>` under a published contract is different:
+  the name is not evidence *about* the appointment, it is the *recording* of
+  it. Living in a name rather than a column makes it less queryable, not less
+  true. The test that separates them is uniqueness — a real designation is
+  unique by construction, so **several candidates means the convention was not
+  used as a designation** and nothing should be crowned. Never break that tie
+  by recency or sort order; accountability decided by alphabetical order is
+  fabrication with a tidy implementation.
+- **A finding that fits the pattern needs more scrutiny than one that does
+  not.** On 2026-08-06 Chief enthusiastically endorsed a reported API defect —
+  an out-of-range `limit` returning an empty array — an hour after warning
+  three agents about measurement artifacts. It was a `jq` fallback,
+  `(.runs//[])|length`, printing 0 for a well-formed HTTP 400. The lead's
+  error was the expression; Chief's was wanting it to be true because it
+  matched the silent-substitution story already being told. Confirmation feels
+  like corroboration and is not.
+- **After changing behaviour, ask which existing tests *should* have gone red,
+  and treat "none did" as a finding about the suite.** A green suite following
+  a deliberate behaviour change is normally read as reassurance; invert it. This
+  found a component test that still passed only because its assertion was being
+  satisfied by a different element than the one it named — it had silently
+  stopped testing its own behaviour and would have passed forever.
+- **Evidence captures what was true when it ran; it must not pin the world in
+  place.** A verification script that hard-codes live counters as assertions —
+  deployment count, run count — goes red the next time reality moves, with no
+  defect present, and trains everyone to ignore it. Split it: structural
+  invariants as hard assertions, volatile counters recorded and reported.
+- **A guard that cannot fail is decoration; a test that cannot gate is
+  theatre.** Prove a guard bites by reintroducing the exact defect, confirming
+  the assertion goes red, then reverting — three times on 2026-08-06 that
+  caught real behaviour a code read would have gotten confidently wrong.
+  Corollaries seen the same night: passing unit tests around a component
+  nothing renders never typechecked its JSX (Chief shipped two invalid Badge
+  variants that way); a test asserting a branch no data can reach reads as
+  coverage while proving nothing; and tests that assert on local machine config
+  fail differently per machine, so they gate nothing at all.
+- **Verify capability at the layer that owns it, and say which layer you
+  checked.** Three layers, three wrong answers, one night: Chief inferred from
+  an MCP tool schema, a lead corrected it from the SDK types, then that lead
+  corrected itself by probing the installed binary. Source proves a thing
+  exists somewhere. A schema proves a field is accepted. Only the running
+  build proves it is honoured — read the state back.
+- **A defect in the data is invisible to code review, so it has to be written
+  down.** `isChiefDeployment` reads perfectly: a clear predicate, well named,
+  correctly implemented. It is wrong only because of what production contains —
+  zero segment matches, and one hosted persona that is a dispatcher. A future
+  agent grepping that function finds nothing to fix. Findings of this shape
+  live nowhere in the codebase by construction, so they belong in durable
+  memory the moment they are found, not after the fix. Both the agent that
+  found it and Chief wrote it down independently, which is the correct
+  redundancy.
+- **Never present a number whose meaning has not been verified.** "Chiefs: 1"
+  would have been false on stage: the one match was a Factory issue-routing
+  dispatcher, by Cloud's own description. Relabelling because the data means
+  something different is honest; widening a predicate until the count flatters
+  us is fabrication. When the data cannot support the claim, show the honest
+  gap — an empty lead renders as leaderless, which is true, and a fabricated
+  lead is the chart lying during a narration about accountability.
 - **A dispatch gate must fail closed.** AR-448 was duplicated because the
   writeback that releases the claim depends on Relayfile, Relayfile was down,
   the failure was non-fatal, and the run proceeded — leaving the issue looking

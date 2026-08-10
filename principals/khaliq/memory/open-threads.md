@@ -266,6 +266,113 @@
   preserves node id `node_5b46ac5e…` and the 60 agents of history attributed to
   it. `node.ts` reads `options.brokerName ?? enrolledNodeName`, which suggests
   enrollment carries identity and the name is metadata over it — but confirm it.
+- **There is no working agent credential revocation on installed relay 11.2.0
+  (2026-08-06).** Both paths fail. MCP `remove_agent` with `delete_agent: true`
+  returns `dispatched` and only releases the *process* — the record and token
+  survive, and a released agent still read `status=active` eleven minutes
+  later. `agent-relay agent remove <name>` fails server-side on every seat
+  tried with `Failed query: delete from "agents" where "agents"."id" = ?`,
+  hypothesised (unverified) as a foreign-key constraint from message and
+  presence history. One seat, `cloud-chief-command-deck-designer`, *is* absent
+  from the roster after the same call that failed for six others — unexplained
+  and worth explaining, since it is either the one thing that worked or a
+  different mechanism. Consequence: any policy requiring completed
+  revoke/rotate before release is currently unsatisfiable — revoke fails on a
+  constraint and rotate re-exposes through #1389. `relay-credential-invalidation-revoke-lead`
+  owns finding a real path; the target is a **minimal token-invalidate
+  operation that keeps historical records**, never hard deletion.
+- **finn-mini and barry both fail to run spawned agents while reporting
+  healthy (2026-08-06).** Four lanes lost: three on finn-mini with messages
+  stacking unconsumed, one on barry where the queue drained and nothing ran.
+  Both nodes advertise `online / live / handlers=true`. Node health is
+  self-reported and attests to nothing about whether dispatched work executes.
+  Investigate before trusting either machine with work again; the same claude
+  CLI ran correctly on `chief`, `kjg-laptop`, and `sf-mini` in the same window,
+  so it is the nodes and not the runtime.
+
+- **The delegation gate is a library with no production caller (chief#24).**
+  48 tests, name normalization, lead-before-fan-out, node pinning, rollup
+  aggregation — all enforced *in the lib*, and nothing in the chief repo calls
+  it, because dispatch happens when Chief-the-agent invokes the relay spawn
+  tool rather than through a code path. **A library nobody calls is a
+  convention with tests**, which is the defect the project existed to fix, one
+  level up. The lead conceded this against its own delivered work. Sequence
+  decided: Chief's operating doctrine mandates calling the gate before any
+  spawn (a convention, honestly labelled, and Chief *is* the caller), then the
+  enforcement point moves into the relay spawn path — the real fix, in the
+  lineage relay#1436 opened, after the demo. The PR body must state the
+  limitation so a future reader does not read 48 green tests as enforcement.
+- **"What makes something a Chief" is undefined in the data (2026-08-06).**
+  Two agents hit this independently from opposite ends. `CHIEF_SEGMENT`
+  (delimited "chief" in a deployed name or persona id) matches **zero** of 18
+  live deployments, so the shipped dashboard shows "Chiefs: 0".
+  `HOSTED_CHIEF_PERSONAS` matches exactly one — `cloud-factory-brain`, active,
+  9 runs — which Cloud's own record describes as routing approved Linear and
+  GitHub issues into the hosted Factory without merging or releasing. That is a
+  dispatcher, not a coordination layer. The danger is not the stat:
+  `isChiefDeployment` also feeds the lead tier, so the same predicate can put a
+  crown on that dispatcher and assert accountability that does not exist.
+  **This is a gap in convention, not in the data model** — corrected after an
+  initial, stronger claim that no structural field existed. `personas.intent`
+  is a real indexed column (`schema.ts:137`, `idx_personas_intent`,
+  `drizzle/0041`), and the deployments route already joins personas
+  (`route.ts:1036`), so exposing it is one line and no migration. Its live
+  values are `relay-orchestrator`, `review`, `cloud-sandbox-infra` — **nobody
+  has minted an `intent: "chief"`**. So the durable fix is small and additive,
+  and the real decision is a product one: what earns that value. `deploymentRole`
+  was still correctly deleted, because the real path does not run through it.
+  Standing rule until then: nothing earns a crown, and a lead tier that cannot
+  resolve an accountable lead from structural data shows no lead.
+- **The Cloud fleet APIs cannot be verified before they ship.**
+  `/api/v1/fleet/agents` 404s in production because the route ships in the PR
+  that adds it, and `/api/v1/fleet/nodes` 403s because both routes require a
+  session cookie while the CLI bearer token is rejected. With browser
+  automation unavailable, fleet capacity, the hierarchy, and readable names are
+  not production-verifiable pre-merge by any method — only post-deploy. Any
+  "verified 100%" condition on those items is unsatisfiable as literally
+  worded; it needs an explicit post-deploy check with a named rollback trigger.
+- **Factory run totals disagree and neither is substantiated.** A supervising
+  probe reported 87 runs; the delivery lead counted 50 against the same
+  production API. The payload exposes no cursor, so 50 is likely a capped
+  recent window rather than a total. Unresolved — do not display a run total
+  anywhere until it is.
+
+- **Identity metadata can be written today; only the atomic spawn write is
+  missing (2026-08-06).** Chief first reported this as "the platform has no
+  typed metadata" — wrong, and corrected by
+  `chief-delegation-governance-dispatch-lead`. `CreateAgentRequest.metadata`
+  and `UpdateAgentRequest.metadata` exist in the relay SDK, are normalized on
+  read, and are exposed through `register_agent`; 451 of 745 workspace agents
+  already carry metadata, and the fleet spawn path itself writes
+  `metadata.fleet`. The actual gap is that the **fleet spawn action schema does
+  not forward identity fields** and `add_agent` forwards only `{model}`, so
+  identity cannot be written *atomically at spawn*. Design: Chief writes it as
+  a mandatory second step that **fails closed** — if the write fails, abort and
+  reap the worker rather than leave it running unattributed — with a phase-2
+  relay PR adding passthrough. Canonical keys are `organization`, `project`,
+  `workstream`, `role`, plus `reportsTo` and source/run IDs; the consumer
+  (`packages/web/lib/fleet/agents.ts`) also accepts camelCase, snake_case,
+  `org`, `repo`/`repository`, and `task*` variants, but producers write the
+  canonical form only.
+- **Rotating a credential while `register_agent` still leaks it contains
+  nothing (2026-08-06).** The replacement re-enters the transcript at the next
+  registration, which metadata writes and recovery both require — so
+  rotate-then-continue is self-defeating, and so is "rotate after smoke" for
+  any seat that keeps running. The only sequences that actually contain are:
+  rotate at seat retirement, rotate with out-of-band delivery, or fix relay
+  **#1389** first. That issue is the exact match — `register_agent` returns the
+  live agent token in its reply, on a mandatory call — and it already records a
+  prior instance from 2026-07-30 with rotation requested. Related open issues:
+  #1379 (argv/logs/JSON), #1409 (redaction gaps), #1370 (CLI prints secrets),
+  #1059 (secrets in agent shell env). **Do not open a sixth**; add instances as
+  comments so the record stays in one place. Known-good pattern worth copying:
+  pipe the token into `curl --config -` on stdin so it never reaches argv and
+  cannot appear in `ps`.
+- **The workspace key leaked into this transcript again (2026-08-06).**
+  `agent-relay node status` printed `rk_live_…` twice — as `Workspace Key` and
+  inside the observer URL — on installed CLI 11.2.0. Relay PR #1405 addresses
+  the observer link; this is the plain status path on an older binary. Add to
+  the standing rotation batch and prefer `--json | jq` over bare `node status`.
 
 - **Chief was handed a program on Khaliq's authority, relayed by an agent, and
   is holding.** `sage-nightcto-factory-map-20260731` asked Chief to own the
