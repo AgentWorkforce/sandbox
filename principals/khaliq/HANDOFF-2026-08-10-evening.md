@@ -320,3 +320,79 @@ return, and that test must fail before the change.
 scratchpads and DMs into GitHub issues or `chief/evidence/`, return
 STATE / WHERE IT LIVES / NEXT. **Scratchpads and DMs do not survive.** Four
 finished deliverables were recovered from scratchpads today by luck.
+
+---
+
+## 8. SF-MINI IS NOW A SANDBOX — what was deleted, and what must not be
+
+**Disk: 24Gi → 38Gi free.** 38 repos removed. `sf-mini` is the designated sandbox: code
+context syncs via relayfile (fast, per the `ai-hist` experiments), repos are re-clonable.
+
+**The audit that gated it, and the number that misled me.** A first pass reported
+**~1,497 commits "unpushed"** across 20 repos. That framing was wrong. The commits are real
+but overwhelmingly **agent branch litter accumulated over five months**: hash-suffixed lanes
+(`agent/2860-option-a-infra-final-8fba`), bot autofixes (`msd-autofix/…`), finished
+experiments (`results/persona-migration`), and **merge commits of already-pushed work**,
+which carry no unique content. Newest in `relay` was Jul 21; `nightcto` Jul 19.
+
+**Counting commits measured the wrong thing. Recency and branch naming were the
+discriminating signals, and both were available from the start.**
+
+**The one real find: `factory`.** 11 commits dated **2026-08-08/09** — the `factory#223`
+triage work from the lane that reported three fixes "authorised and in progress" and went
+quiet. **It existed on exactly one disk.** Now pushed:
+`origin/factory-223-intake-0809c-work`, tip `5ad0854`.
+
+**Do NOT open a PR from that branch as-is.** It sits on an old base — diff against current
+`main` is **+1811 / −2335 across 27 files**, so it would read as a large regression. `#223`
+merged 08:36Z today, almost certainly squashed, which is why its commits read as orphans.
+**Rebase onto `main` first, then review what genuinely remains unmerged.**
+
+**Untracked files are never a reason to keep a repo here** — they are all `.integrations/`,
+relayfile mount projections and daemon state.
+
+**Deleting the `relay` repo was only safe because the wrapper change moved the broker off
+it.** Before that, `sf-mini`'s broker ran `relay/target/release/agent-relay-broker` from the
+repo checkout. Check what a broker actually executes before deleting its source tree.
+
+## 9. `agent-relay node status` IS NOT A LIVENESS INSTRUMENT ON THESE NODES
+
+It reported **`STOPPED` three separate times tonight for brokers that were provably live** —
+on `finn-mini` and twice on `sf-mini`. It resolves a project context from the cwd you run it
+in, which does not match how the wrappers launch (`--state-dir` under a neutral RUN_DIR).
+
+**The authority is the control-plane record**: `GET /v1/agents/<name>` with the workspace key,
+checking `status` and a `last_seen` within seconds. `pgrep agent-relay-broker` also returns 0
+for live brokers — the process name does not match.
+
+## 10. HERDR — resolved
+
+`herdr#3` **CLOSED**. It added a second copy of the agent-relay plugin into the fork; the code
+lives in `AgentWorkforce/herdr-relay-bridge`. `check-contributor` had been failing on it for
+17 days while every substantive check passed — **the gate was right, and nobody read it.**
+
+`herdr#4` **OPEN**, awaiting Khaliq: `chore: retire the agent-relay fork copy`, 12 files,
+−1333 lines, cherry-picked onto `master` (not `main` — that repo's default is `master`).
+`upstream` is `ogulcancelik/herdr`; never file there.
+
+## 11. THE MINT QUESTION — reframed, and smaller than it looked
+
+`auth.source` is `"session" | "token" | "service" | "relayfile"`, and `session` comes from
+`readSessionFromRequest` — **a logged-in human, not a machine credential**
+(`cloud/packages/web/lib/auth/request-auth.ts:18`). So `callerAllowsRequestedScopes` returning
+`true` for sessions (`relayfile-mount-session.ts:322-328`) is **not a hole in the scoped
+credential** — scoping a human who is already the owner is meaningless. The guard's real
+target, in its own comment, is stopping an `fs:read`-only JWT escalating to read+write.
+
+**So a minted scoped credential would be genuinely enforced.** The only true statement is
+narrower: minting a scoped key on a box that already holds a broader credential does not
+reduce that box's authority.
+
+**Decision rule: ask what the credential is FOR.** For *capability* — mint it; it is
+least-privilege on its own path. For *containment* — it achieves nothing while a session
+exists, and containment needs a mechanism, not a promise. "Never a cloud session on that box"
+had no monitor and no alarm; it broke silently and only a lane's spot-check caught it.
+
+**And it was never the sandbox prerequisite.** That credential is read-only senses
+(`/linear/**`, `/digests/**`). The sandbox needs something else entirely. I invented the
+dependency; there isn't one.
