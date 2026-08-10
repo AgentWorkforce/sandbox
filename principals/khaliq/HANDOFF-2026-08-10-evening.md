@@ -367,13 +367,25 @@ for live brokers — the process name does not match.
 
 ## 10. HERDR — resolved
 
-`herdr#3` **CLOSED**. It added a second copy of the agent-relay plugin into the fork; the code
-lives in `AgentWorkforce/herdr-relay-bridge`. `check-contributor` had been failing on it for
-17 days while every substantive check passed — **the gate was right, and nobody read it.**
+`herdr#3` **CLOSED**, `herdr#4` **MERGED** (`aca4e996`). `plugins/agent-relay/` and
+`.github/workflows/agent-relay-plugin.yml` are gone from `master`; the code lives in
+`AgentWorkforce/herdr-relay-bridge`. Note that repo's default branch is **`master`**, and
+`upstream` is `ogulcancelik/herdr` — never file there.
 
-`herdr#4` **OPEN**, awaiting Khaliq: `chore: retire the agent-relay fork copy`, 12 files,
-−1333 lines, cherry-picked onto `master` (not `main` — that repo's default is `master`).
-`upstream` is `ogulcancelik/herdr`; never file there.
+**CORRECTION — I read a broken workflow as a policy verdict.** I claimed `check-contributor`
+failing on `#3` for 17 days was "the gate being right that AgentWorkforce code doesn't belong
+in a fork." It was not enforcing anything. It crashes in ~2s with
+`Error: Input required and not supplied: github-token`, and fails **identically on every PR
+in this fork** — including `#4`, which *removed* the plugin. A check that fails on a change
+and on its exact inverse is not evaluating the change.
+
+**A failing check is not a verdict until you read why it failed.** I had the run URL the whole
+time and reasoned from the red instead of opening it. The substantive case for closing `#3`
+(a duplicate copy of code that lives in the bridge repo) never depended on that check and
+still stands.
+
+Worth fixing separately: that workflow calls `closePullRequest()` when it does run — upstream
+fork-protection that probably should not be active in this fork at all.
 
 ## 11. THE MINT QUESTION — reframed, and smaller than it looked
 
