@@ -10,7 +10,7 @@
     "doctor": "node scripts/chief-doctor.mjs",
     "validate": "node scripts/validate-config.mjs",
     "config:migrate": "node scripts/migrate-config.mjs",
-    "config:test": "node --test scripts/lib/chief-runtime.test.mjs",
+    "config:test": "node --test scripts/lib/chief-runtime.test.mjs scripts/lib/launchd.test.mjs",
     "factory:test": "node --test scripts/lib/factory-contract.test.mjs",
     "factory:bootstrap": "node scripts/factory-control.mjs bootstrap",
     "factory:status": "node scripts/factory-control.mjs status",

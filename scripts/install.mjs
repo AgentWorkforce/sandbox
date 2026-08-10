@@ -16,6 +16,7 @@ import {
   factoryRuntimeEnv,
   loadConfig,
 } from "./lib/chief-runtime.mjs";
+import { ensurePrivateLog, plist } from "./lib/launchd.mjs";
 
 const config = loadConfig();
 activeWorkspace(config);
@@ -25,63 +26,6 @@ function which(command) {
   return execFileSync("sh", ["-c", `command -v ${command}`], {
     encoding: "utf8",
   }).trim();
-}
-
-function xml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function plist({
-  label,
-  args,
-  stdout,
-  stderr,
-  environment = {},
-  startInterval = null,
-}) {
-  const array = args.map((arg) => `      <string>${xml(arg)}</string>`).join("\n");
-  const environmentEntries = Object.entries(environment)
-    .map(([key, value]) =>
-      `      <key>${xml(key)}</key>\n      <string>${xml(value)}</string>`
-    )
-    .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>${xml(label)}</string>
-    <key>ProgramArguments</key>
-    <array>
-${array}
-    </array>
-    <key>WorkingDirectory</key>
-    <string>${xml(REPO_ROOT)}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-${environmentEntries}
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    ${startInterval == null ? `<key>KeepAlive</key>
-    <dict>
-      <key>SuccessfulExit</key>
-      <false/>
-    </dict>` : `<key>StartInterval</key>
-    <integer>${startInterval}</integer>`}
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
-    <key>StandardOutPath</key>
-    <string>${xml(stdout)}</string>
-    <key>StandardErrorPath</key>
-    <string>${xml(stderr)}</string>
-  </dict>
-</plist>
-`;
 }
 
 const uid = process.getuid();
@@ -118,6 +62,7 @@ const allServices = [
     label: "com.agentworkforce.chief.senses",
     args: [process.execPath, join(REPO_ROOT, "scripts/chief-senses.mjs"), "run"],
     environment: serviceEnvironment,
+    resident: true,
     stdout: join(logs, "chief-senses.log"),
     stderr: join(logs, "chief-senses.err.log"),
   },
@@ -125,10 +70,13 @@ const allServices = [
     label: "com.agentworkforce.chief.node",
     args: [agentRelay, "node", "up"],
     environment: serviceEnvironment,
-    // node up has historically logged credentials. Keep launchd output out of
-    // persistent logs until the workspace-convergence task closes that leak.
+    resident: true,
+    // node up has historically logged credentials on stdout, so stdout stays
+    // out of persistent logs until the workspace-convergence task closes that
+    // leak. stderr goes to an owner-only log so a KeepAlive respawn loop is
+    // observable rather than silent.
     stdout: "/dev/null",
-    stderr: "/dev/null",
+    stderr: join(logs, "chief-node.log"),
   },
   {
     label: "com.agentworkforce.fleet-watchdog",
@@ -151,8 +99,10 @@ const services = cliArgs.has("--watchdog-only")
   : allServices;
 
 for (const service of services) {
+  ensurePrivateLog(service.stdout);
+  ensurePrivateLog(service.stderr);
   const path = join(launchAgents, `${service.label}.plist`);
-  writeFileSync(path, plist(service), { mode: 0o600 });
+  writeFileSync(path, plist({ ...service, workingDirectory: REPO_ROOT }), { mode: 0o600 });
   chmodSync(path, 0o600);
   try {
     execFileSync("launchctl", ["bootout", domain, path], { stdio: "ignore" });
