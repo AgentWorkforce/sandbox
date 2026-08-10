@@ -109,7 +109,15 @@ ACCEPTED, no rotation.** Four reviewers were right on the facts and overruled on
 risk, which is the principal's call. Treat as a decided risk acceptance, not an open
 finding. The detail below is history, kept only so nobody re-derives it.
 
-**The one live consequence — merge `#28` with `--squash`.** `opencode.json` is absent
+**FULLY CLOSED 19:33Z, verified on the artifact.** The squash-only gate was applied
+(`allow_merge_commit false`, `allow_rebase_merge false`), `#28` merged 19:25:14Z, and
+on `origin/main` (`e6eafa5`): `261db56` is **not** an ancestor, `opencode.json` is
+absent from the tree, and `git log origin/main -- opencode.json` is **empty** — the
+blob was never introduced to main at all. The accepted exposure stayed at the scope
+Khaliq actually ruled on. Leave the gate on; it costs nothing and removes a class of
+irreversible mistake from the repo that holds durable memory.
+
+**(historical) the live consequence was — merge `#28` with `--squash`.** `opencode.json` is absent
 from the net diff (add and delete cancel), so squash keeps `261db56` off `main`, while
 a merge-commit or rebase carries it onto `main` permanently. **That is currently a
 convention, not a gate:** `AgentWorkforce/chief` has `allow_merge_commit: true` and

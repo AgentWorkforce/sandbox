@@ -6,18 +6,23 @@ repos: [relayflows, agents, workforce, factory, chief]
 ---
 # Agent lifecycle & chore workflows — Nabis point 2
 
-**Status: QUEUED. Not dispatched. Recorded now so it is picked up when ready
-rather than rediscovered.**
+**Status: DISPATCHED 2026-08-10.** `lifecycle-workflows-lead-0810` is the first
+lead this workstream has actually had; the 2026-08-09 name never sent a message.
+Gap 2 is in flight via `lifecycle-gap2-dag-0810` (codex).
 
 **Goal:** Hand Julian a **template pack** assembled from parts we already ship,
 so he composes his own feature-lifecycle and chore workflows instead of building
 an engine.
 
 **Source of truth:**
-`~/.agentworkforce/workforce/sessions/customer-dev-msjgxbkb-71491b9d/mount/nabis/julian-fann/agent-lifecycle-workflows-spec.md`
-(87 lines, read it before planning anything). Confidentiality applies as it does
-to the SOC-2 epic — the customer belongs in `sales`, not in `factory`, `relay`,
-`relayauth` or `relayflows`, which are public.
+`/Users/khaliqgant/Projects/AgentWorkforce/sales/nabis/julian-fann/agent-lifecycle-workflows-spec.md`
+(87 lines, read it before planning anything). **The path this file used to cite —
+a `~/.agentworkforce/workforce/sessions/customer-dev-…/mount/` session dir — does
+not exist on this machine.** `lifecycle-workflows-lead-0810` found the live copy
+on 2026-08-10. **The SOC-2 workstream still cites the same dead directory for its
+own plan.** Confidentiality applies as it does to the SOC-2 epic — the customer
+belongs in `sales`, not in `factory`, `relay`, `relayauth` or `relayflows`, which
+are public.
 
 **This is Julian's point 2.** Point 1 is [[soc2-agent-traceability]], the
 identity, credentials and isolation substrate. **This workstream runs on top of
@@ -78,11 +83,25 @@ approval"* guarantee, and it depends on the SSO-bound principal that
 [[soc2-agent-traceability]] is building. **Do not start gap 3 before Hole 1
 lands** — an approval gate that trusts a forgeable sponsor approves nothing.
 
-## Four questions for Julian — the first blocks real work
+## Four questions for Julian — question 1 is RESOLVED BY RULING
 
-1. **Define CRE and preq** — his exact gates, inputs, and pass/fail criteria.
-   These are his internal terms and **everything downstream keys off them.**
-   Treat as pluggable review lanes until he says otherwise.
+1. ~~**Define CRE and preq**~~ — **CLOSED 2026-08-10 by Khaliq: *"he just wants
+   templates so let's take best guess for him."*** The terms appear **nowhere**
+   in any artifact we hold except our own spec — verified by a search across four
+   session mounts, the `sales` repo and every transcript, with the instrument
+   checked against a control term. They trace to one sentence on **7 Aug**, and
+   **no 7 Aug transcript exists on this machine**; Khaliq supplied the original
+   message directly. **Chief's best guess, to be built as swappable defaults:**
+   **CRE = Customer Reliability Engineering** (SLO and error-budget impact, blast
+   radius, rollback plan, monitoring and alerting coverage, runbook); **preq =
+   prerequisites** (migrations and their ordering, feature flags, dependency
+   versions and deploy order, required config and secrets, docs, recorded
+   sign-offs). Second candidate, unresolved: a compliance/regulatory review paired
+   with a pre-qualification checklist. **Build the checklist as a config file so
+   Julian's correction is one file, not a redesign** — a wrong-but-specific
+   default gets corrected in one sentence; an empty placeholder gets ignored.
+   **Also settled by the source: he asked for three review dimensions, not four**
+   — *"review (quality, security, CRE/preq)"*.
 2. Which repos and orgs the chore sweep runs against, and which maintenance
    classes he most wants automated first.
 3. Approval model: per-PR human click, or a scoped auto-approve policy. Ties
@@ -92,13 +111,30 @@ lands** — an approval gate that trusts a forgeable sponsor approves nothing.
 
 ## Next
 
-**Nothing until picked up.** When it is:
-
-1. Get answers to question 1 — CRE and preq — before designing the review fan-out.
-2. Build gap 2 first, since it is assembly of existing personas and proves the
-   shape.
-3. Hold gap 3 until Hole 1 lands in [[soc2-agent-traceability]].
-4. Gap 1 last; it is the only piece that needs a genuinely new agent.
+1. **Gap 2 in flight** — the reference feature-lifecycle DAG, with CRE and preq
+   as config-driven lanes carrying Chief's best-guess defaults and a visible
+   note that the semantics are inferred and expected to be replaced. Judge it by
+   exit codes and the artifact, never by a status line.
+2. **Gap 3: design now, deliver after Chief's SSO principal threading.** The gate
+   control-flow already exists — reviewer-preset agents resolved just-in-time,
+   fails closed. **Do not build a gate engine; bind an approver to the gate that
+   is already there.** Its dependency is only half-satisfied: Hole 1 gave us
+   OIDC-bound *sponsors*, and this gate needs an authenticated *approver*.
+3. **Prove or refute the approval-decision bypass — rated PLAUSIBLE, not
+   executed.** The decision is a regex over the reviewer's stdout
+   (`/REVIEW_DECISION:\s*(APPROVE|REJECT)/`, last match wins) with the
+   specialist's own output embedded verbatim in the reviewer's prompt. Existing
+   PTY-echo defenses filter one literal template string, which is a string-shape
+   guard, not authentication. **This is now directly load-bearing**: Julian led
+   with *"I don't feel comfortable running with pickup agents able to run
+   anything without approval."* **A gate that blocks control-flow and a gate that
+   authenticates its approver are two different things**, and only the second is
+   what he asked for.
+4. **Gap 1 last** — chore workflows, the only piece needing a genuinely new
+   agent. His own wording puts it second: *"would also be great."*
+5. Repair the remaining doc defects: `proactive-agent-builder` is a **workforce**
+   persona (`packages/personas-core/personas/proactive-agent-builder.json`), not
+   an `agents` template. The spec has this right; this file copied it wrong.
 
 ## History
 
