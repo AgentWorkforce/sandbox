@@ -66,6 +66,26 @@
   .dot.none { background: transparent; border: 1.5px solid var(--edge); box-shadow: none; }
 
   /* Tree: each child draws its own elbow so the spine stops at the last item. */
+  /* Disclosure rows: the twisty is the affordance, the whole card is the hit
+     target, and focus must be visible for keyboard navigation. */
+  .group-card { cursor: pointer; user-select: none; }
+  .twisty {
+    flex: none; width: 14px; text-align: center; color: var(--muted, #8b93a7);
+    transition: transform 120ms ease; transform: rotate(90deg);
+  }
+  .twisty::before { content: '\25B8'; }
+  .group-card.collapsed .twisty { transform: rotate(0deg); }
+  .org-card .name { font-weight: 700; letter-spacing: .02em; }
+  .project-card .name { font-weight: 650; }
+  [role="treeitem"]:focus { outline: none; }
+  [role="treeitem"]:focus > .card {
+    outline: 2px solid #5b8cff; outline-offset: 2px;
+  }
+  .tree-help { margin: 12px 0 0; font-size: 12px; }
+  .tree-help kbd {
+    font: inherit; padding: 1px 5px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06);
+  }
   ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
   ul.tree ul { padding-left: 30px; }
   ul.tree ul > li { position: relative; }
@@ -413,7 +433,8 @@
       <li><span class="dot none"></span> unseated</li>
     </ul>
 
-    <ul class="tree" id="tree"></ul>
+    <ul class="tree" id="tree" role="tree" aria-label="AgentWorkforce organization hierarchy"></ul>
+    <p class="sub tree-help">Organization and project rows expand their whole subtree. Arrow keys navigate, <kbd>Enter</kbd> or <kbd>Space</kbd> toggles.</p>
 
     <footer>View is read-only · Drive takes the wheel (your keystrokes go to the agent) · <code>Ctrl+]</code> detaches; queued messages flush on detach</footer>
   </section>
@@ -460,6 +481,7 @@
 <script>
 const NOT_ATTACHABLE = new Set(['unseated', 'pending-spawn']);
 let org = null;
+let hierarchy = null;
 let status = {};
 let executionLayers = [];
 
@@ -548,34 +570,218 @@ function principalCard(name) {
   return el;
 }
 
-function render() {
-  const byParent = new Map();
-  for (const a of org.agents) {
-    if (!byParent.has(a.reportsTo)) byParent.set(a.reportsTo, []);
-    byParent.get(a.reportsTo).push(a);
+// Collapse state is keyed by node id and survives a re-render, so the 5s poll
+// does not reopen everything the viewer just closed mid-demo.
+const collapsed = new Set();
+
+function groupCard(node) {
+  const el = document.createElement('div');
+  el.className = `card group-card ${node.kind}-card`;
+
+  const twisty = document.createElement('span');
+  twisty.className = 'twisty';
+  twisty.setAttribute('aria-hidden', 'true');
+
+  const id = document.createElement('div');
+  id.className = 'id';
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = node.label;
+  const title = document.createElement('div');
+  title.className = 'title';
+  // Criterion 2: the id/source is context, not the name.
+  title.textContent = node.kind === 'org'
+    ? `workspace · ${node.meta.principal || ''}`.trim()
+    : node.kind === 'project'
+      ? `project · ${node.meta.project}`
+      : node.meta.synthetic ? 'no workstream' : `workstream · ${node.meta.file}`;
+  id.append(name, title);
+
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  const workers = node.meta.workerCount ?? 0;
+  meta.textContent = `${workers} agent${workers === 1 ? '' : 's'}`;
+
+  el.append(twisty, id, meta);
+  return el;
+}
+
+// Workers reuse the existing agent card so status dots, live meta text, and
+// the View/Drive buttons keep working — the poll updates them by name.
+function workerCard(node) {
+  const agent = (org?.agents ?? []).find((a) => a.name === node.meta.agentName);
+  if (!agent) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.textContent = node.label;
+    return el;
+  }
+  // The tree shows the readable label; the raw name stays addressable in the
+  // card's own metadata and in the tooltip.
+  const el = card({ ...agent, title: agent.title || node.label });
+  const nameEl = el.querySelector('.name');
+  // `node.label` is already the declared title when there is one and the
+  // inferred label otherwise, so it is the readable name in both cases. Gating
+  // this on `inferredLabel` left every titled seat — most of the overlay — with
+  // the raw agent id as its primary name, which is what this block exists to
+  // stop.
+  if (nameEl) {
+    nameEl.textContent = node.label;
+    nameEl.title = node.meta.agentName;
+    el.dataset.rawName = node.meta.agentName;
+  }
+  return el;
+}
+
+function isExpandable(node) {
+  return (node.children ?? []).length > 0;
+}
+
+// Criterion 3: a top-level row opens or closes its *complete* subtree, not one
+// level. Deeper rows toggle themselves only.
+function setSubtreeCollapsed(node, shouldCollapse) {
+  if (!isExpandable(node)) return;
+  if (shouldCollapse) collapsed.add(node.id); else collapsed.delete(node.id);
+  for (const child of node.children) setSubtreeCollapsed(child, shouldCollapse);
+}
+
+function toggleNode(node, { wholeSubtree }) {
+  const willCollapse = !collapsed.has(node.id);
+  if (wholeSubtree) {
+    setSubtreeCollapsed(node, willCollapse);
+  } else if (willCollapse) {
+    collapsed.add(node.id);
+  } else {
+    collapsed.delete(node.id);
+  }
+  renderHierarchy();
+  focusTreeItem(document.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`));
+}
+
+function treeItem(node, level, position, setSize) {
+  const li = document.createElement('li');
+  li.setAttribute('role', 'treeitem');
+  li.setAttribute('aria-level', String(level));
+  li.setAttribute('aria-posinset', String(position));
+  li.setAttribute('aria-setsize', String(setSize));
+  li.dataset.nodeId = node.id;
+  li.dataset.kind = node.kind;
+  li.tabIndex = -1;
+
+  const expandable = isExpandable(node);
+  const isOpen = expandable && !collapsed.has(node.id);
+  if (expandable) li.setAttribute('aria-expanded', String(isOpen));
+
+  const body = node.kind === 'worker' ? workerCard(node) : groupCard(node);
+  if (expandable) body.classList.toggle('collapsed', !isOpen);
+  li.append(body);
+
+  if (expandable) {
+    // Top-level rows (the org and its projects) take the whole subtree with
+    // them; a click on a worker's own buttons must not toggle the row.
+    body.addEventListener('click', (event) => {
+      if (event.target.closest('button')) return;
+      toggleNode(node, { wholeSubtree: level <= 2 });
+    });
   }
 
-  const branch = (parentName) => {
-    const kids = byParent.get(parentName) || [];
-    if (!kids.length) return null;
-    const ul = document.createElement('ul');
-    for (const kid of kids) {
-      const li = document.createElement('li');
-      li.append(card(kid));
-      const sub = branch(kid.name);
-      if (sub) li.append(sub);
-      ul.append(li);
-    }
-    return ul;
-  };
+  if (expandable && isOpen) {
+    const group = document.createElement('ul');
+    group.setAttribute('role', 'group');
+    node.children.forEach((child, index) => {
+      group.append(treeItem(child, level + 1, index + 1, node.children.length));
+    });
+    li.append(group);
+  }
+  return li;
+}
 
+function visibleItems() {
+  return [...document.querySelectorAll('#tree [role="treeitem"]')];
+}
+
+// Roving tabindex: exactly one item is tabbable at a time.
+function focusTreeItem(item) {
+  if (!item) return;
+  for (const other of visibleItems()) other.tabIndex = -1;
+  item.tabIndex = 0;
+  item.focus();
+}
+
+function nodeById(id, node = hierarchy) {
+  if (!node) return null;
+  if (node.id === id) return node;
+  for (const child of node.children ?? []) {
+    const found = nodeById(id, child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function onTreeKeydown(event) {
+  const item = event.target.closest('[role="treeitem"]');
+  if (!item) return;
+  const items = visibleItems();
+  const index = items.indexOf(item);
+  const node = nodeById(item.dataset.nodeId);
+  const expandable = node && isExpandable(node);
+  const isOpen = expandable && !collapsed.has(node.id);
+  const level = Number(item.getAttribute('aria-level'));
+
+  const move = (target) => { event.preventDefault(); focusTreeItem(target); };
+
+  switch (event.key) {
+    case 'ArrowDown': return move(items[index + 1]);
+    case 'ArrowUp': return move(items[index - 1]);
+    case 'Home': return move(items[0]);
+    case 'End': return move(items[items.length - 1]);
+    case 'ArrowRight':
+      if (!expandable) return;
+      event.preventDefault();
+      if (!isOpen) toggleNode(node, { wholeSubtree: false });
+      else focusTreeItem(items[index + 1]);
+      return;
+    case 'ArrowLeft':
+      event.preventDefault();
+      if (expandable && isOpen) return toggleNode(node, { wholeSubtree: false });
+      // Already closed (or a leaf): step out to the parent row.
+      for (let i = index - 1; i >= 0; i -= 1) {
+        if (Number(items[i].getAttribute('aria-level')) < level) return focusTreeItem(items[i]);
+      }
+      return;
+    case 'Enter':
+    case ' ':
+      if (!expandable) return;
+      event.preventDefault();
+      return toggleNode(node, { wholeSubtree: level <= 2 });
+    default:
+  }
+}
+
+function renderHierarchy() {
   const tree = document.getElementById('tree');
-  tree.replaceChildren();
-  const root = document.createElement('li');
-  root.append(principalCard(org.principal.name));
-  const sub = branch(org.principal.name);
-  if (sub) root.append(sub);
-  tree.append(root);
+  if (!hierarchy) return;
+  const focusedId = document.activeElement?.closest?.('[role="treeitem"]')?.dataset.nodeId;
+  tree.replaceChildren(treeItem(hierarchy, 1, 1, 1));
+  const first = tree.querySelector('[role="treeitem"]');
+  if (first) first.tabIndex = 0;
+  if (focusedId) {
+    const restored = tree.querySelector(`[data-node-id="${CSS.escape(focusedId)}"]`);
+    // `replaceChildren` detaches the focused element, so focus falls back to
+    // the document. Making the replacement tabbable does not move focus back —
+    // without the focus() call the 10s poll ends keyboard navigation until the
+    // user tabs into the tree again. `focusedId` is only set when a tree item
+    // held focus, so this never steals it.
+    if (restored) {
+      for (const o of visibleItems()) o.tabIndex = -1;
+      restored.tabIndex = 0;
+      restored.focus();
+    }
+  }
+}
+
+function render() {
+  renderHierarchy();
 }
 
 function executionCard(layer) {
@@ -662,13 +868,15 @@ async function attach(name, mode, btn) {
 
 async function poll() {
   try {
-    const [runtimeResponse, statusResponse] = await Promise.all([
+    const [runtimeResponse, statusResponse, hierarchyResponse] = await Promise.all([
       fetch('/api/runtime'),
       fetch('/api/status'),
+      fetch('/api/hierarchy'),
     ]);
     const runtime = await runtimeResponse.json();
     status = await statusResponse.json();
     org = runtime.org;
+    hierarchy = await hierarchyResponse.json();
     executionLayers = runtime.executionLayers || [];
     render();
     renderExecution();
@@ -1321,6 +1529,7 @@ function showTab(tab) {
   if (tab === 'review') loadReview();
 }
 
+document.getElementById('tree').addEventListener('keydown', onTreeKeydown);
 document.getElementById('tabOrg').addEventListener('click', () => navigate('/org'));
 document.getElementById('tabExecution').addEventListener('click', () => navigate('/execution'));
 document.getElementById('tabProjects').addEventListener('click', () => navigate(buildProjectsHash()));

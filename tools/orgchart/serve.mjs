@@ -9,6 +9,11 @@ import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { loadConfig } from '../../scripts/lib/chief-runtime.mjs';
+// The naming convention has one owner. The org chart renders it; the dispatch
+// path in scripts/lib/delegation-identity.mjs defines it. Two copies would
+// drift, and a tree drawn from a different convention than the one dispatch
+// applies is a tree that lies.
+import { normalizeAgentName } from '../../scripts/lib/delegation-identity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1';
@@ -802,6 +807,284 @@ async function loadProjects(agents) {
   return projects;
 }
 
+// ------------------------------------------------------------------ hierarchy
+
+// The org chart is one tree: org → project → workstream → worker. Before this,
+// two models sat side by side — a `reportsTo` seat chain, and a flat project
+// list where agents attached to a workstream by repo basename — so a worker had
+// no representable parent task and there was no project tier at all.
+
+const ORG_NAME = 'AgentWorkforce';
+
+// Casings that must survive humanization. Without these, `ar-448` reads as
+// "Ar 448" and `cmo` as "Cmo".
+const LABEL_CASING = new Map(Object.entries({
+  ai: 'AI', api: 'API', ar: 'AR', cli: 'CLI', cmo: 'CMO', coo: 'COO',
+  ceo: 'CEO', crm: 'CRM', cso: 'CSO', cto: 'CTO', db: 'DB', dns: 'DNS',
+  gtm: 'GTM', pr: 'PR', rq: 'RQ', ui: 'UI', yc: 'YC', ws: 'WS',
+  // Repo names that are words in their own right.
+  nightcto: 'NightCTO', hoopsheet: 'HoopSheet', opencode: 'OpenCode',
+  prpm: 'PRPM', relayauth: 'RelayAuth', relaycast: 'Relaycast',
+  relayfile: 'Relayfile', agentworkforce: 'AgentWorkforce',
+}));
+
+// A trailing `-20260806` or `-2026-08-06` stamp, and a trailing `-v3`, are
+// provenance rather than name. They move to metadata so the label stays
+// readable — criterion 2, IDs live in metadata.
+const TRAILING_DATE = /-(\d{4})-?(\d{2})-?(\d{2})$/;
+const TRAILING_VERSION = /-v(\d+)$/i;
+
+function humanize(slug) {
+  const words = slug.split(/[-_.\s]+/).filter(Boolean);
+  if (!words.length) return '';
+  const spelled = words.map((word) => LABEL_CASING.get(word.toLowerCase()) ?? word);
+  const [first, ...rest] = spelled;
+  const head = LABEL_CASING.has(first.toLowerCase())
+    ? first
+    : first.charAt(0).toUpperCase() + first.slice(1);
+  return [head, ...rest].join(' ');
+}
+
+/**
+ * Turn an opaque spawn name into a readable label, lifting the parts that are
+ * really provenance into metadata.
+ *
+ * `codex/notion-portable-fleet-mount-20260806` carries source, task, and date
+ * fused into one string — which is exactly why such a name cannot be placed in
+ * a tree. Returns the readable remainder plus what was stripped.
+ */
+function inferWorkerLabel(name) {
+  const raw = String(name ?? '').trim();
+  if (!raw) return { label: '', source: null, date: null, version: null };
+
+  const slashed = raw.split('/');
+  const source = slashed.length > 1 ? slashed[0] : null;
+  let rest = slashed[slashed.length - 1];
+
+  let date = null;
+  const dateMatch = rest.match(TRAILING_DATE);
+  if (dateMatch) {
+    date = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+    rest = rest.slice(0, dateMatch.index);
+  }
+
+  let version = null;
+  const versionMatch = rest.match(TRAILING_VERSION);
+  if (versionMatch) {
+    version = `v${versionMatch[1]}`;
+    rest = rest.slice(0, versionMatch.index);
+  }
+
+  return { label: humanize(rest) || raw, source, date, version };
+}
+
+function workerNode(agent, projectId) {
+  const inferred = inferWorkerLabel(agent.name);
+  return {
+    kind: 'worker',
+    id: `worker:${agent.name}`,
+    // A declared title always beats an inferred one; inference exists for the
+    // opaque names that have no title at all.
+    label: (agent.title ?? '').trim() || inferred.label,
+    children: [],
+    meta: {
+      agentName: agent.name,
+      project: projectId,
+      status: agent.status ?? '',
+      live: Boolean(agent.live),
+      repo: agent.repo ?? '',
+      reportsTo: agent.reportsTo ?? '',
+      inferredLabel: !(agent.title ?? '').trim(),
+      source: inferred.source,
+      spawnedOn: inferred.date,
+      version: inferred.version,
+      normalizedName: null,
+    },
+  };
+}
+
+/**
+ * Build the single org → project → workstream → worker tree.
+ *
+ * A worker is placed under exactly one workstream — an org chart with the same
+ * person in four boxes is not a hierarchy. Additional matches are recorded in
+ * `meta.alsoIn` so nothing is silently dropped.
+ */
+function buildHierarchy({ principal, agents = [], projects = [] }) {
+  const projectIds = new Set();
+  for (const agent of agents) {
+    if (agent.repo) projectIds.add(basename(agent.repo));
+  }
+  for (const project of projects) {
+    for (const repo of project.repos ?? []) projectIds.add(repo);
+  }
+
+  const claimed = new Map(); // agent name -> first workstream node that took it
+  const nodes = [];
+  const sortedIds = [...projectIds].sort();
+  const perProject = new Map();
+
+  // Two passes, because a single pass lets one project's "Unassigned" bucket
+  // claim an agent before a later project's workstream — which it owns — is
+  // even looked at, and placement is first-claim-wins. Real workstreams claim
+  // first; only then does anything sweep up the remainder.
+  for (const projectId of sortedIds) {
+    const projectAgents = agents.filter((a) => a.repo && basename(a.repo) === projectId);
+    const workstreams = projects.filter((p) => (p.repos ?? []).includes(projectId));
+
+    const workstreamNodes = [];
+    for (const workstream of workstreams) {
+      const owner = workstream.owner ?? '';
+      // Ownership is independent of repo — `matchAgents` already encodes this
+      // ("!repoSet.has(repo) && name !== owner"). Filtering to projectAgents
+      // first would drop an owner who works from a repo the workstream does not
+      // list, so the owner is matched against every agent.
+      const matched = agents.filter((a) => a.name === owner
+        || (projectAgents.includes(a)
+          && (workstream.agents ?? []).some((m) => m.name === a.name)));
+
+      const children = [];
+      for (const agent of matched) {
+        const already = claimed.get(agent.name);
+        if (already) {
+          // One workstream spanning three repos renders under each of them, so
+          // an owner matched across all three would otherwise record the same
+          // file three times. `alsoIn` exists to name the *other* workstreams a
+          // worker belongs to, not the other copies of this one.
+          const seen = already.meta.workstream === workstream.file
+            || already.meta.alsoIn.some((e) => e.workstream === workstream.file);
+          if (!seen) {
+            already.meta.alsoIn.push({ project: projectId, workstream: workstream.file });
+          }
+          continue;
+        }
+        const node = workerNode(agent, projectId);
+        node.meta.alsoIn = [];
+        node.meta.workstream = workstream.file;
+        claimed.set(agent.name, node);
+        children.push(node);
+      }
+
+      workstreamNodes.push({
+        kind: 'workstream',
+        id: `workstream:${projectId}:${workstream.file}`,
+        label: workstream.title || workstream.file.replace(/\.md$/, ''),
+        children,
+        meta: {
+          file: workstream.file,
+          project: projectId,
+          status: workstream.status ?? '',
+          owner,
+          updated: workstream.updated ?? '',
+          tldr: workstream.tldr ?? '',
+          synthetic: false,
+        },
+      });
+    }
+
+    perProject.set(projectId, { projectAgents, workstreamNodes });
+  }
+
+  // Pass 2: workers no workstream claimed still belong on the chart. Grouping
+  // them keeps every worker at the same depth instead of hanging some off the
+  // project directly.
+  for (const projectId of sortedIds) {
+    const { projectAgents, workstreamNodes } = perProject.get(projectId);
+    const unclaimed = projectAgents.filter((a) => !claimed.has(a.name));
+    if (unclaimed.length) {
+      const children = unclaimed.map((agent) => {
+        const node = workerNode(agent, projectId);
+        node.meta.alsoIn = [];
+        node.meta.workstream = null;
+        claimed.set(agent.name, node);
+        return node;
+      });
+      workstreamNodes.push({
+        kind: 'workstream',
+        id: `workstream:${projectId}:unassigned`,
+        label: 'Unassigned',
+        children,
+        meta: {
+          file: null, project: projectId, status: '', owner: '',
+          updated: '', tldr: 'Workers in this project with no workstream.',
+          synthetic: true,
+        },
+      });
+    }
+
+    if (!workstreamNodes.length) continue;
+
+    // The workforce root checkout has the same basename as the org itself.
+    // Left alone it renders as "AgentWorkforce → AgentWorkforce", which reads
+    // like a bug; these are the org-wide seats.
+    const isOrgRoot = projectId.toLowerCase() === ORG_NAME.toLowerCase();
+
+    nodes.push({
+      kind: 'project',
+      id: `project:${projectId}`,
+      label: isOrgRoot ? 'Org-wide' : humanize(projectId),
+      children: workstreamNodes,
+      meta: { project: projectId, repo: projectId, orgRoot: isOrgRoot },
+    });
+  }
+
+  // An agent with no repo belongs to no projectId, so the per-project loop can
+  // never select it and it would vanish from the chart entirely. Overlays may
+  // legitimately declare a seat without a repo, and this tree promises to place
+  // every worker exactly once, so the leftovers get their own project.
+  const orphans = agents.filter((a) => !claimed.has(a.name));
+  if (orphans.length) {
+    const children = orphans.map((agent) => {
+      const node = workerNode(agent, null);
+      node.meta.alsoIn = [];
+      node.meta.workstream = null;
+      claimed.set(agent.name, node);
+      return node;
+    });
+    nodes.push({
+      kind: 'project',
+      id: 'project:unassigned',
+      label: 'Unassigned',
+      children: [{
+        kind: 'workstream',
+        id: 'workstream:unassigned:unassigned',
+        label: 'Unassigned',
+        children,
+        meta: {
+          file: null, project: null, status: '', owner: '',
+          updated: '', tldr: 'Workers with no repo and no workstream.',
+          synthetic: true,
+        },
+      }],
+      meta: { project: null, repo: null, orgRoot: false, synthetic: true },
+    });
+  }
+
+  const root = {
+    kind: 'org',
+    id: `org:${ORG_NAME}`,
+    label: ORG_NAME,
+    children: nodes,
+    meta: { org: ORG_NAME, principal: principal?.name ?? '' },
+  };
+  annotateCounts(root);
+  return root;
+}
+
+// The disclosure control announces how much it expands, so each node carries
+// its own subtree size.
+function annotateCounts(node) {
+  let total = 0;
+  let workers = 0;
+  for (const child of node.children ?? []) {
+    const counts = annotateCounts(child);
+    total += 1 + counts.total;
+    workers += (child.kind === 'worker' ? 1 : 0) + counts.workers;
+  }
+  node.meta = { ...node.meta, descendantCount: total, workerCount: workers };
+  return { total, workers };
+}
+
 // --------------------------------------------------------------- review queue
 
 // review/queue.md sections look like:
@@ -1120,6 +1403,16 @@ const server = createServer(async (req, res) => {
       return send(res, 200, await loadProjects(org.agents));
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/hierarchy') {
+      const org = await loadOrg();
+      const projects = await loadProjects(org.agents);
+      return send(res, 200, buildHierarchy({
+        principal: org.principal,
+        agents: org.agents,
+        projects,
+      }));
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/review') {
       return send(res, 200, await loadReviewQueue());
     }
@@ -1184,6 +1477,9 @@ if (isMain) {
 
 export {
   buildRuntimeOrg,
+  buildHierarchy,
+  inferWorkerLabel,
+  normalizeAgentName,
   executionLayersFromFleet,
   handleReviewNotifications,
   mergeRuntimeAgents,

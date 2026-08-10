@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import {
+  buildHierarchy,
   buildRuntimeOrg,
   executionLayersFromFleet,
+  inferWorkerLabel,
   mergeRuntimeAgents,
+  normalizeAgentName,
   normalizeWorkspaceAgents,
   readLocalBrokerStatus,
   readWorkspaceRuntime,
@@ -403,4 +406,191 @@ test('an overlay symlink cannot escape its allowlisted directory', async (t) => 
   assert.deepEqual(result.overlays.map((overlay) => overlay.principal.name), ['Built In']);
   assert.equal(result.warnings.length, 1);
   assert.match(result.warnings[0], /symlink outside allowlisted directory/);
+});
+
+// ------------------------------------------------------------------ hierarchy
+
+test('an opaque spawn name becomes a readable label with provenance in metadata', () => {
+  assert.deepEqual(inferWorkerLabel('codex/notion-portable-fleet-mount-20260806'), {
+    label: 'Notion portable fleet mount',
+    source: 'codex',
+    date: '2026-08-06',
+    version: null,
+  });
+  assert.deepEqual(inferWorkerLabel('relayfile-issue-388-impl-v3'), {
+    label: 'Relayfile issue 388 impl',
+    source: null,
+    date: null,
+    version: 'v3',
+  });
+  // A hyphenated date is the same provenance in a different shape.
+  assert.equal(inferWorkerLabel('chief/senses-doctor-2026-08-05').date, '2026-08-05');
+});
+
+test('humanized labels keep known acronyms rather than title-casing them', () => {
+  assert.equal(inferWorkerLabel('ar-448-durable-identity').label, 'AR 448 durable identity');
+  assert.equal(inferWorkerLabel('cmo-gtm-brief').label, 'CMO GTM brief');
+});
+
+test('inferring a label never returns empty for a name that has one', () => {
+  assert.equal(inferWorkerLabel('20260806').label, '20260806');
+  assert.equal(inferWorkerLabel('').label, '');
+});
+
+test('normalizeAgentName builds project-workstream-role and rejects partials', () => {
+  assert.equal(
+    normalizeAgentName({ project: 'cloud', workstream: 'YC demo', role: 'Impl' }),
+    'cloud-yc-demo-impl',
+  );
+  assert.throws(() => normalizeAgentName({ project: 'cloud', role: 'impl' }), /needs a project/);
+});
+
+const hierarchyFixture = () => ({
+  principal: { name: 'Khaliq' },
+  agents: [
+    { name: 'chief-khaliq', title: 'Chief of Staff', repo: '/w/chief', status: 'resident', live: true },
+    { name: 'codex/notion-ready-20260805', repo: '/w/factory', status: 'resident', live: true },
+    { name: 'drifter', title: 'Drifter', repo: '/w/relay', status: 'unseated' },
+  ],
+  projects: [
+    {
+      file: 'yc-demo.md', title: 'YC demo', status: 'active', owner: 'chief-khaliq',
+      repos: ['chief', 'factory'], updated: '2026-08-06', tldr: 'demo',
+      agents: [{ name: 'chief-khaliq' }, { name: 'codex/notion-ready-20260805' }],
+    },
+    // A second workstream in the same project that also matches chief-khaliq.
+    // This is the ordinary case — Chief owns several — and it is where the
+    // place-once rule actually has to do work.
+    {
+      file: 'chief-onboarding.md', title: 'Chief onboarding', status: 'active',
+      owner: 'chief-khaliq', repos: ['chief'], updated: '2026-08-04', tldr: 'onboarding',
+      agents: [{ name: 'chief-khaliq' }],
+    },
+  ],
+});
+
+test('the hierarchy is org over project over workstream over worker', () => {
+  const root = buildHierarchy(hierarchyFixture());
+  assert.equal(root.kind, 'org');
+  assert.equal(root.label, 'AgentWorkforce');
+
+  const projects = root.children.map((p) => p.label);
+  assert.deepEqual(projects, ['Chief', 'Factory', 'Relay']);
+  assert.equal(root.children.every((p) => p.kind === 'project'), true);
+
+  const chief = root.children.find((p) => p.label === 'Chief');
+  assert.deepEqual(chief.children.map((w) => w.kind), ['workstream', 'workstream']);
+  assert.deepEqual(chief.children.map((w) => w.label), ['YC demo', 'Chief onboarding']);
+  assert.deepEqual(chief.children[0].children.map((w) => w.kind), ['worker']);
+});
+
+test('a worker is placed once, and further matches are recorded not duplicated', () => {
+  const root = buildHierarchy(hierarchyFixture());
+  const all = [];
+  const walk = (n) => { if (n.kind === 'worker') all.push(n); (n.children ?? []).forEach(walk); };
+  walk(root);
+
+  const names = all.map((w) => w.meta.agentName);
+  assert.equal(new Set(names).size, names.length, 'no worker appears twice');
+
+  // chief-khaliq owns two workstreams in the chief project. It lands under the
+  // first and the second is recorded rather than growing a second box.
+  const chief = all.find((w) => w.meta.agentName === 'chief-khaliq');
+  assert.equal(chief.meta.project, 'chief');
+  assert.equal(chief.meta.workstream, 'yc-demo.md');
+  assert.deepEqual(chief.meta.alsoIn, [{ project: 'chief', workstream: 'chief-onboarding.md' }]);
+});
+
+test('a workstream spanning two projects appears under each, without cloning workers', () => {
+  const root = buildHierarchy(hierarchyFixture());
+  const under = (project) => root.children
+    .find((p) => p.label === project).children.map((w) => w.label);
+
+  assert.ok(under('Chief').includes('YC demo'));
+  assert.ok(under('Factory').includes('YC demo'));
+
+  // The workstream is shared; the people are not. Factory's copy holds only
+  // the factory-repo worker.
+  const factoryDemo = root.children
+    .find((p) => p.label === 'Factory').children.find((w) => w.label === 'YC demo');
+  assert.deepEqual(factoryDemo.children.map((w) => w.meta.agentName), ['codex/notion-ready-20260805']);
+});
+
+test('a worker no workstream claims still appears, grouped under Unassigned', () => {
+  const root = buildHierarchy(hierarchyFixture());
+  const relay = root.children.find((p) => p.label === 'Relay');
+  assert.deepEqual(relay.children.map((w) => w.label), ['Unassigned']);
+  assert.equal(relay.children[0].meta.synthetic, true);
+  assert.deepEqual(relay.children[0].children.map((w) => w.meta.agentName), ['drifter']);
+});
+
+test('declared titles win over inference, and IDs stay out of the label', () => {
+  const root = buildHierarchy(hierarchyFixture());
+  const factory = root.children.find((p) => p.label === 'Factory');
+  const worker = factory.children[0].children[0];
+
+  assert.equal(worker.label, 'Notion ready');
+  assert.equal(worker.meta.inferredLabel, true);
+  assert.equal(worker.meta.source, 'codex');
+  assert.equal(worker.meta.spawnedOn, '2026-08-05');
+  // The raw name is still addressable, just not the label.
+  assert.equal(worker.meta.agentName, 'codex/notion-ready-20260805');
+
+  const chiefWorker = root.children
+    .find((p) => p.label === 'Chief').children[0].children[0];
+  assert.equal(chiefWorker.label, 'Chief of Staff');
+  assert.equal(chiefWorker.meta.inferredLabel, false);
+});
+
+test('every node reports its own subtree size for the disclosure control', () => {
+  const root = buildHierarchy(hierarchyFixture());
+  assert.equal(root.meta.workerCount, 3);
+  const relay = root.children.find((p) => p.label === 'Relay');
+  assert.equal(relay.meta.workerCount, 1);
+  assert.equal(relay.meta.descendantCount, 2, 'one workstream plus one worker');
+});
+
+// --- review threads on #25 (chatgpt-codex-connector, 2026-08-06) ---
+
+test('a workstream owner is placed even when their repo is not in its repos', () => {
+  // P1: filtering to projectAgents dropped the owner before the owner predicate
+  // ran. matchAgents already treats ownership as independent of repo.
+  const root = buildHierarchy({
+    principal: { name: 'khaliq' },
+    agents: [{ name: 'khaliq-chief', repo: '/x/chief' }],
+    projects: [{
+      file: 'factory-live-dispatch.md',
+      owner: 'khaliq-chief',
+      repos: ['cloud', 'relay', 'relayfile'],
+    }],
+  });
+  const workers = [];
+  const walk = (n) => { if (n.kind === 'worker') workers.push(n); (n.children ?? []).forEach(walk); };
+  walk(root);
+  const owner = workers.find((w) => w.meta.agentName === 'khaliq-chief');
+  assert.ok(owner, 'the owner appears in the tree');
+  assert.equal(owner.meta.workstream, 'factory-live-dispatch.md');
+});
+
+test('an agent with no repo is placed under Unassigned rather than dropped', () => {
+  // P2: projectIds only ever came from repos, so a repo-less overlay seat could
+  // never be selected and vanished from the chart.
+  const root = buildHierarchy({ agents: [{ name: 'repo-less' }], projects: [] });
+  const workers = [];
+  const walk = (n) => { if (n.kind === 'worker') workers.push(n); (n.children ?? []).forEach(walk); };
+  walk(root);
+  assert.deepEqual(workers.map((w) => w.meta.agentName), ['repo-less']);
+});
+
+test('alsoIn records other workstreams, not other copies of the same one', () => {
+  const root = buildHierarchy({
+    principal: { name: 'k' },
+    agents: [{ name: 'lead', repo: '/x/chief' }],
+    projects: [{ file: 'spans.md', owner: 'lead', repos: ['cloud', 'relay', 'relayfile'] }],
+  });
+  const workers = [];
+  const walk = (n) => { if (n.kind === 'worker') workers.push(n); (n.children ?? []).forEach(walk); };
+  walk(root);
+  assert.equal(workers.length, 1, 'placed exactly once');
+  assert.deepEqual(workers[0].meta.alsoIn, [], 'one workstream is recorded once');
 });
