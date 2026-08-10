@@ -166,6 +166,15 @@ masking trap above still applies).
   moved underneath it. The same failure as the stale RelayAuth blocker recorded
   the same morning: a decision was held open against a world that had changed.
 
+- 2026-08-05 — RelayAuth minting recovered after five days, and the blocker
+  moved rather than cleared: senses now fail on flapping DNS to the file host,
+  with `/github` stuck since 01:42:48Z on a separate deadline-exceeded fault.
+  The doctor reported all-OK throughout because it asserted the mount and the
+  credential but never freshness; chief#17 adds the per-scope check.
+  Separately the AR-448 lineage decayed — #1413 merged 08-02, #1412 closed, and
+  both #1402 and #1403 now report `mergeable: CONFLICTING`. The decision now
+  costs a rebase, so deferring it is no longer free.
+
 - 2026-08-04 — The invariant still holds at boot: `default` resolves Relaycast,
   Relayfile, and RelayAuth to one `rw_7ccfea89` identity, broker CONNECTED with
   the resident attached. Both AR-448 PRs are still open and untouched, so the

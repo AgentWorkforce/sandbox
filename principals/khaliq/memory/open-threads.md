@@ -310,6 +310,23 @@
   Now unblocked and unowned: the AR-448 Linear checkpoint (needs the rewrite
   already decided on 08-04 — the lineage decision, not the stale "PR opened"
   body), and Factory writeback generally.
+- **Senses reconcile is unreliable, in two distinct ways (2026-08-05).**
+  First, DNS to the file host flaps: mounts fail with `dial tcp: lookup
+  file.agentrelay.com: no such host` while `curl` resolves it from the same
+  machine. A launchd kickstart
+  (`launchctl kickstart -k gui/501/com.agentworkforce.chief.senses`) buys a
+  clean reconcile and does not hold — linear was failing again five minutes
+  after one, while digests kept succeeding. Nobody owns this yet; it is below
+  Relayfile, in the host's resolution.
+  Second, **`/github` cannot reconcile at all** and is the harder failure. It
+  dies on cursor resolution with `context deadline exceeded`, from a fresh
+  process as readily as the resident one, so it is not the DNS fault. Last
+  successful reconcile 2026-08-05T01:42:48Z. Its outbox holds 77 pending
+  commands dating to 07-31 plus one failed on `superseded by newer local
+  content` — plausibly a backlog too large to drain inside the deadline, which
+  would make it self-sustaining. **Read every GitHub fact live via `gh`, never
+  from `senses/github/`, until this clears.**
+  Chief's half is done: the doctor now checks per-scope freshness (chief#17).
 - GitHub integration health resolved on its own: both installations read
   `ready` with events through 2026-08-03, and the doctor no longer reports
   `syncHealthy:false`. Nothing was done to fix it, so if it recurs, treat the
@@ -378,17 +395,29 @@
   or the PATH entry) instead of paying npx package resolution on every spawn,
   and/or raise the connect timeout. Secondary: `.claude/settings.json` allows
   `mcp__relaycast__*`, not `mcp__agent-relay__*` — confirm which server name is
-  canonical.
+  canonical. **Intermittent, not constant (2026-08-05):** this session came up
+  with the full `mcp__agent-relay__*` toolset working, so the timeout is a race
+  the resident sometimes wins. Do not treat missing relay tools as the settled
+  state; check before concluding Chief is mute.
+- **`broker` is not a registered agent, so Chief cannot DM it.** Every
+  `send_dm` to `broker` fails with `Agent "broker" not found`, and three
+  separate workers hit the same wall on 2026-08-04 before falling back to
+  `#general`. The broker spawns residents and hands them a task, but it does
+  not hold a Relaycast identity that can receive replies. **Post
+  broker-directed status to `#general`**, which is now the documented fallback
+  the whole team uses. Worth a relay-side fix so spawn instructions name a
+  reachable address.
 - **AR-448 was implemented twice and both PRs are open.** Relay #1402
   (`feat/ar-448-…`, khaliqgant, +959) and #1403 (`feature/ar-448-…`, kjgbot,
   +522) are independent implementations of the same issue, and both edit
   `packages/cli/src/cli/commands/workspace.ts` and its test, so they cannot
   both merge cleanly. #1402 goes wider (broker lifecycle plus a cloud
   convergence test); #1403 ships a `specs/durable-workspace-identity.md` and a
-  separate `durable-workspace-identity` lib. Two more open relay PRs sit in the
-  same code: #1412 (one broker-workspace precedence ladder) and #1413 (Cloud
-  workspace IDs discoverable from the CLI). Khaliq picks one lineage before any
-  of the four merges. **Root cause established 2026-07-31**, with the chain
+  separate `durable-workspace-identity` lib. The two neighbouring relay PRs in
+  the same code have since resolved on their own: **#1413 merged 08-02** (Will,
+  Cloud workspace IDs discoverable from the CLI) and **#1412 was closed**
+  (Will, one broker-workspace precedence ladder). Khaliq picks one AR-448
+  lineage. **Root cause established 2026-07-31**, with the chain
   evidenced end to end: Factory dispatched AR-448 at 22:56 and recorded the
   claim only in its own hosted state store
   (`factory-cloud-orchestrator.ts` dedupes on `stateStore.getIssue`, which no
@@ -409,6 +438,14 @@
   test evidence. Recommend harvesting those tests onto current main as a fresh
   PR and closing both. Unmet either way: the stop/start regression proof, which
   needs Khaliq at the keyboard because stopping the broker kills the resident.
+  **Status 2026-08-05:** the re-dispatch window is closed — AR-448 reads
+  `In Human Review`, still carrying `factory-ready`. Both PRs remain open and
+  untouched (#1402 last updated 07-30, #1403 07-31), and both now report
+  `mergeable: CONFLICTING` — read live from GitHub, because GitHub senses are
+  twelve hours stale. #1413 merging into the same code is the likely cause.
+  The decision is Khaliq's, outstanding six days, and it no longer merely
+  waits: every day adds rebase cost to whichever branch survives. Fleet
+  identity work should not build on either branch until it lands.
   **Status 2026-08-04:** the re-dispatch window is closed — AR-448 reads
   `In Human Review` in the senses projection, though that projection stopped
   refreshing 2026-07-31T08:13Z, so it is the last known state and not a live
@@ -433,9 +470,12 @@
   healthy, run
   `npm run factory:comment -- AR-448 factory-tasks/ar-448-pr-opened-checkpoint.md ar-448-pr-1402-opened`,
   confirm the receipt, then move AR-448 out of `Ready for Agent`.
-  **Still blocked 2026-08-04:** every mount session mint returns
-  `500 mount_session_failed` — five days now. The staged body also needs a
-  rewrite before it is posted: it announces "PR opened" for #1402, while the
-  issue has since moved to `In Human Review` with two competing PRs open. The
-  checkpoint Linear actually needs today is the lineage decision, not the one
-  staged on 07-31.
+  **Status 2026-08-05:** the mint blocker cleared — the mount holds a valid
+  credential and the Linear outbox is empty, so the writeback path is finally
+  testable. Two things still gate the post. The staged body is the superseded
+  "PR opened" text: the issue is in `In Human Review` with two conflicting
+  implementations, so the checkpoint Linear needs is the lineage decision, and
+  the body must be rewritten around it. And the reconcile loop is stalled, so a
+  draft would be staged against a projection that is not advancing. Confirm the
+  loop is live, rewrite the body, then post and move AR-448 out of
+  `Ready for Agent`.

@@ -60,6 +60,27 @@
   mount, the credential), never the supervisor around it. Same shape as the
   `broker` OK lesson above; a health check must assert the capability, not the
   process.
+- **A live mount is not a fresh projection — read the success cursor, not the
+  attempt cursor.** Fourth instance of one pattern: `broker` OK meant a
+  process, a senses supervisor pid meant a dead mount, and on 2026-08-05 a live
+  mount holding a valid credential was retrying and failing every sync. The
+  distinction that matters is `lastSuccessfulReconcileAt` versus
+  `lastReconcileAt` in `senses/<scope>/.relay/state.json`: the attempt cursor
+  advancing proves only that the loop is alive, and it is the success cursor
+  that says whether the bytes Chief reads are current. Check `lastError` too.
+  A first pass that watched only `lastReconcileAt` read a backoff gap as a dead
+  timer and got the mechanism wrong; the freshness conclusion was right for the
+  wrong reason, which is its own kind of error.
+- **A mount reporting `offline` while the network works is DNS, not the
+  platform.** On 2026-08-05 the senses mount failed syncs with
+  `dial tcp: lookup file.agentrelay.com: no such host` while `curl` resolved
+  that host from the same machine throughout. No credential or capacity work
+  was involved, and chasing RelayAuth would have been wasted effort. Resolution
+  flaps per scope and per moment — a launchd kickstart bought linear one clean
+  reconcile and it was failing again five minutes later, while digests kept
+  succeeding — so **a restart is symptomatic relief, not a fix**, and the
+  useful posture is to assume any given scope may be stale and check its
+  cursor before trusting a read.
 - **`lastSeen` is not purely a measurement — infrastructure batch-writes it.**
   Chief reported 25 agents "dying in the same second" at 2026-08-06T13:00:19Z.
   Two independent lanes falsified it: Relaycast's `inventory.sync` handler calls

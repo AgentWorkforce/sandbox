@@ -14,7 +14,7 @@ import {
   processIsAlive,
   publicWorkspace,
 } from "./lib/chief-runtime.mjs";
-import { credentialHealth } from "./lib/senses-health.mjs";
+import { credentialHealth, scopeFreshness } from "./lib/senses-health.mjs";
 import { watchdogHealth } from "./lib/watchdog-health.mjs";
 
 const config = loadConfig();
@@ -172,14 +172,46 @@ const mountRunning = supervisorState?.status === "running"
   && processIsAlive(supervisorState?.mountPid ?? null);
 const credentialExpiresAt = supervisorState?.credentialExpiresAt ?? null;
 const credential = credentialHealth(credentialExpiresAt);
-const sensesHealthy = sensesRunning && mountRunning && credential.healthy;
+
+// A healthy mount holding a valid credential still says nothing about whether
+// the projection is current. On 2026-08-05 every scope was retrying on
+// schedule and failing — senses/github sat twelve hours behind while this
+// check reported OK. Assert the freshness of what Chief actually reads, per
+// scope, from each mount's own success cursor.
+const sensesLocalDir = resolve(REPO_ROOT, config.senses.localDir);
+const scopeFreshnessByPath = {};
+for (const remotePath of config.senses.remotePaths ?? []) {
+  const scope = remotePath.replace(/^\/+/, "");
+  const state = readJson(join(sensesLocalDir, scope, ".relay/state.json"));
+  const verdict = scopeFreshness(state);
+  scopeFreshnessByPath[remotePath] = {
+    fresh: verdict.fresh,
+    problem: verdict.problem,
+    lastSuccessfulReconcileAt: state?.lastSuccessfulReconcileAt ?? null,
+    lastReconcileAt: state?.lastReconcileAt ?? null,
+    lastError: state?.lastError?.message ?? null,
+  };
+}
+const staleScopes = Object.entries(scopeFreshnessByPath)
+  .filter(([, verdict]) => !verdict.fresh)
+  .map(([remotePath]) => remotePath);
+
+const sensesHealthy = sensesRunning && mountRunning && credential.healthy
+  && staleScopes.length === 0;
 const sensesNext = sensesRunning
   ? (sensesHealthy
     ? null
-    : "Senses are not projecting external truth; anything under senses/ is a " +
-      "stale snapshot. Check `npm run senses:status` — a mint failing with " +
-      "500 mount_session_failed is the RelayAuth capacity incident, not a " +
-      "local fault.")
+    : staleScopes.length > 0 && mountRunning && credential.healthy
+      ? `The mount is up and the credential is valid, but ${staleScopes.join(", ")} ` +
+        "have not reconciled successfully inside their own staleAfter deadline, " +
+        "so anything read there is a stale snapshot. Check `lastError` in " +
+        "senses/<scope>/.relay/state.json. A DNS 'no such host' that the shell " +
+        "cannot reproduce is the long-running mount's own resolver state — " +
+        "restart it with `launchctl kickstart -k gui/501/com.agentworkforce.chief.senses`."
+      : "Senses are not projecting external truth; anything under senses/ is a " +
+        "stale snapshot. Check `npm run senses:status` — a mint failing with " +
+        "500 mount_session_failed is the RelayAuth capacity incident, not a " +
+        "local fault.")
   : "Start the senses supervisor: `npm run senses`.";
 result(
   "senses",
@@ -190,7 +222,9 @@ result(
     credentialExpiresAt,
     credentialHealthy: credential.healthy,
     credentialProblem: credential.problem,
-    localDir: resolve(REPO_ROOT, config.senses.localDir),
+    localDir: sensesLocalDir,
+    scopes: scopeFreshnessByPath,
+    staleScopes,
     state: supervisorState,
     next: sensesNext,
   },
