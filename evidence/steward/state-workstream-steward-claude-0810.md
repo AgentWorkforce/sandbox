@@ -50,6 +50,37 @@ settings changes. **Never restart `chief-broker`.**
 
 ---
 
+## ✅ CLOSED 20:27Z — `relaycast#320` loopback corruption, fixed and verified
+
+Commit `9a4fd683` landed 20:20:34Z, two minutes after the report. Verified on the file
+contents at the PR head, not on the bad string's absence: all seven sites back to
+`127.0.0.1` (compose bind and healthcheck, nginx `proxy_pass`, four in RUNBOOK), and
+`docker/package.json` still pins `@relaycast/engine` `8.0.0` — the real change survived.
+**A clean diff and a correct file are different claims.**
+
+Detail of what it was, kept so the mechanism is not re-derived:
+
+## (historical) `relaycast#320` loopback corruption — reported 20:18Z
+
+A global `7.0.0` → `8.0.0` replacement also rewrote **`127.0.0.1` → `128.0.0.1`**
+(`12` + `7.0.0` + `.1`). Open, not a draft, Khaliq's, `chore/self-host-image-8.0.0`.
+Seven hits; two are code, not docs:
+
+- `docker-compose.yml` host port bind `- 128.0.0.1:${RELAYCAST_PORT:-8787}:8787` →
+  **the container cannot bind and will not start**
+- `docker-compose.yml` healthcheck fetches `http://128.0.0.1:8787/health` → outward
+- `docs/self-hosting.md` nginx `proxy_pass http://128.0.0.1:8787;` → forwards user
+  traffic off-box, and `relaycast` is PUBLIC so self-hosters copy it verbatim
+- `RUNBOOK.md` × 4 including a `POST /v1/workspaces` and a cloudflared `service:` target
+
+**Fix: revert those four files' `128.0.0.1` → `127.0.0.1`. Nothing else in #320 changes.**
+
+The rest of #320 is good and closes cubic's P3 on #317 (the last of my nine review
+threads): it updates all six version-pin sites, and the `Dockerfile` derives its
+`org.opencontainers.image.version` / `io.relaycast.engine.version` labels from
+`ARG RELAYCAST_ENGINE_VERSION` with a **build-time assertion** that `package.json`'s pin
+matches — a real gate, not a convention.
+
 ## OPEN
 
 **Both parked-process wakes still unanswered.** `factory-lead` (nothing since
