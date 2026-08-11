@@ -487,8 +487,11 @@ export function processIsAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // EPERM means the pid exists but is owned by another user, not that it
+    // is dead. Treating EPERM as "dead" risks two live supervisors both
+    // believing the lease is free.
+    return error?.code === "EPERM";
   }
 }
 

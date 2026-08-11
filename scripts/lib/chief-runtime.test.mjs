@@ -10,7 +10,32 @@ import {
   factoryRuntimeEnv,
   loadConfig,
   migrateLegacyRoster,
+  processIsAlive,
 } from "./chief-runtime.mjs";
+
+test("processIsAlive treats EPERM as alive, not dead", (t) => {
+  // EPERM means the pid exists but is owned by another user; misreading it
+  // as dead risks two live supervisors both winning the same lease.
+  t.mock.method(process, "kill", () => {
+    const error = new Error("kill EPERM");
+    error.code = "EPERM";
+    throw error;
+  });
+  assert.equal(processIsAlive(555), true);
+});
+
+test("processIsAlive treats ESRCH as dead", (t) => {
+  t.mock.method(process, "kill", () => {
+    const error = new Error("kill ESRCH");
+    error.code = "ESRCH";
+    throw error;
+  });
+  assert.equal(processIsAlive(999_999), false);
+});
+
+test("processIsAlive is true for the current live process", () => {
+  assert.equal(processIsAlive(process.pid), true);
+});
 
 test("configured integration providers follow scoped senses paths", () => {
   assert.deepEqual(
