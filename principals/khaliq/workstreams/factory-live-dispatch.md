@@ -1,12 +1,36 @@
 ---
 status: active
-owner: factory-live-lead-0810
-updated: 2026-08-10
-repos: [cloud, relay, relayfile]
+owner: chief
+updated: 2026-08-11
+repos: [factory, cloud, relay, relayfile]
 ---
 # Factory live dispatch
 
-**2026-08-10: `factory#225` merged (`40f9be5ec4`) and `factory#223` merged (`67a5a57b4a`) as Khaliq's Option A split — routed-PR intake and discovery only, activation disabled, execution half removed rather than flagged off. Lifecycle design tracked in `factory#230`, unlabelled and unowned.**
+**2026-08-11 19:12Z — `factory#232` MERGED by Khaliq (18:05:56Z, `18a9e86`),
+superseding the "draft, untouched" line below. Chief then merged `factory#234`
+(19:11:54Z, `5971ab4`, rebase), a mechanical reconciliation PR: the
+`@agent-relay/factory@0.1.58` publish workflow (run `31523445478`) had already
+succeeded — npm publish and git tag both landed — but its final push to `main`
+failed on branch protection. `#234`'s commit carries an identical tree/parent to
+the already-tagged release commit, so merging only reconciles `main` to match
+what npm already serves; it does not trigger a new publish. Verified before
+merging: CI 7/7 green, `mergeStateStatus: CLEAN`, repo requires 0 approving
+reviews. Within tonight's PR-shepherding scope.**
+
+**2026-08-11: replacement Chief `chief-barry-codex-0811-1440` completed and
+pushed the first bounded `factory#230` implementation slice on
+`codex/factory-230-generation-cas` at
+`0024c6b0cf32595d19b9c24b8e6f8d73375fdd63`.** The slice adds atomic
+`markRunning`, generation-fenced renewal, one-shot durable completion CAS,
+get/clear operations, persisted generation parsing, and cross-process file-lock
+coverage across both state stores. Focused proofs passed 2/2, the full file
+suite passed 21/21, build passed, and `git diff --check` passed. The remote SHA
+byte-matched. Draft [Factory PR #232](https://github.com/AgentWorkforce/factory/pull/232)
+now carries the exact head for review. No merge, activation flip, deploy, or
+publish was performed. Remaining issue scope is Factory lifecycle wiring/local
+claim-map integration and pending-spawn recovery.
+
+**2026-08-10: `factory#225` merged (`40f9be5ec4`) and `factory#223` merged (`67a5a57b4a`) as Khaliq's Option A split — routed-PR intake and discovery only, activation disabled, execution half removed rather than flagged off. Lifecycle design is tracked in `factory#230`.**
 
 
 **Goal:** A ready human-owned Linear issue safely dispatches a Cloud Factory
@@ -61,6 +85,10 @@ Sage's activation gate 2 is separate and Sage-specific.
 
 ## History
 
+- 2026-08-11 — A replacement Chief on `barry` took direct ownership after the
+  inactive `factory-230-lead-0811` was released, pushed the generation/token +
+  CAS StateStore slice at `0024c6b`, opened draft Factory PR #232, and left
+  activation and rollout untouched for review.
 - 2026-08-07 — Audited the live pipeline for the first time since 07-30 and
   found the eligible/inert split (4 of 21). Also asserted, wrongly, that no node
   could host a Factory workload; Khaliq falsified it the same day and the Now

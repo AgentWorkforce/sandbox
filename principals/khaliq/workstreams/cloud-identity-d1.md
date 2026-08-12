@@ -1,7 +1,9 @@
 ---
 status: active
-owner: cloud-identity-d1-lead-0810
-updated: 2026-08-10
+owner: unassigned
+previous_owner: cloud-identity-lead-0811v3
+reports_to: soc2-program-lead-0811
+updated: 2026-08-11
 repos: [cloud, relayauth]
 ---
 # Cloud identity of record — Durable Objects to D1
@@ -63,6 +65,26 @@ A `cloud` merge fires a full-SST production deploy.
 
 ## History
 
+- 2026-08-11 cleanup checkpoint — the design note and full reader/writer
+  enumeration are durable. `cloud-identity-lead-0811v3` was explicitly idle,
+  waiting 156 minutes with zero pending messages, and was released. The next
+  action remains Khaliq's migration-readiness/backfill ruling; no production
+  migration was performed.
 - 2026-08-09 — Opened and given a lead on Khaliq's instruction, after
   `cloud-attestation-storage-0809` flagged the split store while implementing
   `attestations` for `@relayauth/* 0.2.28`. See [[soc2-agent-traceability]].
+- 2026-08-11 — `cloud-identity-lead-0811v3` appointed after prior placement
+  failures (sf-mini dropped 3x, local v2 received no task brief). First
+  deliverable: design note at `chief/evidence/cloud-identity-d1-design-note-0811.md`.
+  Key findings: (1) cloud#2981 MERGED 2026-08-10, ledger-first already landed.
+  (2) DO serialization rationale established — single-writer per identity, no
+  row locks needed, `blockConcurrencyWhile()` for schema safety. (3) IDENTITY_DO
+  readers/writers enumerated: 7 DO paths (get/create/update/delete/suspend/retire/
+  reactivate), 6 D1-direct paths (list/findDuplicate/loadOrgBudget/listChildIds/
+  listChildren/getStatusCounts), plus DO-internal D1 write (audit_events).
+  (4) D1 delivers true atomicity post-migration via D1.batch(); ledger-first
+  needed regardless during transition. (5) Migration is reversible through
+  step 5 (target flip) while DO instances survive. (6) Zero `INTO identities`
+  hits confirmed — D1 identities table populated only by migration process.
+  Awaiting Khaliq approval for next step: assess whether D1 migration readiness
+  criteria are met or a full backfill is required.

@@ -1,7 +1,7 @@
 ---
-status: active
+status: retired
 owner: herdr-lead-0810
-updated: 2026-08-10
+updated: 2026-08-11
 repos: [herdr-relay-bridge, herdr, relayfile, relay, sandbox, cloud]
 ---
 # Herdr fleet surface
@@ -577,6 +577,11 @@ team layer: named agents that message each other, a registry of callable actions
 and a Chief that dispatches and queries. Nothing in the 521 has it.
 
 ## History
+
+- 2026-08-11 — **Retired.** Status corrected from `active` to `retired` — the
+  frontmatter was stale; herdr was actually retired in a prior session
+  (`91a8a17 docs(brain): herdr retired`), before tonight's run started. Caught
+  during a full workstream status sweep at Khaliq's request.
 
 - 2026-08-10 — **State audit after the lead went silent; workstream confirmed
   alive.** Every artifact re-verified against its own repository rather than

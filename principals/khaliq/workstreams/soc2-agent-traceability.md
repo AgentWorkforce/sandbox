@@ -1,6 +1,7 @@
 ---
 status: active
 owner: soc2-lead-0810
+reports_to: soc2-program-lead-0811
 updated: 2026-08-10
 repos: [relayauth, factory, chief, relay, relaycast-cloud]
 ---
@@ -256,6 +257,75 @@ There is no longer an unaudited identity-creation path.
 **Blast radius, established before merging:** `publish.yml` is
 `workflow_dispatch` only, so both merges landed commits and **shipped nothing**.
 Migration `0007` has not reached production; RelayAuth production is unchanged.
+
+## MERGED — relayauth#79, 2026-08-11 09:37Z (merge commit ebc20a70eb)
+
+**`relayauth#79` "feat(server): add sessionRef to attestation grants (RA-4 session provenance)"** — merged by Khaliq at 09:37:24Z. Squash commit `ebc20a70eb` on main. Publish Packages workflow running on `ebc20a70eb` (run 31478568429).
+
+**What it does:** adds optional `sessionRef` to attestation grants (migration 0009, ALTER TABLE ADD COLUMN session_ref TEXT). The ai-hist session UUID now rides through to every per-commit JWS payload, completing the chain: `commit → attestation ledger → OIDC-bound human → session → reasoning`.
+
+**Published:** `@relayauth/*` 0.2.29 live on npm (all 5 packages). Cloud bump PR: **cloud#2989** (chore/relayauth-0.2.29-bump, awaiting Khaliq merge).
+
+---
+
+## FORMERLY IN REVIEW — relayauth#79, 2026-08-11 06:00Z (3 commits, CI green)
+
+**`relayauth#79` "feat(server): add sessionRef to attestation grants (RA-4 session provenance)"** — opened by `soc2-lead-0811b`, 3 commits, all CI workflows green (SDK Contract Check ✓, CI ✓, CodeRabbit ✓). Awaiting Khaliq merge.
+
+- Commit 1 (`3e917af`): core feature — migration 0009, storage, routes, tests
+- Commit 2 (`c32f536`): bot fixes — 6 missing trajectory files staged, ledger entry assertions added to tests
+- Commit 3 (`dc5bee31`): cubic P3 fix — `verifyJws(grantLedgerRow.jws)` absence check in 'without sessionRef' test
+
+**What it does:** adds optional `sessionRef` to attestation grants so the ai-hist session UUID rides through to every per-commit JWS payload. Completes the chain: `commit → attestation ledger → OIDC-bound human → session → reasoning`. Migration 0009 (ALTER TABLE ADD COLUMN session_ref TEXT, nullable).
+
+**Stale branches cleanup:** `soc2-ra1-grant-finalize` and `soc2-ra2-ledger` remain on origin unmerged, both based on v0.2.26 (pre-#75/76/77). Their net new value was `sessionRef` (now delivered in #79) and stricter ledger CHECK constraints (deferred). They can be deleted after #79 merges.
+
+## MERGED — cloud#2989, 2026-08-11 (relayauth 0.2.29 bump)
+
+**`cloud#2989` "chore: bump @relayauth/* to 0.2.29"** — merged by Khaliq. Branch `chore/relayauth-0.2.29-bump`.
+
+**What it does:** Admits migration `0009_attestation_grants_session_ref` (the `session_ref` column from relayauth#79) into cloud's migration preflight guard, updates the SST worker bundle marker in `packages/relayauth/src/worker.ts`, and corrects the lockfile workspace entry for `packages/relayauth`.
+
+**CI fixes required (all mechanical):**
+- `tests/relayauth-gc-infra.test.ts` — version pin `0.2.28→0.2.29` in test name + `expectedVersion`
+- `packages/relayauth/scripts/source-migration-preflight.mjs` — admitted `0009_attestation_grants_session_ref` with checksum `0a92a91b4ab6d38012bb170ad95a723f838274109f26699c3f8c1d3152091aa6`
+- `packages/relayauth/src/__tests__/source-migration-preflight.test.ts` — `deepStrictEqual` snapshot updated to include `0009`
+- `packages/relayauth/src/worker.ts:13` — bundle marker updated `0.2.28→0.2.29`
+- `package-lock.json` — workspace entry `packages/relayauth` dependency corrected `0.2.28→0.2.29`
+
+**The server, spawner, and deployment portions are merged and live:**
+- relayauth#79 — `session_ref` column in attestation grants ledger ✅
+- relay#1477 — spawner injects `RELAY_ATTEST_SESSION_ID`, stamps `Session-Id:` git trailer ✅
+- cloud#2981 — ledger-first ordering ✅
+- cloud#2987 — Option A dual-write D1 projection ✅
+- cloud#2989 — 0.2.29 bump + migration admitted ✅
+
+**Chain complete as of 2026-08-11.** factory#233 merged — sessionRef forwarding live in `src/writeback/github.ts` (`postAttestationGrant` now accepts per-agent sessionRef, falls back to env var, with 5s AbortSignal timeout). All six links merged and deployed. The full path `commit → attestation ledger → OIDC-bound human → session → reasoning` is end-to-end.
+
+## Agent cleanup checkpoint — 2026-08-11 15:48 CEST
+
+GitHub was rechecked: `relayauth#79` merged 09:37Z, `relay#1477` merged, and
+`cloud#2989` merged 12:41Z with its relevant checks green. The two local
+specialist sessions (`soc2-lead-0811b` and
+`relay-attest-session-lead-0811`) were both bridge-waiting with no pending
+messages and were released. `soc2-program-lead-0811` remains active. The
+durable next engineering action is the Factory `sessionRef` forwarding link
+above, not another relayauth or relay implementation lane.
+
+---
+
+## MERGED — relay#1477, 2026-08-11 09:23Z (merge commit dd16bba76b)
+
+**`relay#1477` "feat(broker): wire session attribution into commit attestation"** — merged by Khaliq at 09:23:37Z. Squash commit `dd16bba76b` on main. 10/10 CI checks green on `e4fe62483`.
+
+**What it does (spawner half):**
+- `CommitAttestation.session_ref: Option<String>` (wire key: `sessionRef`)
+- `with_commit_attestation_env()` injects `RELAY_ATTEST_SESSION_ID` when present+valid; strips stale inherited value before re-injection (security fix)
+- `PREPARE_COMMIT_MSG_HOOK` stamps `Session-Id: $RELAY_ATTEST_SESSION_ID` in attestation block
+- `broker_payload_from_action` uses `find_map` across four key aliases (`session_ref` → `sessionRef` → `session_id` → `sessionId`), matching the canonical fleet on-wire format in `relaycast_spawn_session_ref`
+- 897/897 broker tests pass, 14 new tests covering session_ref injection, stale strip, key aliasing, and blank-value fallthrough
+
+**Relay gap closed.** relayauth#79 (ledger half) + relay#1477 (spawner half) together deliver the full chain. **Factory still needs one change**: `POST /v1/attestations/grants` must forward `sessionRef` from the fleet spawn spec — noted for Chief routing.
 
 ## History
 

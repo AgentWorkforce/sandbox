@@ -21,3 +21,10 @@ relay-1467/
 
 # Per-machine opencode runtime config — carries live credentials, never tracked
 opencode.json
+
+# Per-machine native-runtime session scratch dirs (created as a side effect
+# of `agent-relay node agent spawn --runtime native`), and any stray repo
+# clones agents make directly in this working tree instead of elsewhere.
+claude-code-native-*/
+.agent-runs/
+relayfile-helm-charts/

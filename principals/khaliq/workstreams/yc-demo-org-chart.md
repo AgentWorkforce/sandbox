@@ -1,7 +1,7 @@
 ---
 status: done
-owner: chief-khaliq-successor-20260806
-updated: 2026-08-06
+owner: orgchart-dashboard-lead-0811
+updated: 2026-08-11
 repos: [cloud, relaycast, chief]
 ---
 
@@ -91,3 +91,52 @@ The title defect is fixed — `"Chief of Staff"` went from 77 occurrences to 1.
   migration dropped its timer. relaycast #306 restores it.
 - Retracted my own proposal to filter on missing `nodeId` — 37 live agents,
   including Khaliq's production automation, carry none.
+
+## 2026-08-11 Resurrection — orgchart-dashboard-lead-0811
+
+**Dashboard restored 10:31Z.** URL: http://localhost:3100/cloud/dashboard/chief/variants/07
+
+**Root cause of 7753+ crash loops:** launchd plist `WorkingDirectory` pointed to
+`cloud-worktrees/yc-chief-variants-aggregate/packages/web` — a worktree that was
+cleaned up after the demo. LaunchD sets the working directory before executing
+`runtime-prod.sh`; a missing directory causes an immediate failure. Since
+`KeepAlive=true` and `ThrottleInterval=5`, it retried every 5s for 7753+ attempts.
+
+**The immutable release was fully intact.** Release `296ddc806` at
+`~/Library/Application Support/AgentWorkforce/yc-demo-3100/releases/` had:
+- `packages/web/.next` — complete Next.js build ✓
+- `node_modules/next/dist/bin/next` ✓
+- `current` symlink pointing correctly to it ✓
+
+`runtime-prod.sh` handles its own `cd` into the release; the plist's
+`WorkingDirectory` only needs to be a directory that exists.
+
+**Fix applied:**
+1. `service.sh stop` (bootout)
+2. Changed plist `WorkingDirectory` from the dead worktree to
+   `~/Library/Application Support/AgentWorkforce/yc-demo-3100` (the service's
+   own stable directory — always exists)
+3. `plutil -lint` confirmed plist valid
+4. `service.sh start` (bootstrap)
+5. Service came up in ~8s. First curl: 200/171KB.
+
+**Final health check:**
+```
+UP checked_at=2026-08-11T10:31:57Z http=200 bytes=166958 principal=Khaliq_Gant
+agent_rows=6 reports_refs=280 collapsed_controls=8
+url=http://localhost:3100/cloud/dashboard/chief/variants/07
+```
+All bars green.
+
+**Dependency :4780** was alive throughout — not a factor.
+
+**Fast-follow (unowned, unscheduled):** The dashboard shows Aug 6 snapshot data
+(6 agents). Showing tonight's real org (delivery-lead, soc2-program-lead,
+agent-coordination-lead sub-lead structure) would require a new build + promote
+via `promote-head.sh` from a new `yc-chief-variants-aggregate` worktree.
+No worktree currently exists for that; would need to be created first.
+
+**Cleanup checkpoint, 2026-08-11 15:48 CEST:** the dashboard remained the
+verified completed deliverable. `orgchart-dashboard-lead-0811` had been idle as
+instructed for 150 minutes with no pending messages and was released; the
+fast-follow remains deliberately unowned.

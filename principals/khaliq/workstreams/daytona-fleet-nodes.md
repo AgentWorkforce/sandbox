@@ -1,11 +1,97 @@
 ---
 status: active
-owner: daytona-lead-0810
-updated: 2026-08-10
+owner: daytona-mount-proof-0811
+previous_owner: daytona-relayfile-closeout-barry-0811
+reports_to: chief
+updated: 2026-08-11
 repos: [cloud, relay]
 ---
 
+## 2026-08-11 19:26Z — production deploy blocker CLEARED
+
+Deploy run `31526176137` (headSha `935178de`) **succeeded**. Root cause of the
+`TranscriptionWorkerServiceToken` failure (prior runs `31516360915`,
+`31522436779`) was cloud#2994: the secret had no constructor default, so
+`sst diff`'s read-only preflight (seed-sst-secrets disabled by design) threw
+`SecretMissingError` before a deploy could even be evaluated — production had
+never had `sst secret set TranscriptionWorkerServiceToken` run. Fix follows the
+same pattern already used for `LinearWebhookSecret`: an "unset" placeholder
+default so diff/plan always resolves, while the real deploy step still
+unconditionally overwrites it from the GitHub Actions secret. No manual `sst
+secret set` needed going forward.
+
+**This clears the production blocker on the multi-host proof.** DM'd
+`daytona-mount-proof-0811` (offline since 18:27Z but the underlying node
+`daytona-fleet-proof-0811` / `node_212862301507432448` confirmed live/heartbeating
+independently) to resume. Still outstanding, unrelated to this blocker: the
+four read-only proof gates `daytona-mount-proof-0811` found in the merged
+mount code (`/workspace` default unwritable for unprivileged Daytona, argv-order
+env bug in the refresh loop, Relayfile token visible in mount argv, no
+existing-sandbox retrofit path) and the stale-projection currency check
+(`known-true-now`, `workspace-joined-not-created`, `cross-host-write-visible`,
+etc.) from the 08-11 19:28Z closeout entry below.
+
 # Daytona sandboxes as live fleet nodes
+
+**2026-08-11: PHASE 2 PROVEN. `cloud#2984` MERGED (`16f58648e`). Node `daytona-fleet-proof-0811` (`node_212862301507432448`) ONLINE. Full loop confirmed: Chief dispatched `daytona-proof-worker-0811` → agent landed inside sandbox `dedfeb9a-8682-4b89-957f-5bd15603ee0c` → replied from hostname matching sandbox ID, pwd `/home/daytona` → Claude process (PID 380) observed on-host via SSH. 24h heartbeat gate in progress (~2026-08-12T09:22Z).**
+
+## Proof team dispatch — 2026-08-11 18:20Z
+
+`daytona-mount-proof-0811` is registered on the exact existing node
+`node_212862301507432448`; the placement receipt matched its handler and
+dispatched node IDs. It must reuse sandbox
+`dedfeb9a-8682-4b89-957f-5bd15603ee0c` and Relay workspace
+`50587328-441d-4acb-b8f3-dbe1b3c5de99` without cloning, reprovisioning, or
+creating a replacement workspace.
+
+The lane is blocked before provider mutation. Cloud `#2991` merged as
+`5c90d2994` but is not in production: run `31516360915` failed during `sst
+diff` because the production SST secret `TranscriptionWorkerServiceToken` has
+no value. A later GitHub repository-secret update does not itself seed SST, and
+there is no later deploy run.
+
+Read-only review found four additional proof gates in the merged code:
+
+1. `/workspace` is the default mount root even though unprivileged Daytona uses
+   `/home/daytona/workspace` and cannot create `/workspace`.
+2. Refresh-loop variables are assigned after `node -e`, making them argv rather
+   than environment; the mount would lose refresh around its first 55-minute
+   tick.
+3. The Relayfile token remains visible in the mount process argv.
+4. The provisioning route has only a broad boolean full-workspace write mount
+   and cannot retrofit the existing sandbox.
+
+The source projection also fails the required `known-true-now` check: workspace
+`rw_7ccfea89` returns 404 for merged Cloud PR `#2991` and its newest projected
+PR is `#2873`. GitHub reports `healthy`/`lag: 0s` despite its last provider event
+being about 203 hours old; Linear is about 285 hours old. Those scopes are
+uncertified until content currency, not merely a green health label, is restored.
+
+Fix, generated-shell execution tests, independent review, production deploy,
+and a valid existing-sandbox attach path are prerequisites. The final proof
+must still capture all named multi-host assertions plus dispatched-node and
+on-target-process identity. The 24-hour node gate is not due until about
+2026-08-12T09:22Z.
+
+## Relayfile mount closeout — 2026-08-11 19:28Z
+
+Replacement owner `daytona-relayfile-closeout-barry-0811` ran on Barry and
+reused the exact existing Daytona node, sandbox, and Relay workspace; it did
+not clone, reprovision, or mutate the historical worker. The original node
+enrollment had no Relayfile mount. The owner verified that the authenticated
+production route still returned HTTP 404 at 17:25:04Z, so mounting and the
+downstream currency/write assertions were not attempted.
+
+Production run `31516360915` reached the deploy target and failed because the
+SST secret `TranscriptionWorkerServiceToken` has no value. A production admin
+must set the correct GitHub Actions or production SST secret and trigger a new
+production deploy. Until then, there is no honest full mount proof. After a
+successful deploy, resume on the same resources and capture:
+`workspace-joined-not-created`, `scope-declared`, `mirror-matches-cloud` with
+coverage, `known-true-now`, `cross-host-write-visible` or the exact read-only
+rejection, `placement-target-live`, `placement-executed`, and `nothing-cloned`.
+The replacement owner was released after this blocker and evidence were made
+durable. Chief owns reappointment after the production secret/deploy unblock.
 
 **2026-08-10: `cloud#2963` merged (`52ebc1d8a1`) and `cloud#2946` merged and DEPLOYED (`639ec90c9d`). The cold-start toolbox defect is fixed: `buildWarmStepContext` no longer awaits `getUserHomeDir()` while a sandbox is `STARTING`, which had been burning the queue retry budget so the ten-minute polling loop never ran.**
 
@@ -165,6 +251,20 @@ are different claims.
 - Building a provider SDK.
 
 ## History
+
+### 2026-08-11
+
+- Lead passed to `daytona-lead-0811v3` after v1 and v2 both failed due to task-injection silence (brief dropped at spawn for local PTY agents — 1420-byte log files, raw banner only).
+- **`cloud#2984` opened.** Three files changed:
+  - `packages/web/app/api/v1/fleet/nodes/sandbox/route.ts` — new `POST /api/v1/fleet/nodes/sandbox` route that calls `provisionFleetSandboxNode()`.
+  - `packages/web/lib/daytona-auth.ts` — new `createSharedDaytonaClient()` export shared across fleet routes.
+  - `deploy/daytona/relay-sandbox-entrypoint.sh` — path C (`start_fleet_serve`, `truthy`) removed.
+- **Design decisions recorded:**
+  - `autoStopInterval: 0` — disables Daytona's idle timer for fleet nodes. Daytona auto-stop measures inactivity at the API level; relay heartbeats are outbound-only and don't reset the Daytona idle clock. Per Daytona SDK, `0` means no auto-stop. All existing call sites use 5–60 min values that would stop a healthy fleet node.
+  - No relayfile mount at enrollment time — bare fleet nodes. Mount can be added post-enrollment via `startFleetSandboxRelayfileMount()`.
+  - Path C confirmed dead: `agent-relay fleet serve` exits 1 at relay@v11.4.x; nohup discarded the exit code; `AGENT_RELAY_FLEET_ENROLLMENT_TOKEN` was never written; `AGENT_RELAY_FLEET_SERVE` was never set. Three closed gates in front of a broken command.
+- CI queued (Smoke Sandbox Image + CI + Snapshot Impact Check). Awaiting Khaliq merge.
+- **Next:** after merge, run Phase 1 proof: `POST /api/v1/fleet/nodes/sandbox` → poll roster → verify `online` + `spawn:*` → 24h liveness check with `lastHeartbeatAt` advancing. Credential availability confirmed (Daytona credentials are available on the web server; `createSharedDaytonaClient()` uses the same SST Resource path as existing cloud agents).
 
 ### 2026-08-10
 

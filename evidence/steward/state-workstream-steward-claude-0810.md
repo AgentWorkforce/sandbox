@@ -118,9 +118,13 @@ both read the pins off a local checkout sitting on `docs/migration-0033-comment`
 merged 08-02) instead of `main`. **The lane's ACK even said it was on a feature branch
 and it still took the premise from there.**
 
-**Unowned, downstream of the 8.0.0 ship:** verify the live engine, then remove
-relay#1472's load shim. Until the shim comes out, relay#1445 emits the false zero it was
-written to remove. Also: the "does the published tarball contain `0034`" question is now
+**Unowned, downstream of the 8.0.0 ship — MEASURED 22:31Z, not remembered.** `relay#1472`
+merged at `4117a9e2` touching `crates/broker/src/fleet_wire.rs` and
+`crates/broker/src/node_control.rs`; **both still carry the compat path on `origin/main`
+(11 and 8 matching lines).** Precondition is met — relaycast-cloud is on 8.0.0, deployed
+green since 17:24Z. **Nobody owns "verify the live engine, then take the shim out."**
+Until it comes out, relay#1445 emits the false zero it was written to remove. Most
+likely item of the day to be lost, because the visible half looks finished. Also: the "does the published tarball contain `0034`" question is now
 an 8.0.0 question and does not inherit the 7.0.0 `gitHead` reasoning.
 
 **One small defect on `relaycast` main, no owner:** #319's empty-`?workspace=` guard is

@@ -1,7 +1,8 @@
 ---
 status: active
-owner: relayfile-coordination-lead-0810
-updated: 2026-08-10
+owner: relayfile-storm-guard-0811
+reports_to: chief-proof-coordinator-0811
+updated: 2026-08-11
 repos: [relayfile, chief, relay]
 ---
 # Relayfile coordination — shared repo files and context across nodes
@@ -52,25 +53,91 @@ this laptop.
 file it demonstrably could not read before.** A config that looks correct is not
 evidence.
 
-## Standing hazard
+## 2026-08-11 resource-storm containment
 
-**`com.agentworkforce.chief.integrations-mount` is the only thing serving the
-chief mount.** Chief unloaded it on 2026-08-09 believing `chief-senses` was the
-real supervisor; **the mount died within 2.5 minutes and had to be restored.**
-`chief-senses`' relayfile holds **zero** open handles under `.integrations`.
-Never restart it without telling Chief first.
+Chief froze while two launchd supervisors could contend around the same mount.
+On macOS, the recursive fsnotify path uses kqueue and can consume a descriptor
+per watched file; the affected process reached roughly 92,000 open handles.
+The existing full-tree audit cadence could also run about every ten minutes,
+and an unbounded bootstrap page could materialize too much work in one cycle.
+
+Both `com.agentworkforce.chief.senses` and
+`com.agentworkforce.chief.integrations-mount` are now unloaded and disabled
+across reboot. Their plists were retained for recovery, but neither job should
+be re-enabled until one supervisor is named as the sole owner and the mount is
+canaried with resource telemetry.
+
+Relayfile [PR #414](https://github.com/AgentWorkforce/relayfile/pull/414) merged
+to `main` as `7f95516d7206fcc16e4def6cea110b906d6a50e3`. Its P0 containment
+turns recursive watching off by default on Darwin while retaining polling
+writeback; rejects duplicate local-mirror ownership with a process-lifetime
+lease; bounds bootstrap and resumes within oversized pages; and gives completed
+authoritative full-tree audits a persisted 24-hour floor. The PR mitigates, but
+intentionally does not close, issue #319.
+
+## 2026-08-11 bounded anti-storm follow-on
+
+`relayfile-storm-guard-0811` is registered on Barry
+(`node_210867409538764800`) and reports to the second Chief
+`chief-proof-coordinator-0811`. Its first ACK recorded `hostname=mac.lan` and
+`cwd=/Users/barry`; that directory is neither a Git worktree nor a selected
+Relayfile mount, so the owner must deliberately choose existing worktrees and
+must not clone under a mount.
+
+The lane must not reimplement PR `#414`. Immediate remaining hazards are:
+Relay `#1479` sends `pathGlob` while the server expects `path_glob`; Chief uses
+a racy PID-file owner and nested fixed 5s/30s restarts; install does not retire
+the legacy mount supervisor; declared agent limits are not enforced against
+active plus pending reservations; fleet spawn has no stable end-to-end
+idempotency key; and delegation rollups have no hard queue bound.
+
+Required proof includes a dual-Chief fenced-epoch test, dropped-response retry
+from another host returning one process and one result, 2,000 duplicate/distinct
+events with bounded queue and resource growth, dual-supervisor immediate
+rejection, crash-between-checkpoint-and-release recovery, and a missed-heartbeat
+case that preserves a still-live host PID. Both launchd jobs remain disabled
+until this lane produces an independently reviewed measured canary.
+
+## 2026-08-11 19:24Z — anti-storm P1 fix held on review, not merged
+
+Chief PR [#40](https://github.com/AgentWorkforce/chief/pull/40) carries
+`relayfile-storm-guard-0811`'s supervisor lease/restart-policy fix (patch
+transferred by hand over Agent Relay DM after its own push got a 403, checksum
+verified before applying). An independent high-effort code-review workflow
+(`wf_bc8aebf1-e02`, 15 agents) found **7 distinct defects, 6 CONFIRMED**, most
+of them the same shape: an error path that was supposed to make the supervisor
+*more* resilient instead makes it silently and permanently exit(0) under
+launchd's `SuccessfulExit:false` contract — a recycled PID blocking lease
+takeover forever, RSS-ceiling-triggered recycles tripping the crash circuit
+breaker, and non-contention fs errors (EACCES/ENOSPC) funneling into the same
+benign exit as legitimate lease contention. Full list posted to the PR.
+**Holding the merge** — routed back to the authoring lane for fixes.
+Separately, live measurement on Barry found the Relayfile fleet mount process
+(PID 96070, `rw_7ccfea89`) stable at ~921MiB RSS but sustained 377-459% CPU
+over ~8h; RSS not growing (no storm by this fix's own definition), CPU pattern
+unexplained, not blocking, tracked as a separate open question.
 
 ## Next
 
-1. Diagnose the two-shape `state.json` before changing anything.
-2. Make the registry honest — one entry per id, correct `localDir`, stale
+1. Assign exactly one launchd supervisor to own the integration mount, add
+   restart backoff, and canary it before re-enabling either disabled job.
+2. Add public per-mount handle, watcher, traversal, queue, and audit-age
+   telemetry with explicit resource ceilings.
+3. Implement provider/path-scoped projection so a lead does not need to mount
+   an entire large workspace to read one workstream.
+4. Diagnose the two-shape `state.json` before changing registry state.
+5. Make the registry honest — one entry per id, correct `localDir`, stale
    entries removed. **Propose the diff before applying; keep it reversible.**
-3. Prove cross-node mounting with a remote read that previously failed.
-4. Recommend what to project. Senses carry `/linear`, `/github`, `/notion`,
+6. Prove cross-node mounting with a remote read that previously failed.
+7. Recommend what to project. Senses carry `/linear`, `/github`, `/notion`,
    `/digests`; leads need workstream docs. **Chief's brain holds the principal's
    private profile — draw the confidentiality boundary explicitly.**
 
 ## History
 
+- 2026-08-11 — Contained the macOS handle/audit storm, disabled both ambiguous
+  launchd supervisors, and merged Relayfile PR #414 (`7f95516`) with watcher,
+  lease, bootstrap-budget, and full-audit safeguards. P1 ownership, projection,
+  and telemetry work remains open.
 - 2026-08-09 — Opened with a lead after a day in which cross-node context
   sharing was done entirely by hand. See [[active-lanes]].

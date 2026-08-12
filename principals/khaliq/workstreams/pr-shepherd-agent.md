@@ -1,7 +1,8 @@
 ---
 status: active
-owner: pr-shepherd-lead-0810
-updated: 2026-08-10
+owner: pr-shepherd-lead-0811v3
+reports_to: agent-coordination-lead-0811
+updated: 2026-08-11
 repos: [skills, agents, cloud, relayfile]
 ---
 # PR shepherd — a proactive agent that owns work to production
@@ -185,18 +186,72 @@ is an acceptable answer; a stale answer presented as current is not.**
 
 ## Next
 
-1. Design review before code: where the ledger lives, what makes cloud the sole
-   writer, what the local reader says when its view is stale or unreachable, and
-   the staleness taxonomy, escalation ladder and dedupe key. Those decide whether
-   anyone trusts the alerts.
-2. Build the `persona.ts` + `agent.ts` pair against
-   `skills/skills/creating-cloud-persona/SKILL.md`, shipping both files.
-3. Prove it read-only against real PRs before it can post anything — a dry-run
-   mode that prints what it *would* say.
-4. Enable Slack posting behind a reversible flag, in one repo first, not all 350.
+1. ✅ Design review — complete (2026-08-11)
+2. ✅ Build `persona.ts` + `agent.ts` — complete, typecheck clean (2026-08-11)
+3. ✅ **Deployed dry-run** — `DRY_RUN=true`, no SLACK_CHANNEL (2026-08-11).
+   Webhooks live. First cron tick (top of next UTC hour) logs
+   `pr-shepherd.evaluate.dry-run` entries — bin, reason, rung — no Slack writes.
+   Backfill crawl seeds the ledger on that same tick.
+   **Pointer-extractor proof pending:** trajectory-lead to stamp
+   `<!-- trajectory: work_unit_id={id} work_unit_surface={surface} session_ref={uuid} -->`
+   on a PR in a low-traffic repo; next cron tick must log
+   `pr-shepherd.ledger.trajectory-pointer` with non-null `work_unit_id`.
+4. ✅ GitHub App already installed org-wide (`repositorySelection=all`) — confirmed
+   2026-08-11. Backfill crawl on first cron tick reaches all 137 repos. No action needed.
+5. Enable Slack posting behind reversible flag, one repo first, after dry-run
+   validates the staleness logic.
 
 ## History
 
+- 2026-08-11 — Deployed dry-run (`DRY_RUN=true`, no SLACK_CHANNEL). Webhooks
+  live on cloud. First cron tick will log `pr-shepherd.evaluate.dry-run` entries
+  and run the backfill crawl. Notified chief and trajectory-lead. Waiting for:
+  (a) trajectory-lead to stamp a pointer on a real PR for extractor proof;
+  (b) Khaliq to install GitHub App with `repositorySelection=all` org-wide.
+- 2026-08-11 — Scaffold complete. `pull_request.edited` trigger added (trajectory
+  pointer back-annotated via `PATCH /pulls/{number}` arrives as `edited`, not
+  `synchronize`). Relaycast TTL finding from trajectory-lead: 30-day message TTL
+  makes relaycast message IDs unsuitable as 6-month pointer targets — `session_ref`
+  (ai-hist session UUID) is now load-bearing for durability, not a bonus field.
+  No code changes required from either finding; both were already handled
+  correctly. All open questions resolved with trajectory-lead-0811v3. Typecheck
+  clean throughout. Final trigger list: pull_request.{opened,edited,closed,
+  synchronize,converted_to_draft,ready_for_review}, pull_request_review.submitted,
+  pull_request_review_comment.created, check_run.completed, issue_comment.created,
+  plus hourly cron stale-pr-scan. Dry-run deployment ready: DRY_RUN=true,
+  no SLACK_CHANNEL needed.
+- 2026-08-11 — `pr-shepherd-lead-0811v3` (V3 after PTY injection defect
+  workaround) completed the design review and built the initial scaffold.
+  PR count re-measured at 05:11Z: **293 open, 240 non-draft** (137 repos in
+  org). Agreed boundary with `trajectory-lead-0811v3` in writing: ledger field
+  is `work_unit_id` not `linear_issue_id` (surface-agnostic; Linear is today's
+  projection). Design review decisions: ledger in cloud-side memory (not
+  Relayfile projection — found 3-day-stale projection reporting lag=0 today);
+  cloud is sole writer by construction; staleness taxonomy = four bins with
+  explicit timestamps; escalation ladder uses `replyTo` not `threadTs`;
+  dedupe key = `{owner}/{repo}/{prNumber}/{bin}/{rung}`. Scaffold files
+  written: `agents/pr-shepherd/persona.ts` + `agents/pr-shepherd/agent.ts`.
+  Typecheck: clean. Substrate survey finding from trajectory-lead-0811v3:
+  **trail installed is 0.5.8, not 0.6.1** (workstream inventory was unverified —
+  corrected here). trail writes no `work_unit_id` onto PRs; the field stays
+  local inside `.trajectories/` files. `work_unit_id` in the ledger is null
+  until trajectory-lead implements the write-back contract and specifies the
+  pointer format (PR body tag, label, or relay DM). The `work_unit_id`
+  extractor in `updateLedger()` is intentionally unimplemented pending that
+  ruling.
+
+  **RULED by Chief, 2026-08-11 06:52Z, both items.** (1) **Org-wide `all`**,
+  not per-repo — matches your own recommendation and the 137-repo scale; a
+  per-repo allowlist for a fleet this size just recreates the `factory#221`/
+  `#222` partial-coverage failure this workstream exists to avoid. Design and
+  build against org-wide now. **The actual install click-through needs
+  org-admin access this lead doesn't have** — that step alone waits for
+  Khaliq, not the design. (2) Pointer format: `work_unit_id` is scoped by
+  `work_unit_surface`, never borrowed raw from Linear — see the parallel
+  ruling in `intent-trajectory-lineage.md`. trajectory-lead owns the write-back
+  contract per the boundary you already agreed; build `updateLedger()`'s
+  extractor against `work_unit_surface` + `work_unit_id`, not a Linear-only
+  assumption.
 - 2026-08-07 — Trigger model set by Khaliq: part webhook, part timer, serving
   cloud and local. Recorded above with the absence-of-events problem it has to
   solve, the backfill it cannot skip, and the single-writer rule that keeps two

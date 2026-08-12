@@ -1298,3 +1298,49 @@ a day earlier, and would have kept doing so indefinitely.
   `observability recovery` workflow **failed** eight minutes earlier, while its own
   gate blocked on unhealthy monitoring — so even the closure does not establish
   the closing conditions were met.
+
+## An opaque "never use this tool" rule can hide a mechanism worth knowing — 2026-08-11
+
+`check_inbox` and `list_dms` have been banned in every overnight-run contract for
+days, cited as "broken, fails with a raw SQL error that reads exactly like an
+empty inbox" (`relay#1471`). Nobody had read why. `c2a-lead-0811` did, unprompted,
+while working on an unrelated obligation-lifecycle spec.
+
+**Root cause, found by reading source, not by re-running the failure:**
+`listConversations` in relaycast (`packages/engine/src/engine/dm.ts:432-519`)
+selects **every DM conversation an agent has ever been in, with no `LIMIT`**,
+then feeds those results into four separate `inArray(...)` queries. Drizzle
+expands each to one bound SQL parameter per element, so the parameter count
+scales linearly with **lifetime** DM history, four times over. Past D1's
+bound-parameter ceiling — lower than stock SQLite's — the driver throws and the
+raw error surfaces. A long-lived agent's history is what triggers it; a fresh
+agent's inbox works fine, which is why the defect reads as intermittent.
+
+**A second, independent bug compounds it:** `message.dm.list`
+(`packages/mcp/src/tools/messaging.ts:127`) *advertises* a `limit` parameter in
+its schema, but the handler never destructures it and calls
+`client.dms.conversations()` with no arguments (`:134-136`). The obvious
+workaround — pass a smaller limit — is itself silently ignored. A schema
+accepting a parameter does not mean the build honours it; see
+[[probe-the-installed-binary-not-the-types]].
+
+**Why this is the same defect class as the tool ban itself:** the failure is a
+thrown driver error, not an empty result — but it is easily mistaken for one at
+a glance. An agent whose inbox query is failing looks exactly like an agent with
+nothing to read, so it stops looking. That is why the standing rule had to ban
+the tool outright rather than warn about a rare edge case.
+
+**A trap for whoever fixes it, named before anyone hits it:** the engine's own
+test suite runs on in-memory `better-sqlite3`, whose bound-parameter ceiling is
+far higher than D1's in production. **A regression test built against that
+harness will pass locally while the hosted path still fails identically.** The
+fix's test has to assert on generated parameter count or explicit chunk
+boundaries, not on end-to-end query success against the dev harness — otherwise
+someone ships a 200-conversation test, watches it go green, and closes the
+issue against a database that can't reproduce the bug.
+
+**Rule:** an opaque "never use X, it's broken" instruction is worth reading the
+source behind eventually, even once the workaround is standard practice — the
+mechanism can reveal a second silent defect (the ignored `limit`) that the
+workaround alone would never surface, and it hands the eventual fixer the exact
+trap that would otherwise cost them a re-open.

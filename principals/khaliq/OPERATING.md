@@ -182,3 +182,33 @@ dispatches.
 **Corollary for Chief's own loop:** the unit Chief polls is the *lead*, not the
 PR. Ask a lead where its workstream stands; do not reconstruct it from GitHub
 and infer. If the lead cannot answer, that is the finding.
+
+## Span of control
+
+**No agent — Chief included — directly owns more than ~5 active reports.**
+Khaliq, 2026-08-11 (@Khaliqgant, 08:58): *"past 5/6 the agent tends to easily
+lose track or becomes wildly inefficient... how many threads can/should a
+chief of staff manage at once? If there is no system in place to manage and
+track tasks then the number is less."*
+
+Past that count, insert a layer rather than widen the span: **Chief → sub-lead
+→ lead → workers**, the same three-layer shape one level deeper, not a
+different shape. A sub-lead is accountable for its cluster exactly as a lead
+is accountable for a workstream — it makes contact with its reports, reads
+their real state before trusting a self-report, triages what actually needs
+Chief's ruling versus what it can decide itself, and reports upward on its own
+initiative. The first instance: 2026-08-11, eleven active overnight leads
+consolidated under three sub-leads (`delivery-lead-0811`,
+`soc2-program-lead-0811`, `agent-coordination-lead-0811`) plus one routed into
+the existing resident `factory-lead`, which already owned that domain and
+didn't need a new layer invented under it.
+
+**The number is a function of the system, not just the model.** Khaliq's own
+second half: giving a lead the *tools* to track its reports matters as much as
+capping the count. A manager relying on DM delivery to poll its reports
+inherits the same fragility documented all through 2026-08-10/11 — local-lead
+DM delivery has been repeatedly unreliable. Prefer a durable, file-based
+status a report writes and a manager reads, over waiting on a message that may
+never arrive. The org chart itself — who reports to whom — belongs in a
+git-tracked file, not only in the DMs that established it; DMs vanish with the
+session, the file does not.

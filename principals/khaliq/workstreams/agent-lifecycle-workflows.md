@@ -1,7 +1,8 @@
 ---
 status: active
-owner: lifecycle-workflows-lead-0810
-updated: 2026-08-10
+owner: lifecycle-workflows-lead-0811
+reports_to: chief
+updated: 2026-08-11
 repos: [relayflows, agents, workforce, factory, chief]
 ---
 # Agent lifecycle & chore workflows — Nabis point 2
@@ -140,3 +141,137 @@ lands** — an approval gate that trusts a forgeable sponsor approves nothing.
 
 - 2026-08-07 — Recorded as a future workstream on Khaliq's instruction, for
   pick-up when ready. Not dispatched, nothing built.
+
+---
+
+# Obligation lifecycle — c2a#3 + relay#1474
+
+Lane `c2a-lead-0811`, overnight run 2026-08-11. Durable state; DMs do not
+survive a restart.
+
+## Settled and not to be re-opened
+
+**An obligation is discharged when the SENDER — the obligating author, or its
+named discharge delegate — confirms it was answered.** Not on read, not on a
+timer, not on the recipient's belief that it replied.
+
+Khaliq issued twelve rulings on c2a#3 (third comment on the issue) after an
+independent red-team broke the original design. Those rulings are the
+specification. The most load-bearing:
+
+- **F1** — the presence of the `obligation` object creates the obligation.
+  `policy` means "you were addressed" and nothing more. Making `must_respond`
+  the trigger opens a never-expiring obligation on every DM.
+- **F3** — "no new signal" is withdrawn. The spec's own own-message reaction
+  line told a conformant host to read a *recipient's* ✅ as "already handled":
+  the read-receipt bug in a costume. Rewritten.
+- **F3b** — an obligation names a `dischargeDelegate` at creation, defaulting
+  to the author's coordinator. Short-lived authors cannot emit `done`.
+- **F5** — additive schema required: `createdAt`, recipient identity, a
+  reaction event shape, a *named* authoritative log, a retention floor.
+
+## Delivered
+
+- **c2a PR #4** (`spec/obligation-lifecycle`) rewritten from the pre-ruling
+  shape to the ruled one, +235/-6 on the README that is the entire spec. All
+  twelve rulings verified against the text line by line. **Not merged.**
+  Two defects found and fixed during verification (`e4c0af2`): `declined`/
+  `blocked` said "escalate at the next return" (ruling says immediately); and
+  `unclear` paused the ladder with no resume condition, so one reaction could
+  mute an obligation permanently — reopening for `unclear` the hole the ruling
+  closed for `declined`.
+  **c2a has no CI at all.** No `.github/workflows`. The only checks are
+  CodeRabbit and cubic. An empty `gh run list` here is absence, not a pass.
+- **relay PR #1476** — conformance fixture, test-only, gated behind
+  `RELAY_OBLIGATION_CONFORMANCE=1`. CI green by `--branch` (7 runs), which
+  proves only that it is correctly gated OFF. **Not merged.**
+- **relay#1475** filed — the PTY turn signal is self-declared `inferred`.
+- Corrections posted to relay#1474 (superseded design) and relay#1471.
+
+## C2A cleanup checkpoint — 2026-08-11 15:48 CEST
+
+`c2a#4` remains open under the explicit DO-NOT-MERGE contract. GitHub shows
+CodeRabbit and cubic green, but five substantive spec gaps remain documented in
+review threads: obligationId regression, edit/delete schema, escalation
+resolution, silent drop, and `tool_mailbox`. No fixes were pushed because the
+lane was holding for Khaliq's spec ruling. `c2a-lead-0811b` had been waiting 92
+minutes with zero pending messages and was released. The durable issue and this
+section are the handoff; do not respawn merely to rediscover the gaps.
+
+## The deliverable was NOT achieved
+
+The negative test — delivered, injected, READ, unanswered, must still return —
+was never observed firing or not firing. Arms A–D fail on a PRECONDITION:
+message delivery to a spawned worker does not work in this environment. The
+broker spawned by `BrokerHarness` never registers as a live delivery node.
+Confirmed environmental, not fixture-caused, by reproducing against the
+pre-existing `mcp-injection.test.ts`.
+
+Two things *were* observed: one arm passes on live data proving **a reaction
+cannot name the recipient it discharges** (F2 as an executable test, goes red
+when the substrate gains the field); and the control guard **refused** to
+report green off a precondition failure.
+
+## Three walls in front of the conformance assertion
+
+1. **No honest model-turn signal.** The broker emits `turn.started`/
+   `turn.settled` from stdout busy/idle and labels them `fidelities:
+   ["inferred"]` against `"exact"` for other activities
+   (`worker_events.rs:377-379`). It publishes to the hosted stream, not to
+   local `getAgentEventHistory`, so a broker integration test cannot reach it.
+2. **Arm D is unassertable, not merely unimplemented.** Read state is auto-set
+   on *both* runtimes — `mark_delivery_read_ack` fires off the worker's
+   `delivery_ack`. The independent variable cannot be varied.
+3. **The arms cannot all live in one repo.** `relaycast` has no model in it, so
+   "the recipient took a model turn" is unassertable there by construction;
+   `relay` is the only place a model exists.
+
+## Blocking questions put to Chief, unanswered as of 2026-08-11 ~00:00 Oslo
+
+1. Does conformance evidence run on the default PTY path or the native harness?
+2. Is `relaycast` in scope? The spec now *requires* a named authoritative log,
+   and that host is relaycast — a broker-side shadow store would duplicate the
+   log the spec just mandated.
+3. **The largest: no agent hierarchy exists as data anywhere.** Exhaustive grep
+   across relaycast engine and types for supervisor/coordinator/parent/
+   spawned_by/manager/reports_to returns zero. F3b's delegate default and the
+   ladder's "recipient's coordinator" have nothing to resolve against, so every
+   short-lived-author obligation falls straight to the human tier and the
+   delegate rung is decorative. This inverts the ruling's own intent. It is a
+   missing product entity, not a schema tweak.
+4. Is a working test-environment delivery path someone's lane?
+
+## Landmines for whoever picks this up
+
+- **Retention silently discharges obligations today.** `pruneExpired`
+  (`relaycast packages/engine/src/engine/retention.ts:125-294`) deletes messages
+  age-based and cascades to reactions; the hosted default is documented as 30
+  days. The spec says an obligation never expires.
+- **Reaction removal is a hard DELETE** (`reaction.ts:94-102`), so "discharge is
+  monotonic" is not expressible from the reactions table as it stands.
+- **The reactions unique index** `(messageId, agentId, emoji)` blocks one actor
+  discharging for two recipients on the same event. The index must change, not
+  just gain a column.
+- **`crates/broker/src/scheduler.rs` is dead code** — only `mod` declaration and
+  its own tests reference it. Copy its `now`-as-parameter shape; do not believe
+  it does a job. The real hook is the 500ms sweep in `runtime/maintenance.rs`,
+  whose semantics are the opposite of what boomerang needs: it drops a delivery
+  the moment the worker acks.
+- **relaycast's test harness is the good substrate** — real Hono app over real
+  HTTP, migrations applied to in-memory SQLite, and `pruneExpired` already takes
+  an explicit `now`. Arms C and D need no fake-timer tricks there.
+
+## relay#1471 root cause — found, not my lane
+
+`listConversations`, `relaycast packages/engine/src/engine/dm.ts:432-519`. The
+first query selects every DM conversation the agent has ever been in with **no
+LIMIT** (`dm.ts:433-448`), then feeds four `inArray(...)` queries; Drizzle
+expands each to one bound parameter per element, blowing D1's ceiling. The
+error in #1471 is the first of those four (`dm.ts:457-465`). Separately,
+`message.dm.list` advertises a `limit` parameter that is never destructured and
+never forwarded (`packages/mcp/src/tools/messaging.ts:127,134-136`) — the
+obvious workaround is itself silently broken.
+
+**Trap:** engine tests run on in-memory better-sqlite3, whose parameter ceiling
+is far above D1's. A regression test will pass locally while the hosted path
+still fails. It must assert on parameter count or chunk boundaries.

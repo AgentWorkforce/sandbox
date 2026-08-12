@@ -1,7 +1,7 @@
 ---
 status: active
 owner: chief
-updated: 2026-08-10
+updated: 2026-08-11
 repos: [relay, relayfile, factory, workforce, cloud, agents, relaycast, relaycast-cloud, internal-agents, skills]
 ---
 # Active lanes — dispatched work and who owns it
@@ -15,6 +15,116 @@ workstreams and agent assignments in memory. It was not. Eighteen lanes were
 tracked only in chat context while agents died in silent batches, and the gap
 surfaced because he asked, not because Chief noticed. **An assignment that lives
 only in a conversation is not an assignment.**
+
+## Now — 2026-08-11 18:20Z — bounded cross-host proof team dispatched
+
+Khaliq authorized an autonomous, verifiable cross-host + Daytona proof push.
+Four named lanes are now registered through authenticated Agent Relay fleet
+placement, with a hard rule against unbounded follow-on spawning:
+
+- `chief-proof-coordinator-0811` — second Chief on `finn-mini`, invocation
+  `inv_212997475883134976`, dispatched and handled by
+  `node_d4190c4c2ca5c26bf547301347af4028`.
+- `fleet-attach-impl-0811` — canonical fleet-native `attach --node` owner on
+  `finn-mini`, registered on that same node. Relay issues `#1449` and `#1327`
+  are the design anchors; SSH remains fallback only.
+- `relayfile-storm-guard-0811` — anti-storm owner on Barry, registered on
+  `node_210867409538764800`. Its first ACK proved hostname `mac.lan`, cwd
+  `/Users/barry`, and that no repository or mount had been silently selected.
+- `daytona-mount-proof-0811` — proof/fix owner inside the existing Daytona node
+  `node_212862301507432448`, reusing sandbox
+  `dedfeb9a-8682-4b89-957f-5bd15603ee0c` and workspace
+  `50587328-441d-4acb-b8f3-dbe1b3c5de99`; cloning, reprovisioning, and a new
+  workspace are forbidden.
+
+An attempted second-Chief placement on `sf-mini` expired because the node went
+offline between the capability listing and dispatch. That fail-closed result is
+preserved as a placement negative control; the Chief was retargeted to the live
+`finn-mini` node. Agent registration now shows all four names with the expected
+fleet node IDs. Duplicate same-name dispatch attempts did not create duplicate
+agent records, but this is not accepted as end-to-end spawn idempotency proof.
+
+The Daytona lane is deliberately gated. Cloud `#2991` is merged but not
+deployed; production run `31516360915` failed before deploy on the missing SST
+`TranscriptionWorkerServiceToken`. Read-only source review also found an
+unwritable `/workspace` default for unprivileged Daytona, malformed refresh-loop
+environment assignment order, token-in-argv exposure, and no existing-sandbox
+retrofit path. These findings were steered durably to the worker and both Chiefs.
+No mount or provider mutation is authorized until the fixes, review, production
+deploy, and current-provider projection gates pass.
+
+Security follow-up: a diagnostic host process listing exposed Relay credential
+values in the orchestration transcript. Both Chiefs were told not to print or
+reuse those values outside the current sessions and to coordinate workspace-key
+and affected agent-token rotation after every active publication/proof lane has
+a durable checkpoint and reconnect path. Immediate revocation was deferred only
+to avoid cutting active irreversible publication and proof operations mid-step.
+
+## Now — 2026-08-11 19:53Z — relay#1483 merged; Daytona deploy blocked
+
+Relay `#1483` merged to `main` as `ed8144c9a`, adding the explicit
+`--ssh-host` physical-node fallback
+for `#1449`; `--node` remains reserved for canonical fleet-native attach.
+From this Mac, the exact built CLI attached to
+`chief-barry-codex-0811-1440` on Barry in both view and drive modes; drive
+returned `NODE_DRIVE_OK`. A full Tailscale SSH hostname also proved safe
+remote state discovery when the host string does not equal `barry-node`.
+The broker stayed loopback-only and no product-path credential forwarding is
+required. Final reviewed head `986b90e77` includes ordinary project-local
+broker discovery, empty-host validation, strict presence checks for conflicting
+empty broker options, option-terminating agent arguments, multi-process
+ambiguity checks, JSON drive/passthrough stdin preservation, and a shared
+attach-mode type. Final gate: 342 attach regressions, lint, format, CLI build,
+diff check, all GitHub checks green, zero unresolved review threads, and Barry
+approval. `relay-1483-review-barry-0811` completed the review lane and was
+released after this status was committed. See [[cross-node-attach]].
+
+Khaliq's Daytona + Relayfile mount question was delivered directly through
+that new drive path to the replacement Chief. Replacement owner
+`daytona-relayfile-closeout-barry-0811` is ACKed on Barry, is reusing the
+existing Daytona node and sandbox, and is inspecting the real mount path; no
+clone or reprovision is authorized. The existing Daytona node is online and
+has real sandbox placement proof, but its original enrollment had no Relayfile
+mount. Production run `31516360915` reached the deploy target and failed on
+the same exact missing SST value: `TranscriptionWorkerServiceToken`. The
+validation follow-up is queued, so no honest full mount proof exists yet. The
+replacement owner recorded the evidence and was then released; Chief retains
+the blocked workstream and can reappoint after the secret/deploy unblock. When
+the blocker is cleared, the lane must still produce the
+named multi-host proof: remote dispatch identity plus target process, cwd in
+the intended mount, joined-existing workspace, declared scopes, byte/coverage
+currency, known-true-now, cross-host visibility or exact read-only rejection,
+and nothing cloned.
+
+## Now — 2026-08-11 15:08Z — frozen Chief recovered; inactive roster harvested and released
+
+Chief was recovered from a stuck Claude `/loop` and restarted into session
+`94c392bf-ec18-459a-95b6-440dd56de94c`. Before release, the latest usable
+progress from fourteen inactive agents was written into their owning workstream
+documents: `marketing-lead`, `trajectory-lead-0811v3`,
+`relayscribe-lead-0811`, `relay-attest-session-lead-0811`,
+`factory-230-lead-0811`, `finn-mini-upgrade-lead-0811`,
+`delivery-lead-0811`, `cloud-identity-lead-0811v3`,
+`orgchart-dashboard-lead-0811`, `fleet-mount-lead-0811`,
+`cross-node-attach-lead-0811`, `c2a-lead-0811b`, `soc2-lead-0811b`, and
+`relayfile-helm-lead-0811`. All fourteen placements were then released; none
+remains an implied live owner.
+
+Replacement Chief `chief-barry-codex-0811-1440` is ACKed on the `barry` fleet
+node and remains active. It took direct ownership of the bounded `factory#230`
+generation/token plus CAS StateStore slice after its first attempt to delegate
+to the released lane was corrected. At 15:08Z it reported DONE: branch
+`codex/factory-230-generation-cas`, pushed SHA `0024c6b0cf32595d19b9c24b8e6f8d73375fdd63`,
+focused proofs 2/2, full file suite 21/21, build and diff check passing, and the
+remote SHA byte-matched. Draft Factory PR #232 now carries that exact head; it
+was not merged, activated, deployed, or published. Lifecycle wiring/local
+claim-map integration and pending-spawn recovery remain outside that slice;
+full detail is in [[factory-live-dispatch]].
+
+Relayfile mount ownership is separately contained in
+[[relayfile-coordination]]: both competing launchd jobs remain disabled while
+the merged P0 safeguards settle. Do not re-enable either supervisor as part of
+lane recovery.
 
 ## Now — 2026-08-10 19:30Z — chief PRs merged under a squash-only gate; restart prep underway
 
@@ -1039,3 +1149,34 @@ Format: lane · owns · state.
 - 2026-08-07 — File created after Khaliq asked whether lanes and assignments
   were being held in memory. They were not. Second mass agent loss of the day
   recorded above; the first, on `finn-mini`, is in the daily journal.
+
+## Local agent cleanup checkpoint — 2026-08-11 15:48 CEST
+
+The Mac was under a Relayfile I/O storm while 22 local agents remained
+registered. Cleanup used a conservative release gate: at least 40 minutes
+without activity, zero pending messages, and native bridge state `waiting`
+(or the resident PTY explicitly `idle`). Fourteen seats met every condition;
+their deliverables were harvested before release.
+
+| Released seat | Durable status / progress |
+|---|---|
+| `marketing-lead` | Resident was idle for 906 minutes with no pending work. No new deliverable to harvest; the declared roster seat is intentionally absent until re-enabled. |
+| `trajectory-lead-0811v3` | Pointer contract complete; production Relaycast query confirms the 30-day default, making ai-hist UUID the durable primary target. See `intent-trajectory-lineage.md`. |
+| `relayscribe-lead-0811` | `cloud#2985` and `relayscribe#10` verified merged. Phase 0 rotation, deploy/build, and 22-hour acceptance remain. See `relayscribe-recorder-auth.md`. |
+| `relay-attest-session-lead-0811` | `relay#1477` verified merged; Factory still needs to forward `sessionRef`. See `soc2-agent-traceability.md`. |
+| `factory-230-lead-0811` | Design complete. Red-check found two implementation gaps: retirement during `markRunning` needs a post-await `#babysitterPr.has(key)` guard and cleanup; recovery must not release a confirmed live session when a stale pending-spawn record exists. Both P1s remain open until code ships. |
+| `finn-mini-upgrade-lead-0811` | finn-mini's broker upgrade to 11.5.1 is already recorded; the session had received an explicit terminal `Out` and had no pending messages. |
+| `delivery-lead-0811` | Sub-lead stood down. Its surviving active child (`daytona-lead-0811v3`) is temporarily direct to Chief; completed and released children are recorded in their own workstreams. |
+| `cloud-identity-lead-0811v3` | Design note and reader/writer inventory complete; waiting on Khaliq's migration-readiness/backfill ruling. See `cloud-identity-d1.md`. |
+| `orgchart-dashboard-lead-0811` | Dashboard recovery verified complete; fast-follow remains unowned. See `yc-demo-org-chart.md`. |
+| `fleet-mount-lead-0811` | barry/finn-mini mounts and 45-minute credential refresh completed; remote reboot auto-start remains the only low-urgency gap. See `fleet-relayfile-mounts.md`. |
+| `cross-node-attach-lead-0811` | `relay#1480` verified merged; replacement implementation `relay#1483` is open and live-proven against Chief on Barry. Cloud/Daytona transport remains design-only. See `cross-node-attach.md`. |
+| `c2a-lead-0811b` | `c2a#4` remains DO-NOT-MERGE with five recorded spec gaps and no fixes pending Khaliq's ruling. See `agent-lifecycle-workflows.md`. |
+| `soc2-lead-0811b` | `relayauth#79` verified merged; no pending local task. Program coordination remains with the active `soc2-program-lead-0811`. |
+| `relayfile-helm-lead-0811` | Real kind install created/uninstalled cluster objects; helm-charts#3 is open and green, awaiting Khaliq merge and published-repo/real-image acceptance. See `helm-charts.md`. |
+
+Kept running because they had recent activity or pending deliveries:
+`agent-coordination-lead-0811`, `daytona-lead-0811v3`,
+`pr-shepherd-lead-0811v3`, `relaycast-kv-lead-0811`,
+`relayfile-subs-lead-0811`, `soc2-program-lead-0811`, and
+`webhook-queue-lead-0811`. Chief itself was recycled into a fresh PTY seat.
