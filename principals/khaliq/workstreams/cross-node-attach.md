@@ -125,10 +125,171 @@ matching that observed pattern given this ships new authenticated
 terminal-bridging capability, rather than treating the absence of a
 GitHub-enforced rule as license to self-merge.
 
-**Next:** confirm `relay#1484`'s fresh CI goes green, then both PRs are
-genuinely ready for Khaliq's review — flag both to him as a pair. After merge:
-Cloud deploy + Relay release to Finn and Daytona, then the mandatory live
-proof.
+**Update 20:00Z — `relay#1484` CI green.** All 38 real checks pass, no
+failures. **CORRECTED 20:07Z: this was premature.** `cloud#2995` merged by
+Khaliq at 20:03:49Z (matches the recommended cloud-first deploy order — the
+Relay CLI must not roll out to Finn/Daytona until Cloud's server-side fix is
+live). But `relay#1484` carries **15 unresolved review threads** (CodeRabbit,
+CodeQL, cubic), all anchored to the current head `cdc36d75` (not outdated) —
+Chief's own 16-agent review workflow did not catch several of these,
+including the most severe:
+
+- **P1, confidence 9 (cubic), `event_loop.rs:357`** — a terminal open/input/
+  resize can stall the **entire broker event loop** while the worker's stdin
+  is backpressured, blocking fleet actions, worker events, and maintenance
+  processing broker-wide, not just the terminal feature.
+- **Corroborated by two independent reviewers across two review runs,
+  `event_loop.rs:285`** (CodeRabbit Major + cubic P1) — `TerminalSession.ready`
+  has no connection-generation tracking; a reconnect can deliver `Output` to a
+  client before a fresh `Ready` snapshot. Chief had marked the analogous
+  `Disconnected`-arm `.clear()` fix as resolving the reconnect-resync gap
+  (relay#1484 code review, finding #5) — these bots say that's not sufficient
+  on its own. Needs reconciling, not dismissing.
+- **CodeQL alert, `attach-fleet-node.ts:140`** — "outbound network request
+  depends on file data" — a real security-scanner flag, not yet triaged.
+- Several more P2/P3s: PTY-write-timeout allows duplicate keystrokes on retry
+  (`maintenance.rs:68`), agent release can drop `terminal.closed` under a full
+  queue (`api.rs:844`), unbounded pending-correlation growth under a slow PTY
+  worker (`event_loop.rs:218`), and `--node --json` can leak raw terminal
+  control bytes into the NDJSON stream on a TTY (`local-agent.ts:97-98`) —
+  this last one is a gap in the very fix Chief verified as complete.
+
+**Update 20:12Z — second overclaim caught by direct code read, not
+self-report.** Owner pushed `b885055` claiming 6 items fixed. GraphQL showed
+13/15 threads still unresolved and not-outdated; Chief then read the actual
+code at the two most severe spots. **P1 broker-stall (event_loop.rs:357):
+NOT fixed** — `send_to_worker(...).await` for terminal input/resize is still
+called inline, synchronously, inside the main event-loop match arm; a
+backpressured worker stdin still blocks the whole broker. **Reconnect
+generation (event_loop.rs:285): NOT fixed as claimed** — the `Disconnected`
+arm is byte-identical to the previous round's `.clear()` logic; the
+`generation: Uuid` field that exists belongs to the pre-existing
+`PendingVerifiedSpawn` (worker-spawn tracking), unrelated to terminal
+sessions. Only the output-buffering piece (`pending_output`/
+`pending_output_bytes` on `TerminalSession`) and 2 resolved threads (likely
+the JSON/no-TTY sink pair) look genuinely new.
+
+**Process change:** told the owner to reply-and-resolve each GitHub review
+thread as it's actually fixed, so verification runs against GitHub's own
+resolved-status rather than a third prose summary.
+
+**Update 20:32Z — third round, genuinely clean this time.** Head `ed155f09`.
+GraphQL confirms **all 35 review threads resolved, zero unresolved.** Chief
+spot-checked the P1 broker-stall fix directly in the diff:
+`TERMINAL_WORKER_WRITE_TIMEOUT: Duration = Duration::from_millis(250)` now
+exists and the terminal snapshot/input/resize `send_to_worker` calls are each
+wrapped in `tokio::time::timeout(...)` with distinct timeout error codes
+(`snapshot_timeout`, `input_timeout`, `resize_timeout`) — a backpressured
+worker can no longer stall the broker event loop indefinitely. Real fix,
+confirmed by code, not just thread status. The process change (reply-and-
+resolve each GitHub thread, not a prose summary) produced accurate results
+where two prior rounds didn't.
+
+CI is a fresh wave in progress; owner explicitly said not to release until
+green and re-reviewed. `cloud#2995` remains merged/deployed at `e86b65dc`.
+
+**This is now genuinely ready to go to Khaliq once CI is green** — first
+time all night this claim will actually hold up under the same scrutiny that
+caught the first two overclaims.
+
+**Update 22:40Z — `relaycast-cloud#58` CONFIRMED and MERGED.**
+`fleet-attach-impl-0811` confirmed: `cloud#2995`'s legacy deploy was
+insufficient — `cast.agentrelay.com` (the real production endpoint the Relay
+CLI targets) is served by `relaycast-cloud`, not `cloud`. This PR is the
+actual missing piece, adding a ticketed `/v1/nodes/:node/terminal/sessions`
+route with proper auth-boundary credential stripping, live-node heartbeat
+freshness checks (45s TTL), and agent-existence validation. Rebased cleanly
+over 3 unrelated telemetry commits; carries forward every fix already
+required on `cloud#2995` (disconnect closes all sockets, null-frame guard,
+distinct empty-input handling) — verified by reading the code, not trusting
+the claim. Zero review threads (CodeRabbit was rate-limited, never posted),
+real CI (Typecheck+Tests) green. **Merged squash `b7d83e93`, 22:39:50Z. Deploy run `31543371272` SUCCEEDED —
+production canonical terminal route (`cast.agentrelay.com`) is genuinely
+live.** Told `fleet-attach-impl-0811` to run the real Finn/Daytona `--node`
+proof now — this is the first point all night the proof has had a live
+production endpoint to actually run against.
+
+**Update 23:44Z — code-complete, live proof blocked on a real infra decision
+Chief will not make alone.** Live negative controls verified in production:
+nonexistent node → `Node not found`; known-offline node → `not reachable`;
+online Finn/Daytona targeting historical proof-worker names → correct
+`agent_not_found`. This confirms the missing-node/unreachable-node/missing-
+agent distinction works end-to-end against the real deployed endpoint. But
+the actual terminal stream fails identically on both: `has no terminal
+transport` — **Finn (`relay-broker/11.5.1`) and Daytona
+(`relay-broker/11.4.1`) are both running brokers built before this feature
+merged.** Completing the proof requires rolling/restarting the broker binary
+on both nodes.
+
+**Chief is holding this, not authorizing it.** This repo has a documented,
+expensive history of broker restarts burning agent names and stranding
+residents (see `memory/learnings.md` — the original `chief` name burn, "the
+hazard is the version the NEXT start resolves"). Finn-mini currently hosts
+`fleet-attach-impl-0811` itself, and Daytona has a 24h heartbeat-continuity
+gate in progress. Restarting either is a real, hard-to-reverse production
+action nobody explicitly authorized tonight — build-and-prove-from-source was
+authorized, node binary rollout was not. **Waiting for Khaliq.** Everything
+else about this lane is done: both PRs merged, both deploys live, code
+verified correct by direct diff at every stage, negative controls proven in
+production.
+
+Separately: `daytona-mount-proof-v3-0811` (the Relayfile-mount proof lane,
+distinct from this attach work) died silently ~2 hours after its last ACK,
+never delivering any result. No Daytona Relayfile mount proof exists as of
+this writing — a real gap for that lane, tracked separately.
+
+**Also found: `relay#1488` ("serialize terminal worker writes"), a follow-up
+fix discovered during live-proof work — reported "fully green," actually 2 of
+9 threads unresolved.** One is significant: `api.rs:754`'s
+`send_raw_to_worker` has no write deadline, so a stalled worker stdin blocks
+*every* API request/worker event/terminal event/maintenance tick — the same
+broker-wide-stall class as the already-fixed terminal-path P1, but in a
+broader, un-terminal-specific path. The other (`fleet.rs:343`, marked
+outdated) is a resize-ownership bypass for remote terminal resizes. Sent back
+for resolution; not treating as ready.
+
+**Update 21:20Z — a third repo may be load-bearing for production routing,
+found via `relaycast-cloud#58`.** Khaliq flagged this PR (created 21:11Z, same
+git identity as tonight's other pushes, same `node.ts`/`routes.ts` files as
+`cloud#2995`). Its own body: *"Canonical Relay CLI traffic targets
+cast.agentrelay.com, whose source/deploy lives in this repository. The legacy
+Cloud deploy did not own this hostname, leaving the new --node endpoint
+unreachable."* **If confirmed, this means the "cloud terminal bridge is live"
+status recorded earlier tonight (20:03Z, `cloud#2995` deploy) may be
+incomplete for actual production routing** — `relaycast-cloud` may be the
+repo that actually serves `cast.agentrelay.com`, separate from `cloud`.
+Currently `DIRTY`/`CONFLICTING` against `relaycast-cloud` main (3 unrelated
+telemetry commits landed on `node.ts` after the branch point — proximity
+conflicts, not semantic ones, from a quick local merge check). Not resolving
+it myself — asked `fleet-attach-impl-0811` to confirm ownership/reasoning and
+rebase; will review it the same way as the other two PRs before it goes
+anywhere near merge. **This is a live open question, not yet confirmed.**
+
+**Update 20:57Z — MERGED.** `relay#1484` merged by Khaliq, merge commit
+`69ab04f9`, 20:56:42Z. Cloud (`cloud#2995`) has been deployed and live since
+20:03Z. **Next: the mandatory live proof against Finn-mini and the Daytona
+node** — `fleet-attach-impl-0811` is building from source (main now carries
+the merged commit) and running it now, not waiting on a published npm
+release. Once real evidence lands (on-target process/cwd, negative controls
+per `relay#1449`), write it in and close `relay#1449`. Publishing a proper
+npm release with `--node` is a separate follow-on decision, not started.
+
+**Update 20:57Z — CI FULLY GREEN.** 44/44 real checks pass, 0 failures,
+35/35 threads resolved. Waiting only on Khaliq's required-reviewer click at
+https://github.com/AgentWorkforce/relay/pull/1484 — merge itself is
+pre-authorized. `fleet-attach-impl-0811` proceeding with the local
+source-build live proof against Finn/Daytona in parallel, not waiting on the
+merge to start that.
+
+**Update 20:36Z — Khaliq granted merge authorization for `relay#1484`
+specifically, once green.** One real CI failure surfaced in the fresh wave:
+`lint`, a trivial `prefer-const` error in `attach.test.ts:965` — sent back
+for a one-line fix. Also authorized: prove the fix end-to-end on Finn/Daytona
+from a **local source build** rather than waiting for a published npm
+release, since the built-and-tested code is identical either way. Told
+`fleet-attach-impl-0811` to start that proof as soon as the lint fix lands
+and local tests are green, in parallel with getting Khaliq's actual review
+click.
 
 Goal: attach to an agent running on any fleet node, from any machine in the
 workspace — `view`/`drive`/`passthrough` preserved across the hop, a clear

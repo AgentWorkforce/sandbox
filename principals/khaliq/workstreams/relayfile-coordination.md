@@ -117,6 +117,24 @@ Separately, live measurement on Barry found the Relayfile fleet mount process
 over ~8h; RSS not growing (no storm by this fix's own definition), CPU pattern
 unexplained, not blocking, tracked as a separate open question.
 
+## 2026-08-11 21:19Z — anti-storm fix MERGED
+
+`storm-guard-fix-finn-0811` (spawned on finn-mini after Barry's Claude
+replacement turned out unauthenticated) fixed all 6 confirmed + 1 plausible
+review findings from PR #40, left item 7 (helper duplication) as an honestly
+scoped follow-up, added 9 new unit tests. Delivered as a format-patch (same
+pattern as the original — this account also lacks push access to
+`AgentWorkforce/chief`). Chief verified: sha256 mismatch on the pasted text
+(copy/paste artifact, not corruption — `git am` applied it cleanly with zero
+conflicts, which is the stronger integrity signal), 34/34 tests pass, diff
+read directly and matches every described fix. **Merged squash `5bb15d06`,
+21:19:03Z.** No CI exists in this repo (`.github/workflows` absent) and 0
+approving reviews are required — verified both before merging.
+
+Still separately open: the ~612% sustained CPU pattern on Barry's Relayfile
+fleet mount (PID 96070 last measured) — stable RSS, no storm signature by
+this fix's own definition, cause still unexplained, not blocking.
+
 ## Next
 
 1. Assign exactly one launchd supervisor to own the integration mount, add
