@@ -33,6 +33,102 @@ claim-map integration and pending-spawn recovery.
 **2026-08-10: `factory#225` merged (`40f9be5ec4`) and `factory#223` merged (`67a5a57b4a`) as Khaliq's Option A split — routed-PR intake and discovery only, activation disabled, execution half removed rather than flagged off. Lifecycle design is tracked in `factory#230`.**
 
 
+**2026-08-12 07:47Z — root cause confirmed for tonight's dispatch stall.**
+`factory-dispatch-fix-finn-0812` traced it to Relayfile, not Factory: the
+mounted `/github` projection for workspace `rw_7ccfea89` is stale and cannot
+refresh. `state.json` shows last successful reconcile
+`2026-08-11T15:04:47Z`, `stale=true`, repeated `HTTP 401 'Token has expired'`
+minting delegated Relayfile credentials. Both `relayfile status` and an
+explicit `relayfile pull --provider github --reason ...` fail the same way.
+Concrete proof: projected `relay#1399` reads updated 2026-07-30 while GitHub
+shows `2026-08-11T21:21:43Z`; GitHub carries 29 open `factory-ready` issues,
+several newer than the mount's last good reconcile. Factory's own health
+check only verifies `/github/repos` is *mounted*, not fresh, so it reports
+healthy against an empty/stale effective queue — same "liveness field lies"
+shape as everything else tonight, just one layer down in Relayfile instead of
+Factory.
+
+**2026-08-12 08:32Z — four silent finn-mini lanes respawned.** Nudged
+five lanes at 07:54Z with a respawn warning; ~40min later finn-mini showed
+them all near-0% CPU (genuinely stuck, not just quiet). Respawned four as v2:
+`factory-236-finish-v2-0812`, `webhook-queue-incident-lead-v2-0812`,
+`lifecycle-workflows-lead-v2-0812`, `cloud-fleet-proof-owner-v2-0812` — all
+confirmed alive via real CPU within seconds of dispatch (not trusting
+`spawned:true` alone). The fifth, `relay-1488-fix-finn-0812`, was re-briefed
+in place rather than respawned (see relay#1488 note below) since direct
+verification showed its actual assigned fixes had genuinely landed — only
+newer unresolved review threads needed addressing, not a restart.
+
+**relay#1488 verified, not merged — 2 new unresolved threads on current
+HEAD.** Both originally-assigned bugs (broker-wide-stall in `api.rs`,
+resize-ownership bypass in `fleet.rs`) are genuinely fixed at
+`7fd9f514dbfe58b79156341409b11b8c699bdce9` — read the actual diff, matches
+the described fixes, all CI green. But a third-party "all green, ready to
+merge" comment from `miyaontherelay` (22:33Z, before today's fixes) turned
+out to be stale: 2 substantive threads are unresolved on the *current* HEAD —
+CodeRabbit Major/heavy-lift on `api.rs:770` (writer may return Err after
+frame admission instead of cancelling/reporting accepted), Cubic P2 on
+`maintenance.rs:50` (resize-ownership release ordering vs. session-removal
+guard). Re-briefed `relay-1488-fix-finn-0812` with both. Standing lesson held:
+external "green"/"ready" claims still need a fresh review-thread check
+against the exact HEAD before merge.
+
+**sf-mini broker rollout — unconfirmed, possibly crash-looping.** As of
+08:30Z the broker process pair on sf-mini has cycled through 4+ distinct PID
+pairs over ~20 minutes, each only seconds old. `identity-debug.txt`
+(freshest write) shows correct identity resolution (`agent_name='sf-mini'`
+matches `requested='sf-mini'`) and `crash-insights.json` has zero recorded
+crashes, so this may be intentional rapid iteration by `fleet-attach-impl-0811`
+rather than an actual crash loop — but that lane has not replied to two direct
+pings since 08:13Z. Given ambiguity on a production node, holding off further
+unilateral action; if still unanswered next sweep, escalating to Khaliq for a
+rollback decision rather than acting alone.
+
+**Escalation path (not yet actionable without a human/org credential
+action):** reauthorize the Relayfile delegated credential for
+`rw_7ccfea89`, restart/rebind its `/github` mount, rerun the GitHub provider
+refresh/backfill, verify projected `relay#1399` matches GitHub, then force a
+Factory rescan. Separately, the pre-existing GitHub App webhook delivery halt
+since 2026-08-03 is a likely upstream cause of the provider going stale in
+the first place — that needs GitHub org/admin restoration plus a replay,
+same root-cause family the P0 webhook-queue incident lead is independently
+chasing (DMs with `webhook-queue-lead-0811`). Asked the lead to check
+whether Relayfile exposes a non-interactive reauth path before treating this
+as fully blocked on Khaliq.
+
+**2026-08-12 08:03-08:12Z — worked the credential layer directly on chief's
+laptop, found a deeper server-side blocker.** `factory-dispatch-fix-finn-0812`
+confirmed no agent-runnable self-reauth path exists from finn-mini (no cached
+token, no `auth refresh` command, provider reconnect needs human OAuth). But
+chief's own laptop already had a valid Agent Relay Cloud session
+(`agent-relay cloud session --json`, access token good to 18:18Z), and
+`relayfile status rw_7ccfea89` diagnosed the actual local fault: **"auth:
+agent-relay session unavailable"/"daemon predates last login - restart the
+daemon."** Ran `relayfile restart rw_7ccfea89 --foreground`: it successfully
+minted fresh delegated credentials (verified via `~/.relayfile/delegated/`
+shard files — new access tokens landed seconds after restart, previous shard's
+tokens had expired 2026-08-11T21:5xZ). Confirmed via `lsof -p <pid>` it was
+correctly scoped to `chief/.integrations`, not a stray/wrong workspace
+(a plain `relayfile status rw_7ccfea89` run *without* the daemon lock
+separately resolved to an unrelated old `pear` workspace — a live,
+reproduced instance of the registry-ambiguity defect already tracked in
+`relayfile-coordination.md`, but not what the running daemon was actually
+using).
+
+**So the 401/credential layer is fixed — but the actual pull still fails, one
+layer deeper.** `relayfile pull --workspace rw_7ccfea89 --provider github`
+now fails differently: `error: refresh github: Post
+"https://file.agentrelay.com/v1/workspaces/rw_7ccfea89/sync/refresh": context
+deadline exceeded`. Reproduced twice, both a clean 30.0s client timeout — the
+backend endpoint itself is hanging, not rejecting. relay#1399's local
+projection is still stale at `2026-07-30T21:00:08Z` vs GitHub's real
+`2026-08-11T21:21:43Z` (title also missing GitHub's now-added `[factory]`
+prefix). This is now a `file.agentrelay.com` backend problem, not a
+client-side credential problem — flagged to `relayfile-backend-fix-lead-0812`
+(already investigating the Daytona 404 on the same backend) to check whether
+`/v1/workspaces/{id}/sync/refresh` is the same failing code path in both
+incidents.
+
 **Goal:** A ready human-owned Linear issue safely dispatches a Cloud Factory
 recipe that creates agent-owned GitHub work and reports checkpoints to Linear.
 

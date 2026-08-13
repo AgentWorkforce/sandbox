@@ -3,9 +3,36 @@ status: active
 owner: daytona-mount-proof-0811
 previous_owner: daytona-relayfile-closeout-barry-0811
 reports_to: chief
-updated: 2026-08-11
-repos: [cloud, relay]
+updated: 2026-08-12
+repos: [cloud, relay, sandbox]
 ---
+
+## 2026-08-12 20:55Z — ../sandbox is the fix, not a diversion; also reopens E2B
+
+Khaliq asked how much `../sandbox` (`AgentWorkforce/sandbox`) could help. It's
+`@agent-relay/sandbox`, extracted from the internal codebase, published to npm
+at `0.1.2`, and **already a dependency of `packages/web` and
+`packages/daytona-runner`** in cloud. It has a real Daytona adapter
+(`src/daytona/runtime.ts`) whose `runScript(handle, { useSession: false })`
+calls `sandbox.process.executeCommand` directly — the exact one-shot fix
+approved for cloud#3001's 524. It also ships `SandboxOrchestrator.startMount`,
+a relayfile-mount-aware orchestration layer (`buildRelayfileMountStartShell`
+etc.) that avoids the 524 shape by design (polled short execs, not one
+blocking call), backed by a 1108-line Daytona runtime test file.
+
+Grepped cloud#3001's `route.ts`: zero references to the package. It hand-rolled
+`createSession`/`executeSessionCommand` calls instead of using the dependency
+already in `node_modules`. Redirected `relayfile-backend-fix-v3-0812` via DM:
+stop patching the route in place, replace its Daytona calls with
+`@agent-relay/sandbox`'s `DaytonaRuntime`/`SandboxOrchestrator` instead — less
+code, already tested upstream. Still: test live, open PR, hold for my review.
+
+Side effect: the package's `E2BSandboxRuntime.launch()` (`src/e2b/runtime.ts`)
+is also fully implemented, not stubbed. Earlier tonight I told Khaliq E2B
+cross-attach needed a fleet-roster-provisioned node first — that's no longer
+true for a sandbox *launch*; this package can launch an E2B sandbox directly
+via the SDK, independent of fleet roster provisioning. Reopens E2B as a
+lighter lift than previously scoped, pending Khaliq's go-ahead to start it.
 
 ## 2026-08-11 19:26Z — production deploy blocker CLEARED
 
@@ -30,6 +57,276 @@ env bug in the refresh loop, Relayfile token visible in mount argv, no
 existing-sandbox retrofit path) and the stale-projection currency check
 (`known-true-now`, `workspace-joined-not-created`, `cross-host-write-visible`,
 etc.) from the 08-11 19:28Z closeout entry below.
+
+## 2026-08-12 08:52Z — Relayfile 404 root-caused to backend, likely never-provisioned
+
+`daytona-mount-proof-v5b-0812` went dead with no report (confirmed via direct
+process check — no longer running in the sandbox); respawned as
+`daytona-mount-proof-v6-0812`, alive within seconds. Its findings: mount
+daemon runs stably against workspace `50587328-441d-4acb-b8f3-dbe1b3c5de99`,
+local reads work, but every remote sync call including plain `relayfile
+status` returns a clean 404 — 0 files ever synced, stuck at
+`bootstrapping: 0/0 files`.
+
+Independently, chief fixed a *different* Relayfile credential problem tonight
+on workspace `rw_7ccfea89` (dead local daemon, expired delegated token) — but
+even after that fix, `rw_7ccfea89`'s sync call got a 30s **timeout**, not a
+404. The two failure shapes look like different bugs on the same
+`file.agentrelay.com` backend: Daytona's clean 404-on-everything (including
+status) matches "workspace never provisioned server-side" — consistent with
+the standing finding that `provisionFleetSandboxNode()` in `cloud` had zero
+callers — while `rw_7ccfea89`'s timeout looks like a workspace that exists
+but has a hung reconcile loop. Flagged this distinction explicitly to
+`relayfile-backend-fix-lead-0812` so a fix for one isn't assumed to cover the
+other. Both leads coordinating directly now.
+
+## 2026-08-12 20:44Z — session close for the night
+
+**Daytona repair endpoint (cloud#3001)** — merged and deployed to
+production successfully. Invoking it live (Khaliq's own browser session)
+consistently fails with a real error, captured directly from a live
+Cloudflare Worker log tail: `Request failed with status code 524` — a
+Cloudflare edge timeout, meaning the Worker's own outbound call to
+Daytona's API is timing out, even though the sandbox itself is
+demonstrably alive and responds instantly to direct CLI exec. **Not yet
+root-caused** — needs investigation into why the Worker's Daytona client
+call (get/attach/runScript sequence) is slow/hanging server-side when the
+same operations are fast from a direct CLI. No app-level timeout exists on
+that call either (524 is Cloudflare's own limit kicking in, not ours).
+
+**Separately, real infra problem found and partially fixed**: the Daytona
+sandbox's root filesystem was completely full (100%, 5.0G/5.0G). Cleared
+npm cache (~734MB) and orphaned files from a misdirected `sudo npm`
+install (which silently wrote to an unused global root,
+`/usr/lib/node_modules`, instead of the actual resolved nvm path) — now at
+93%, healthy headroom. `agent-relay` CLI upgraded to 11.5.4 successfully.
+**Not yet done**: the running broker (PID 325) still has the old binary
+loaded in memory and needs a restart to take effect — deliberately not
+attempted tonight. This sandbox's startup pattern
+(`/usr/local/bin/relay-sandbox-entrypoint` → `agent-relay fleet serve`,
+driven by env vars) is different from sf-mini's (`node up` +
+`start-*-fleet-node` script) and wasn't understood well enough by end of
+session to restart safely — there are 3 live PTY sessions (idle, not
+actively working) whose identity/history could be at risk from a rushed
+restart.
+
+**Immediate next steps, in order:**
+1. Root-cause the 524 timeout on the Worker's Daytona API call — likely
+   the highest-value next step, since it blocks the actual mount proof
+   regardless of the broker version.
+2. Once safe, restart Daytona's broker to pick up 11.5.4 (same category
+   of fix as sf-mini, needed for the cross-node-attach proof to work here
+   too) — figure out the `fleet serve` restart mechanism properly first,
+   don't rush it.
+3. Re-run the credentials.json fix verification (server URL + node
+   enrollment wiring, both already fixed earlier) once the 524 timeout is
+   resolved, to confirm the mount actually completes end to end.
+
+All investigating agents told to hold, no further mutating actions
+overnight.
+
+## 2026-08-12 10:53Z — both backend root causes found (3rd attempt, codex)
+
+Two prior claude attempts (`relayfile-backend-fix-lead-0812`,
+`relayfile-backend-fix-v2-0812`) went quiet for hours with nothing to show
+and were respawned; the third, on codex (`relayfile-backend-fix-v3-0812`),
+found real, git-history-backed root causes for both open bugs within ~20
+minutes:
+
+**Daytona 404 — actually solved, not just diagnosed.** The mounted
+workspace ID `50587328-441d-4acb-b8f3-dbe1b3c5de99` was never a valid
+Relayfile `rw_*` workspace ID — it's the Daytona sandbox's own app UUID.
+`provisionFleetSandboxNode`'s original caller (commit `16f58648`) mounted
+*before* the relay workspace was actually provisioned; a later commit
+(`5c90d299`) fixed the ordering — enroll first, then mount with the real
+returned `relayWorkspaceId` — but only when invoked with
+`mountRelayfile:true`. This sandbox (`daytona-fleet-proof-0811`) was
+provisioned under the old buggy path and has been pointed at an ID that was
+never a real Relayfile workspace. **The fix is re-provisioning this specific
+sandbox through the corrected flow, not a server-side patch** — coordinating
+directly with `daytona-mount-proof-v6-0812` on execution.
+
+**rw_7ccfea89 timeout — real architecture bug found.** Production's `POST
+/v1/workspaces/{id}/sync/refresh` synchronously rebuilds the entire GitHub
+issue index before responding — up to 10k issue meta files, R2-loaded 100 at
+a time — with no timeout or async/queue boundary. That's structurally too
+slow to fit inside a 30s client timeout; not a transient hang, an
+architectural gap. Also noted: prod redeployed successfully at 10:10Z today
+(unclear if related); a fresh post-deploy status check was requested.
+Proposing a fix (async/queued rebuild) as a follow-up PR if time allows — no
+merge/deploy without explicit chief authorization. **Khaliq's design question, answered from production source
+(commit b2ee):** `handleSyncRefresh` calls `refreshGitHubIssueIndexes`
+**unconditionally** on every `POST /v1/workspaces/:id/sync/refresh` with
+`provider === "github"` — no cold-start/first-sync/dirty-repo gate. It
+always SELECTs up to 10,000 issue meta rows and R2-loads them in 100-wide
+batches; only the final `writeSystemFileIfChanged` write is idempotent
+(skips rewriting an unchanged index), the scan/load cost is paid every
+call regardless. **So "make it async" only fixes the 30s timeout symptom,
+not the actual waste — the real fix needs a background queue and/or an
+incremental dirty-repo set so unchanged repos skip the scan entirely.**
+Lead asked to scope the fix that way, or at minimum document the exact
+shape if it's too large to land tonight.
+
+**Design proposed (not implemented — right call for tonight, touches DO
+alarms/schema/production sync logic):**
+1. Add a per-WorkspaceDO `github_issue_index_dirty` table keyed on
+   `(owner, repo, issue_number)` + revision/action. Hook it into
+   `handlers/ops.ts:recordMutations`'s existing `origin === provider_sync`
+   branch — upsert dirty rows only on real provider changes (fs upserts
+   already dedupe unchanged content).
+2. Change `handleSyncRefresh`'s GitHub branch to return 202 for a
+   persisted DO-alarm job instead of awaiting R2 synchronously. The alarm
+   groups dirty rows by repo, loads only the changed issue metadata per
+   affected repo, applies upserts/deletes, clears completed dirty rows.
+3. For old workspaces with no dirty history: a separately persisted,
+   cursor-backed bootstrap rebuild in alarm-sized batches, run once, never
+   repeated on every refresh — also fixes the 10k-row cap for large repos.
+
+Test shape proposed: unchanged refresh = zero canonical scan/R2 reads; one
+issue update touches only its repo's index; delete removes the row; >10k
+bootstrap yields/continues across alarms; failure retains dirty work for
+retry. This eliminates both the client-side stall and the repeated full
+reconstruction. **Filed as a design, not a PR — proper follow-up, not
+tonight's scope.**
+
+**2026-08-12 11:22Z — local verification attempted per Khaliq's ask, blocked
+by an unrelated harness bug.** At clean production SHA `b2ee4b6036fd`, ran
+the repo's prescribed `make gate1-e2e` / `make gate1-single` Miniflare
+commands (after working around the host npm/Dropbox hang with an isolated
+npm config). Both fail before any test runs: `Uncaught Error: No such
+module "node:fs" imported from "api-worker.mjs"`. Traced to the generated
+bundle — `@relayfile/adapter-github/dist/adapter.js` and adapter-core pull
+in `node:fs`/`node:fs/promises`, which the local esbuild harness doesn't
+polyfill/externalize for the Workers runtime. **This is a separate,
+pre-existing defect in the local dev/test harness composition, unrelated to
+the sync/refresh design above** — worth its own fix, but not tonight.
+Correctly declined to implement the dirty-table/DO-alarm change without a
+runnable test environment. No source changes, merge, or deploy made.
+**rw_7ccfea89 thread closed out for tonight**: root cause found, fix design
+documented, local verification genuinely attempted and blocked by an
+unrelated bug — the right stopping point.
+
+**2026-08-12 10:56Z — Daytona 404 theory self-corrected with better
+evidence.** The lead checked the exact 404 response body and found it
+matches **relaycast**'s worker error envelope
+(`{ok:false,error:{code:not_found,...}}`, `packages/server/src/worker.ts:279-282`),
+not relayfile-cloud's flat envelope shape — meaning the mounted client is
+very likely hitting the **wrong base URL/service entirely** (relaycast
+instead of file.agentrelay.com), independent of whether the workspace was
+ever provisioned in Relayfile Cloud. Also surfaced: the mount was started
+**manually** by the prior lane (`daytona-mount-proof-v5b-0812`), not
+through the actual `POST fleet/nodes/sandbox` `mountRelayfile:true` path —
+likely why its config ended up pointed at the wrong service. Confirming the
+exact base URL with `daytona-mount-proof-v6-0812` now. The rw_7ccfea89
+timeout finding stands unaffected by this correction.
+
+**Confirmed 11:00:42Z**: `/home/daytona/.relayfile/credentials.json` had
+`server: https://cast.agentrelay.com` (Relaycast), no
+`RELAYFILE_SERVER`/`BASE_URL` override — the manual `v5b` mount really did
+hit the wrong service, exactly matching the observed 404 envelope. **Root
+cause fully closed: wrong client base URL, not workspace provisioning.**
+Authorized the fix: update `server` to `https://file.agentrelay.com` and
+restart the mount against the same workspace ID (no reprovisioning). Low
+risk, single config field, reversible. Awaiting confirmation the 404s
+actually clear before calling this done.
+
+**2026-08-12 11:28Z — fix applied, but a second wiring gap found; real fix
+is re-provisioning, not another config patch.** `daytona-mount-proof-v6-0812`
+applied the server-URL correction (verified directly: `credentials.json`
+now correct, mount daemon properly daemonized) then exited without
+reporting. Direct `relayfile status` now fails differently:
+`error: cloud session expired. Run 'agent-relay cloud login' to sign in
+again.`
+
+Traced directly: the sandbox has a proper **node-level device enrollment**
+(`fleet-enrollments.json` + `workspace-key.json` — a real, long-lived
+machine token, exactly what a fleet node should have), but **no
+`agent-relay` cloud session directory exists in the sandbox at all.** The
+manually-started mount (by `daytona-mount-proof-v5b-0812`, not the
+automated `mountRelayfile:true` path) never wired the node's own enrollment
+token into the `relayfile` process's environment — compare
+`start-sf-mini-fleet-node`/`start-finn-mini-fleet-node`, which explicitly
+export `RELAY_NODE_TOKEN`/`RELAY_WORKSPACE_KEY` from
+`fleet-enrollments.json` before invoking the CLI. So `relayfile` falls back
+to expecting a personal interactive login that was never established —
+"expired" is a misnomer for "never existed."
+
+**Both the base-URL bug and this credential-wiring gap trace to the same
+root cause: the mount was started manually instead of through the
+automated provisioning path.** The actual fix is re-provisioning this
+sandbox's mount correctly (or exporting the node's own enrollment
+credentials into the `relayfile` process env, matching the other fleet
+nodes' pattern) — not another config patch. This is now an action to take,
+not something left to investigate further.
+
+**2026-08-12 11:42Z — real fix plan approved, implementation authorized
+(not deploy).** Khaliq: "provision it via the correct automated path,
+NEVER STOP." Checked the actual current-path endpoint
+(`POST /api/v1/fleet/nodes/sandbox`) first — it's **create-only**, no
+sandbox/node ID in its body, unconditionally calls
+`provisionFleetSandboxNode()` → `orchestrator.provision()`. Calling it
+against `dedfeb9a` would create a **second** Daytona sandbox — correctly
+ruled out before acting, not after. No existing retrofit/attach route.
+
+**Approved plan**: add a new, narrow, attach-only endpoint —
+`POST /api/v1/fleet/nodes/sandbox/:sandboxId/relayfile-mount` — that
+reuses existing tested primitives (`createFleetDaytonaRuntime(...).attachSandbox(sandbox,{owned:false})`,
+the already-used `buildAutoRelayfileMountConfig`/
+`installRelayfileTokenRefreshLoop` helpers in `sandbox-bridge.ts`) rather
+than reimplementing token logic. Hard-guarded: validates the on-box
+enrollment matches the expected `daytona-fleet-proof-0811` node before
+doing anything; never creates/destroys a sandbox; never mints/redeems a
+new node-enrollment token or re-enrolls the node; resolves/binds the
+canonical `rw_*` relay workspace server-side and rejects anything else;
+mints the Relayfile access+refresh pair server-side via
+`RELAYAUTH_API_KEY` (bypassing the missing sandbox cloud session
+entirely — this is the intended auth path, not a workaround); restarts
+only the mount with `killExisting:true`; uses the existing writable
+`/home/daytona/relayfile-workspace`, not the helper's `/workspace`
+default; verifies `relayfile status`/daemon state without printing
+tokens.
+
+**Authorized: implement as a PR. Not authorized: merge or deploy** — this
+is production Cloudflare Workers code; explicit sign-off required before
+any deploy step regardless of how well-scoped the change is. Noted caveat:
+this fixes Daytona's 404/auth/miswiring only — the independent rw_7ccfea89
+sync/refresh 30s timeout (see above) may still reproduce afterward and is
+correctly out of scope for this patch.
+
+**2026-08-12 12:14Z — PR opened, reviewed in full, genuinely solid.**
+[`cloud#3001`](https://github.com/AgentWorkforce/cloud/pull/3001)
+(575+/18-, 4 files). Chief read the complete diff, not just the
+description. Verified directly: the route hard-codes a single
+`REPAIR_TARGET` (this exact sandboxId/nodeId/nodeName) and 404s any other
+sandbox ID before auth even resolves; it cross-checks the *live* on-box
+enrollment via a script that reads `fleet-enrollments.json` and returns
+only public identity fields (explicit comment: never reads/prints the
+long-lived node token); it cross-checks the proven `relayWorkspaceId`
+against the workspace's own binding, 409ing on mismatch; the new
+`startFleetSandboxAutoRelayfileMount` is a genuine refactor —
+`provisionFleetSandboxNode`'s existing behavior is unchanged, just shared
+rather than duplicated; a new PID-file guard kills the prior token-refresh
+loop cleanly on repair instead of racing it; the failure path explicitly
+never tears down the sandbox even if the refresh-loop install fails after
+the mount starts. Tests cover reject-wrong-sandbox, the happy path with
+exact call assertions, and the binding-mismatch case.
+
+CI in progress (build/typecheck/Next.js build/Phase 0 tests), nothing
+failed yet. **Holding for CI green, then Khaliq's explicit sign-off before
+any deploy or live invocation** — standard production-deploy gate, PR
+quality doesn't change that requirement.
+
+**2026-08-12 12:37Z — CI went fully green (0 failed, mergeStateStatus
+CLEAN, confirmed independently), Khaliq merged `62f89997` himself.**
+Auto-deploy workflow triggered on merge, in progress as of this entry.
+**Deploy landing is not the same as authorization to invoke the endpoint
+against the live sandbox** — that remains a separate, explicit go-ahead
+not yet given.
+
+**2026-08-12 13:00Z — deploy succeeded, confirmed independently.** The
+attach-only repair endpoint is now live in production. Nobody has invoked
+it against `dedfeb9a-8682-4b89-957f-5bd15603ee0c` yet — waiting on explicit
+Khaliq authorization for that step, same gate as the rest of tonight.
 
 # Daytona sandboxes as live fleet nodes
 

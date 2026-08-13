@@ -1,10 +1,23 @@
 ---
 status: active
-owner: soc2-lead-0810
-reports_to: soc2-program-lead-0811
-updated: 2026-08-10
+owner: unassigned
+previous_owner: soc2-program-lead-0811
+updated: 2026-08-12
 repos: [relayauth, factory, chief, relay, relaycast-cloud]
 ---
+
+**2026-08-12 correction:** frontmatter was stale — listed `soc2-lead-0810`
+(superseded before the 08-11 restart) as owner, with the lead that actually
+finished the critical path (`soc2-program-lead-0811`) demoted to
+`reports_to`. Per the 08-11 journal, that lead closed its session ~12:30Z
+after the chain (relayauth#79, relay#1477, cloud#2981/2987/2989) went fully
+merged and deployed — `commit → attestation ledger → OIDC-bound human →
+session → reasoning` is end-to-end live. It has since released; no one
+picked up the remaining open items below. Not "idle" in the concerning
+sense — the owner finished its scoped work and stood down correctly. What's
+actually unowned: factory sessionRef forwarding (one-line change, briefed
+but never turned into a PR), `findDuplicate()` always-null P2 gap, CH-1
+re-scope (needs Khaliq yes/no), optional prod D1 baseline read.
 # SOC-2 agent traceability — the Nabis design-partner wedge
 
 **Goal:** Every consequential agent action, starting with a git commit, is

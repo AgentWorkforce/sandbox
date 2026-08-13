@@ -80,6 +80,38 @@ coordinate with the factory-230 worker, report green or the exact blocker.
 Chief to decide on merging `factory#236` once CI is actually green — same bar
 as every other PR shepherded tonight.
 
+## 2026-08-12 07:30Z — Barry confirmed fully non-functional for new work
+
+Khaliq asked whether Barry was working, citing earlier usage-limit issues.
+Verified directly by attaching in view mode to two freshly-spawned agents:
+
+- **Codex on Barry is usage-limited**: `relay-1488-fix-barry-0811`'s session
+  shows *"You've hit your usage limit. Upgrade to Pro..."* — confirms the
+  earlier "Codex account exhausted" report for `relayfile-storm-guard-0811`
+  was not an isolated incident; it's the whole machine's Codex account.
+- **Claude on Barry is not authenticated**: `factory-236-finish-0812`'s
+  session shows *"Not logged in · Run /login"* — same failure already found
+  on `relayfile-storm-guard-claude-barry-0811` earlier tonight, now confirmed
+  on a second, independently-spawned Claude session.
+
+**Barry cannot currently run new agent work in either runtime.** All four
+tasks freshly dispatched there (`relay-1488-fix-barry-0811`,
+`factory-236-finish-0812`, `lifecycle-workflows-lead-0812b`,
+`factory-dispatch-fix-lead-0812`) were dead on arrival and redispatched to
+finn-mini instead, verified working there by real CPU activity (18-24%) on
+the replacement processes.
+
+Also observed in passing: Barry's process table carries dozens of zombie
+`claude`/`codex` processes, several with **26-day** elapsed times, all at
+0.0% CPU. This is a separate housekeeping problem — not diagnosed further
+tonight, but worth a dedicated cleanup pass. Given both runtimes are
+credential-broken machine-wide, this also means **any existing Barry worker
+still shown as "active" in the roster should not be trusted to actually
+produce more work** until someone re-authenticates both CLIs there. This
+strengthens rather than weakens the case for retiring `chief-barry-codex-0811-1440`
+and the other Barry-resident leads — the machine itself is the blocker, not
+individual agent state.
+
 ## Session archive evidence (redacted — paths/hashes only, never raw content)
 
 Provided by `barry-handoff-controller-2002`, spot-verified by Chief (line

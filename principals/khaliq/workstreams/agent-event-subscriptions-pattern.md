@@ -1,9 +1,15 @@
 ---
 status: active
-owner: subs-pattern-0811
+owner: none (reference doc, not a task lane)
 reports_to: relayfile-subs-lead-0811
-updated: 2026-08-11
+updated: 2026-08-12
 ---
+
+**2026-08-12 correction:** frontmatter previously listed `subs-pattern-0811`
+as owner. That agent name is not registered anywhere in the workspace —
+verified via a direct DM attempt ("Agent not found"). This file was never an
+active task lane; it's reference documentation. No one is idle here because
+no one was ever assigned.
 
 # Agent Event Subscription Pattern
 

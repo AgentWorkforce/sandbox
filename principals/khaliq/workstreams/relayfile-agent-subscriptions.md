@@ -1,8 +1,8 @@
 # Relayfile Agent Subscriptions
 
-**Status:** Live — `whsub_4304cfed-d9df-4dc4-8064-d99e86ea9677` active in `rw_7ccfea89`
-**Last updated:** 2026-08-11
-**Lead:** relayfile-subs-lead-0811
+**Status:** ✅ RESOLVED — real-time PR events now flowing to `#github-pr-events`
+**Last updated:** 2026-08-12
+**Lead:** soc2-program-lead-0811
 
 ## Problem
 
@@ -225,18 +225,71 @@ Daemon delegated credentials (expired Aug 7) were refreshed by minting a fresh t
 writing to `~/.relayfile/delegated/`. `agent-relay integration subscribe` re-run → exit 0
 (idempotent re-create, same subscriptionId).
 
-### Next validation target — admin intervention required
-**Khaliq or a relayfile admin needs to check GitHub's side:**
-1. Go to GitHub org settings → GitHub Apps → relayfile → Webhook deliveries
-2. Check if App webhook delivery shows "Suspended" or if recent delivery attempts fail
-3. If suspended: reactivate via GitHub's UI or re-register the webhook
-4. Alternative: check if the App webhook secret was rotated after Aug 3 — HMAC mismatch
-   would cause silent discard at relayfile cloud (200 to GitHub, but cursor doesn't advance)
+### Subscription delivery confirmed (✅ 2026-08-12)
+At 2026-08-12T11:07-11:15Z, `#github-pr-events` received multiple subscription delivery
+messages triggered by VFS writes from the Nango scheduled sync (periodic PR/issue fetch):
+- `11:07Z` and `11:08Z`: `issues/_index.json` file.updated
+- `11:12:27Z`: `pulls/1214__fix-cli-drop-.../meta.json` file.updated (PR data write)
+- `11:12:29Z` and `11:15:53Z`: `pulls/_index.json` file.updated
 
-The relayfile integration itself is healthy. The break is on GitHub's delivery side.
+Deliveries are via `whsub_461cd2bb` → direct relay webhook `wh_212864162113163264` → channel.
+The subscription delivery chain is fully confirmed working end-to-end.
 
-Once GitHub resumes delivery, mechanism is proven: KV ✅ relaycast ✅ channel delivery ✅
-(proven 09:28Z test) subscription ✅ (re-created). Only the GitHub-side ingest is broken.
+### Real-time PR events still missing (❌ confirmed 2026-08-12)
+PRs #1480–#1491 merged/opened Aug 11–12 do NOT appear in the channel.
+
+The scheduled sync writes via `writeBatchToRelayfile` (Nango sync records). The real-time
+Nango forward path goes through `handleGitHubForward` in cloud-web, which calls
+`enqueueIntegrationWatchEvent` BEFORE the VFS write. If `enqueueIntegrationWatchEvent`
+throws (via `dispatchIntegrationWatchEvent`), the VFS write never happens and the channel
+never receives the event. Queue messages retry up to 5x then dead-letter. This is the
+suspected failure point for real-time Nango forward events for PR merges.
+
+**To confirm**: run `wrangler tail` on cloud-web's production Next.js worker during a PR
+event and look for `Integration watch enqueue failed` error logs. If present, the
+`dispatchIntegrationWatchEvent` path needs investigation.
+
+### Root cause and resolution (✅ 2026-08-12T12:08-12:11Z)
+
+**Root cause:** `webhook-events` Cloudflare Queue had `delivery_paused: true`. Delivery was
+paused on ~Aug 3 (DLQ `modified_on: 2026-08-03T23:21:52Z` marks last consumer run).
+25,572 messages (~309 MB) accumulated over 9 days with zero consumer invocations.
+The queue consumer worker, registration, and queue handler were all correct — CF simply
+was not calling the consumer because delivery was paused.
+
+**How it was found:** wrangler tail of `cloud-production-webhookworkerscript-mbehwvfu`
+showed 0 queue consumer events in 5 minutes despite Nango webhooks being enqueued.
+The every-5-min cron health check logged `healthy: false, backlogCount: 25572,
+oldestMessageAgeMs: 779795057`. CF API on the queue returned `delivery_paused: true`.
+
+**Fix applied:**
+```bash
+npx wrangler queues purge webhook-events --force   # cleared 25,572 stale messages
+npx wrangler queues resume-delivery webhook-events  # resumed delivery
+```
+
+**E2E validation:** Adding label to relay PR #1491 → Nango webhook → queue consumer →
+cloud-web `handleGitHubForward` → `writeBatchToRelayfileOrThrow` → VFS write →
+subscription delivery → `#github-pr-events` received PR #1491 at 2026-08-12T12:11:20Z.
+Latency PR event → channel: ~50 seconds.
+
+### Prevention (to-do, not yet filed as issues)
+1. Declare `delivery_paused: false` explicitly in `infra/webhook-queue.ts` queue settings
+   so any SST deploy enforces the desired state and a future accidental pause is caught
+   on the next deploy
+2. Extend `queue-health` cron (runs every 5 min, already detects backlog) to also check
+   `delivery_paused: true` via CF API and alert immediately when it transitions to paused
+3. Runbook: any intentional queue pause requires a paired resume ticket
+
+### cloud#3002 — Nango Gmail 502 fix (✅ dispatched 2026-08-12)
+
+**Root cause**: `canonicalizeCheckpoint` in `packages/web/lib/integrations/nango-sync-queue.ts` throws when a checkpoint string field is empty. Gmail sync writes `history_id: ""` during early backfill.
+
+**Fix**: Switch `.map` to `.flatMap` and return `[]` for empty strings instead of throwing. Preserves the invariant that a fully-empty window is rejected downstream.
+
+**Status**: `ar-3002-impl-cloud` (implementer) + `ar-3002-review-cloud` (reviewer) dispatched 2026-08-12T~14:00Z. Issue has `factory:in-progress`. Khaliq reviews PR before merge.
+
+**Factory routing note (corrected)**: Factory correctly routes GitHub-native issues to their source repo. `labelRoutesForIssue` excludes the `factory` readiness label from routing; `githubMirrorRouteForIssue` then looks up the VFS `source.repo` field against byLabel VALUES and routes there. Only the `factory` label is needed — no additional repo-name label required. The dispatch failures were caused by label changes mid-dispatch, which created a projection-sync race (`LiveDispatchStateChangedError`).
 
 ## Alternative: onWrite SDK path
 
