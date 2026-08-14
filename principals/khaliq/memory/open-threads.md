@@ -633,15 +633,34 @@ caller authenticated as sponsor B can rotate an agent bound to sponsor A.
   the code were written. G1–G3 carried over near-identically; G4 was
   deliberately replaced by server-side DB columns.
 
-**The escape hatch does not exist.** relay#1499 — merged 2026-08-14 as the
-operator recovery path, and the thing that makes arming survivable — PATCHes
-`{base}/v1/agents/{name}/legacy-identity`. **That route is implemented
-nowhere**: absent from relaycast `main`, from the relaycast#324 branch, and from
-relaycast-cloud `main` (verified by grep on all three, independently of the lane
-that found it). #1499 calls a server endpoint that has never been written and
-will 404. So it is not merely unreleased — it is non-functional against every
-deployed and undeployed relaycast we have. Anyone repeating "step 1 is done" is
-wrong.
+**The escape hatch is merged ahead of its server half — and the server half is
+one open PR away.** relay#1499 PATCHes
+`{base}/v1/agents/{name}/legacy-identity`. That route is absent from relaycast
+`main`, from the relaycast#324 branch, and from relaycast-cloud `main`, and a
+live probe returns 404 where an existing route 401s — so #1499 is
+**non-functional against every deployed relaycast today**, and "step 1 is done"
+is wrong.
+
+But it is **not** unwritten. It exists in **relaycast#325**
+(`fix/legacy-identity-cas-0813`), open, non-draft, mergeable:
+`packages/engine/src/routes/agent.ts:367-369` plus `openapi.yaml:1852`. Chief
+first recorded this as "implemented nowhere" after grepping main, #324 and
+relaycast-cloud — all three greps correct, none of them the branch that has it.
+The lesson, logged in `learnings.md`: **an exhaustive-sounding negative is only
+as good as the ref list it searched**, and a PR branch is a ref.
+
+**Merging relaycast#325 is sufficient and safe, and it is the unblock.** Its
+route is registered with `requireWorkspaceKey` — not `requireAgentToken`, not
+any #324 authority function — and neither the handler (`:367-438`) nor its only
+callee `claimLegacyAgentIdentity` (`engine/agent.ts:482-519`) references
+`agentCredentialAuthority`, `authorizeExistingAgentCredential`,
+`bindLegacyAgentCredential` or `sponsorOrgId`. So it is unaffected when #324
+arms, and #1499's recovery command keeps working afterwards. Its preconditions
+are narrow: agent exists, status offline, `metadata.identity_key` currently
+absent, claimed by an atomic CAS (`json_type(...) IS NULL`,
+`engine/agent.ts:493-504`). Note the flip side, which the reviewing lane put
+more sharply than the question did: #324 provides **zero** additional protection
+on that write — workspace-key possession is the whole gate.
 
 **The correct ordering is the inverse of the obvious one.** Chief first wrote
 "#324 merged → production configured → #1505 merges". That would cause the exact

@@ -1405,3 +1405,26 @@ trap that would otherwise cost them a re-open.
   checks` for job-level truth. And pin every CI claim to the SHA it was measured
   on: at a few merges an hour, a "done" report goes stale within minutes, and
   green-on-old-base is not green.
+
+- **An exhaustive-sounding negative is only as good as the ref list it searched
+  — and a PR branch is a ref.** Chief grepped `legacy-identity` across relaycast
+  `main`, the relaycast#324 branch and relaycast-cloud `main`, got three clean
+  misses, and escalated "this route has never been written" to the principal and
+  into the brain. It was written all along, in relaycast#325
+  (`fix/legacy-identity-cas-0813`) — a fourth ref nobody had named. Every
+  individual grep was correct; the enumeration was not. Before stating that
+  something exists nowhere, list the refs searched *in the claim itself*, so the
+  gap is visible to the reader rather than hidden in the conclusion. The
+  accurate form of that finding was available and much less alarming: merged
+  ahead of its server half, not built on sand.
+
+- **A wedged event loop makes a broker unkillable, and it is on main today.**
+  Shown by paired experiment, not inference: SIGSTOP the engine *after* a node
+  is online, so the socket stays open and `agent.register` is simply never
+  answered — no schema rejection, no error, just an unanswered frame. Healthy
+  arm: `node agent list` returns in 495 ms, SIGTERM exits in 1517 ms. Stalled
+  arm: `node agent list` **times out at 12002 ms** and SIGTERM leaves the broker
+  **still alive at 45000 ms**. So a slow or stopped peer does not degrade one
+  operation — it takes out the whole control plane of that broker and defeats
+  ordinary shutdown. Any "is the node healthy" check that runs *through* the
+  broker's own API inherits the wedge and reports nothing.
