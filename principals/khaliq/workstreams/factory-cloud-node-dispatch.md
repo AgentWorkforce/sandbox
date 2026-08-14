@@ -27,8 +27,17 @@ needs its own resolved copy of `factory.khaliq.config.json` and its exact path
 passed with `--config` on every command and runtime. A `factory.config.json`
 sitting in another repo is inert, not a fallback.
 
-**The live blocker is credential, not compute — and it is still broken today.**
-Verified 2026-08-14 07:56Z from the chief repo:
+**The live blocker was never the credentials.** It is a name collision on one
+environment variable, root-caused and worked around 2026-08-14 08:05Z. Full
+mechanism in the History entry below; the short version is that
+`AGENT_RELAY_BIN` means *the broker binary* in `relay` and *the agent-relay
+Node CLI* in relayfile's Go CLI, so Relayfile's automatic credential re-mint
+execs the Rust broker, fails, and blames the operator's CLI version. Every
+relay-spawned agent inherits that variable, so this breaks Relayfile for the
+whole fleet, not one machine. `relayfile-sdk-auth-0814` (chief-broker) owns the
+real fix, per Khaliq: use the SDK, do not shell out.
+
+The observed failure, before the workaround:
 
 ```
 relayfile status
@@ -39,29 +48,15 @@ relayfile status
   'cloud' / Usage: agent-relay-broker <COMMAND>)
 ```
 
-Two distinct defects stacked, and the second is the interesting one:
+Credential expiry is routine and self-healing by design. What made it an
+outage is that the self-heal path could never run: it execs the wrong binary
+and then reports a version error against a CLI that is already current
+(11.5.5, with the subcommand it claims is missing). The operator is directed
+to an upgrade that would change nothing.
 
-1. The delegated Relayfile credentials are expired. This is the same failure
-   that stalled dispatch on 2026-08-12, when the `/github` projection for
-   workspace `rw_7ccfea89` went stale with repeated `HTTP 401 'Token has
-   expired'`. It was never durably fixed, only worked around.
-2. **The automatic re-mint fallback invokes the wrong binary.** It shells out
-   to something that resolves to `agent-relay-broker` — the Rust broker, which
-   has no `cloud` subcommand — and then reports a misleading
-   "agent-relay CLI >= 8.7.0 required". The real `agent-relay` CLI on this
-   machine is 11.5.5 and `agent-relay cloud session --help` works fine. So the
-   self-heal path can never succeed, and its error message points the operator
-   at a version upgrade that would change nothing.
-
-   Leading hypothesis, **not yet confirmed in source**: the fallback resolves
-   the CLI through `AGENT_RELAY_BIN`, which on this machine is set to
-   `/Users/khaliqgant/.local/bin/agent-relay-broker`. Read the relayfile source
-   before writing this down as fact — a string in an error message is not the
-   mechanism.
-
-Until Relayfile can mint credentials unattended, a cloud-node Factory will
-stall exactly the way the laptop one does. Moving the host first would only
-relocate the outage.
+Until that is fixed at the source, a cloud-node Factory will stall exactly the
+way the laptop one does, because relay sets the offending variable for every
+agent it spawns. Moving the host first would only relocate the outage.
 
 **Two rules that constrain any implementation** (both learned from the AR-448
 duplicate, see `memory/learnings.md`):
@@ -79,9 +74,11 @@ stays that way.
 
 ## Next
 
-1. Fix the Relayfile credential self-heal, starting with the wrong-binary
-   fallback — confirm the mechanism in source first. This is the gating item;
-   nothing downstream works without it.
+1. Land `relayfile-sdk-auth-0814`'s fix (SDK instead of shell-out, plus the
+   `AGENT_RELAY_BIN` misreading, plus the misdirecting error message). Mechanism
+   is confirmed; this is now execution, and it gates everything below.
+   Interim unblock for any agent hitting it today: run relayfile with
+   `AGENT_RELAY_BIN=~/.local/bin/agent-relay`.
 2. Decide the cutover rule: when the cloud-node Factory comes up, the laptop
    instance must stop dispatching, and that has to be enforced by the claim
    layer rather than by remembering to turn one off.
@@ -93,6 +90,53 @@ enrollment constraint recorded in `chief-in-sandbox`: fleet enrollment is
 browser-session-only, so no agent can enroll the node it needs.
 
 ## History
+
+### 2026-08-14 — root cause: `AGENT_RELAY_BIN` means two different things in two repos
+
+Verified against `origin/main`, not inferred from the error text.
+
+relayfile ships a **Go** CLI (`cmd/relayfile-cli`, wrapped by the npm package as
+`bin/relayfile-cli-<platform>`). That is where the shell-out lives, which is why
+grepping only the TypeScript found nothing — and why the fix Khaliq remembers
+landing "a long time ago" covered the TS SDK and left this implementation
+behind.
+
+`cmd/relayfile-cli/main.go`: `agentRelayBinary()` (line 1160) returns
+`$AGENT_RELAY_BIN` if set, else `"agent-relay"`.
+`ensureAgentRelayCLICompatible()` (line 1167) then execs that binary for
+`--version` and for `cloud session --help`, and lines 1261/1287 exec it again
+for the real session call. `minAgentRelayCLIVersion` is `"8.7.0"` at line 55.
+
+In `relay`, the same variable means the **broker** binary — see
+`packages/cli/src/cli/lib/client-factory.ts:64` (`binaryPath =
+process.env.AGENT_RELAY_BIN`), and `integration-cleanup-journal.ts:371` whose
+error text says outright *"The resolved agent-relay-broker binary … or set
+AGENT_RELAY_BIN to a current build"*. Every relay-spawned agent, the resident
+Chief included, runs with `AGENT_RELAY_BIN` pointed at
+`~/.local/bin/agent-relay-broker`. So relayfile execs the Rust broker, gets
+`unrecognized subcommand 'cloud'`, and reports "agent-relay CLI >= 8.7.0
+required".
+
+**The discriminating measurement**, chief-broker 08:05Z, same machine, same
+credentials, seconds apart:
+
+- `relayfile status` → creds expired, re-mint fallback failed with the 8.7.0 error.
+- `AGENT_RELAY_BIN=~/.local/bin/agent-relay relayfile status` → `auth:
+  agent-relay session ok`, `github healthy lag 0s`, last event 2m57s ago.
+
+So the credentials were never the problem. This is almost certainly the root
+cause of the 2026-08-12 dispatch stall recorded in [[factory-live-dispatch]],
+where the `/github` projection went stale with repeated
+`HTTP 401 'Token has expired'` and could not refresh.
+
+The general rule, already in `memory/learnings.md`: reusing a primitive is not
+free — check who writes it. A shared env-var name with two owners and two
+meanings is the defect, independent of the shell-out.
+
+`relayfile-sdk-auth-0814` dispatched on chief-broker to remove the shell-out in
+favour of the SDK path, stop reading `AGENT_RELAY_BIN` as the CLI regardless,
+fix the misdirecting error message, and land a regression test that fails
+before and passes after.
 
 ### 2026-08-14 — workstream opened; Relayfile self-heal found broken at the binary
 
