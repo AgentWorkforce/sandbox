@@ -633,10 +633,67 @@ caller authenticated as sponsor B can rotate an agent bound to sponsor A.
   the code were written. G1–G3 carried over near-identically; G4 was
   deliberately replaced by server-side DB columns.
 
-Real sequence: relaycast#324 reviewed, merged, released → production configured
-with both env vars → #1505 repins to a released version and merges. #1505 is
-not close to mergeable, and closing #1497 first would remove a courtesy check
-while replacing it with nothing.
+**The escape hatch does not exist.** relay#1499 — merged 2026-08-14 as the
+operator recovery path, and the thing that makes arming survivable — PATCHes
+`{base}/v1/agents/{name}/legacy-identity`. **That route is implemented
+nowhere**: absent from relaycast `main`, from the relaycast#324 branch, and from
+relaycast-cloud `main` (verified by grep on all three, independently of the lane
+that found it). #1499 calls a server endpoint that has never been written and
+will 404. So it is not merely unreleased — it is non-functional against every
+deployed and undeployed relaycast we have. Anyone repeating "step 1 is done" is
+wrong.
 
-`relay-lead-0814` has **held** the #1497 close and offered to take #324, but
-will not reach into another repo unasked. Nothing else can close this hole.
+**The correct ordering is the inverse of the obvious one.** Chief first wrote
+"#324 merged → production configured → #1505 merges". That would cause the exact
+outage it was meant to prevent, because **#1505 is the client that CREATES the
+credentials the armed gate will demand.** Its own "Legacy migration rollout
+(required order)" section says the client ships and every persistent broker
+restarts once — atomically persisting a scoped token beside broker state —
+*while the old authority is still active*.
+
+Corrected sequence, from `relay-lead-0814`:
+
+1. A working recovery path exists. **Not yet true** — needs
+   `PATCH /v1/agents/:name/legacy-identity` implemented server-side to match the
+   client #1499 already shipped.
+2. relaycast#324 reviewed and merged, **not configured**. It stays inert.
+3. `@relaycast/engine` + types + a2a **published** (registry still at 8.0.0).
+4. relay#1505 repins to the published version and merges; a relay client release
+   ships.
+5. **Every persistent broker restarted once**, pre-staging verified fleet-wide.
+   The load-bearing step, and the one both first drafts buried.
+6. **relaycast-cloud#60 lands** — CI fixed, lockfile updated, D1 migration 0035
+   operator-reviewed, secrets provisioned, deployed. **This is the arming
+   event**, not #324. #60 is the deployment that consumes #324's engine package;
+   a merged and configured #324 alone flips nothing in production.
+7. Enforcement **proven live with a must-fire/must-not-fire pair** — a
+   cross-sponsor rotation refused *and* a legitimate sponsor rotation still
+   succeeding. Positive-only proves nothing.
+
+**The variable names are entrypoint-specific — the obvious pair is the wrong
+one.** Self-host reads
+`RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_PUBLIC_KEY_PEM` / `_ISSUER`
+(`packages/engine/src/bin/serve.ts:82-83`). **Hosted production Cloudflare reads
+`RELAYAUTH_SIGNING_KEY_PEM_PUBLIC` / `RELAYAUTH_ISSUER`**, and that hosted
+reading is introduced *by #60 itself* — confirmed absent before it. Setting the
+self-host pair in production configures nothing while looking like success.
+Production RelayAuth already has a live RS256 keypair (confirmed via its public
+JWKS endpoint); its own spec doc claiming HS256 is **stale**. The GH-secret →
+`sst secret set` provisioning path is also newly built by #60, not pre-existing.
+
+**There is no staged rollout.** `agent.register` (`node.ts:1809`)
+unconditionally requires a sponsor proof once trust-root config is set — one
+all-or-nothing switch. Setting the two prod secrets and deploying #60 *is* the
+arming event, and it 403s every existing agent on its next reconnect,
+fleet-wide and immediate. **Open and blocking: no broker or SDK code was found
+in either repo that currently attaches a sponsor proof to that call.** If that
+client-side piece does not exist, steps 4–5 would ship a client that stages
+nothing and the whole plan has no client side.
+
+State 2026-08-14: #324 is +2343/-55, open, draft, zero reviews, mergeable/CLEAN,
+reviewed clean by `relaycast-324` with no code changes needed. #60 is open,
+draft, zero reviews, Typecheck+Tests failing — explained, not a defect: the
+published pre-#324 `EngineConfig` type lacks `agentCredentialAuthority`, a
+deterministic consequence of the version pin. relay#1497 is CLOSED, with the
+G1–G6 accounting in its close comment. Arming is Khaliq's call and a sequenced
+operation, not a config edit.

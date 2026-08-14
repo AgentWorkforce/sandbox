@@ -120,13 +120,75 @@ Every dependency below is a real blocker, not a formality.
   the exact `teams.json` name and has answered a liveness probe through that
   identity. A renamed successor is not continuity.
 
+## The rotation's hard requirement: a stable state-dir
+
+**Identity is derived, not stored, and a changing state-dir changes it.**
+`reclaim-legacy-identity` derives identity from
+`persistent_broker_state_path(state_dir, name)`, hashed — never passed as an
+argv value. So the identity a session presents is a function of where its state
+directory is.
+
+The evidence this is not theoretical: `chief-sf-mini`, `chief-sfm-v2` and
+`chief-sfm-final` were created 2026-08-14 06:01:24Z, 06:02:37Z and 06:03:34Z,
+and **all three carry a different `identity_key` hash** — three distinct
+identity derivations in under three minutes, for what was conceptually one
+restart of one agent.
+
+**If that was ephemeral-state-dir behaviour rather than a person retrying, a
+two-hour rotation reproduces it twelve times a day with no operator involved.**
+Every rotation would derive a fresh identity, fail to prove ownership of
+`chief`, and burn the name — the same crashloop that killed `nightcto-sf`
+15,438 times between 2026-07-28 and its retirement.
+
+**This validates the long-lived-sandbox decision.** A fresh sandbox per
+rotation gives a fresh state-dir and therefore a fresh identity every time; a
+long-lived sandbox with the state-dir on persistent storage is what makes
+identity stable across rotations. Concrete acceptance test: **rotate twice and
+confirm `identity_key` is byte-identical across both rotations.** Assume
+nothing here — this is the single mechanism the whole design rests on.
+
+## What killed the current Chief's address, 2026-08-14
+
+Recorded because it is the first live instance of the failure the rotation
+would hit on a schedule.
+
+`chief`'s record carried `metadata.release: {reason: null, released_at:
+2026-08-14T07:25:14Z}` — the seat was released, which is why its token stopped
+authenticating and why the broker never fetched its messages. Delivery mode was
+also not `auto`. Symptoms were silent in both directions: sends succeeded, the
+roster looked healthy, no dead letters, `pending_messages: 0`.
+
+Facts established, and one theory killed:
+
+- **Only `chief` was released.** `factory-lead`, `factory-lead-replacement` and
+  `soc2-factory-lead` carry no release record at all, ever; `marketing-lead`'s
+  is from 2026-08-04. Their shared `lastSeenAt` was a bulk status recompute, not
+  an event. A "one actor released four residents" theory is wrong.
+- `chief`'s record is **legacy pre-gate with no `identity_key`**, so
+  `RELAY_AGENT_IDENTITY_KEY` reclaim structurally cannot work for it.
+- **Release annotates the record; it does not clear it.** Plain re-registration
+  still fails with "Agent chief already exists in this workspace".
+- The fleet precedent for this shape is `marketing-lead`'s 2026-08-04
+  `release.reason`: *"Release exact stale nonresponsive resident seat before one
+  supported same-name respawn."*
+- **The actor cannot be identified.** There is no audit, activity, or history
+  subcommand anywhere in the CLI — `node`, `fleet`, `workspace`, `agent`,
+  `cloud` all checked. A resident agent's identity was released in production
+  and the platform cannot say who did it. That belongs to
+  [[soc2-agent-traceability]] as a traceability gap, not just an inconvenience.
+
+Workaround in force: `chief-dispatch-0814`, a separate registered identity, is
+Chief's working inbound address. The canonical `chief` name stays unreachable
+until the server-side reclaim route exists (see [[open-threads]]).
+
 ## Next
 
-1. **Unblock name reacquisition.** `chief-token-rootcause-0814` must answer
-   whether a new process can take over the canonical name `chief` without
-   burning it, and if not, what has to be built. Nothing else here can proceed
-   on a broken reclaim path. Give the orphaned `ws-unknown-fix` worktree an
-   owner in the same pass.
+1. **Unblock name reacquisition — now known to be server-side work.**
+   `reclaim-legacy-identity` exists in the broker as of relay#1499 but PATCHes
+   `/v1/agents/:name/legacy-identity`, **a route implemented in no repo**. Until
+   someone builds it to match the client that already shipped, there is no
+   reclaim path and this workstream cannot start. Give the orphaned
+   `ws-unknown-fix` worktree an owner in the same pass.
 2. Decide where the brain lives and who commits it when Chief is remote, and
    what marks the instant write authority transfers between rotations.
 3. Check `workforce`'s scheduled-persona runtime for whether the rotation loop

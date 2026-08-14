@@ -1371,3 +1371,37 @@ trap that would otherwise cost them a re-open.
   reporting an old version may be reporting accurately rather than staling, and
   an obsolete broker still advertises capabilities it cannot honour, so the
   requester must confirm the launch rather than trust the placement response.
+
+- **CI cannot see a cross-repo contract, so green means nothing about the seam.**
+  Four instances surfaced in one morning (2026-08-14), every one with relay CI
+  green: relay#1505 pinned relaycast as a git dep at the tip of an *unmerged
+  draft branch*; relay#1504's added metadata field is rejected by relaycast's
+  `.strict()` `FleetAgentRegisterMessageSchema`, so the broker silently falls
+  back to HTTP pre-registration and the agent is never node-bound; the sponsor
+  authority spans three repos with no gate between them; and **relay#1499 passed
+  full CI, review and merge while calling
+  `PATCH /v1/agents/:name/legacy-identity` — a route implemented in no branch of
+  any repo.** The rule: when a change crosses a repo boundary, name the
+  consuming side and check it exists, because nothing else will. A shared
+  fixture asserted from *both* repos' CI (the relayfile#418 shape) is the cheap
+  fix; making the two repos move together is not.
+
+- **A test suite can be excluded by a comment that stopped being true.**
+  `vitest.config.ts:78` excluded `packages/sdk/**` with the justification "Uses
+  Node.js test runner, not vitest", while the file it excluded imports
+  `describe/expect/it/vi` from vitest. Fifteen SDK test files, zero run by CI,
+  for however long that comment had been stale — and the package's own `test`
+  script enumerated 14 files by name out of 15, and nothing invoked it anyway.
+  Prove a test is gated by collecting it *by name* (`npx vitest list`) and run
+  the same command as a control against a file you believe is ungated; a check
+  that returns the same answer either way proves nothing. When un-excluding a
+  long-dark suite, record the current failures first — un-excluding first dumps
+  unknown breakage on whoever does it and the change gets reverted, not fixed.
+
+- **Workflow-level CI status hides a failed job inside a running workflow.**
+  `gh run list --branch` reported `Test: in_progress` for a PR whose
+  `Rust Tests (ubuntu-latest)` job had already failed; `gh pr checks` showed it.
+  Check both — `gh run list --branch` to match headSha to headRefOid, `gh pr
+  checks` for job-level truth. And pin every CI claim to the SHA it was measured
+  on: at a few merges an hour, a "done" report goes stale within minutes, and
+  green-on-old-base is not green.
