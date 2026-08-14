@@ -602,6 +602,65 @@
   stable harness contracts so running Chief deployments are not broken
   mid-migration.
 
+## SOC2 sponsor design RETIRED 2026-08-14 — the hole stays open, by decision
+
+**Khaliq's ruling, 2026-08-14: close relay#1505 and price a cheaper
+alternative.** relay#1497 was already closed. So the entire sponsor-proof line
+of work is retired and **the exposure it existed to close is still open.**
+Anyone reading "closed" as "fixed" is wrong.
+
+**Still exposed, today:** `POST /v1/agents/:name/rotate-token` is authenticated
+by the **workspace API key alone**, carries no sponsor proof on the wire, and
+there is **no audit trail** of who registers, rotates, releases or reclaims an
+agent. The live proof: `chief`'s seat was released at 2026-08-14T07:25:14Z with
+`reason: null`, and no CLI surface — `node`, `fleet`, `workspace`, `agent`,
+`cloud` — can say what did it. Workspace keys are also visible in plaintext
+`ps` output on every node.
+
+**Why the design could not ship** (relayauth `origin/main @ cd1465661`, cloud
+`@ 5829ddbc`):
+
+- The only sponsor grant is `token_type="sponsor_grant"` — default 300s, **hard
+  max 900s** — derived from a verified OIDC id_token with the sponsor id forced
+  to `/^user_/` (`packages/server/src/lib/sponsor-binding.ts:15-18, 253-268,
+  289-320, 593-605`). Fine for a human clicking a button; wrong for a broker
+  that runs for days.
+- **No service/machine grant exists.** `IdentityType` includes `"service"`, but
+  OIDC-bound identity creation demands the same `sponsorProof` for every type
+  (`routes/identities.ts:491-505, 525-539`).
+- **No renewal path.** Only `POST /v1/sponsors/proof`; SDKs expose only
+  `createSponsorProof`. Re-minting needs a fresh human OIDC id_token.
+- **Production cannot mint at all.** Cloud IaC never binds
+  `RELAYAUTH_SPONSOR_FEDERATIONS` (`infra/relayauth.ts:106-136, 145-285`);
+  absence means legacy mode (`sponsor-binding.ts:152-175`) and `/proof` rejects
+  when mode is not oidc (`sponsors.ts:65-73`). Cloud's Google auth retains no
+  id_token anyway (`packages/web/lib/auth/google.ts:17-33`). So the failure was
+  never "brokers stop spawning after 15 minutes" — it was **brokers cannot spawn
+  at all**. *Caveat: a manually-added Cloudflare Worker binding would not appear
+  in IaC; settling that needs read-only inspection of the live Worker bindings.*
+- **The root design error:** #1505 re-checked the raw proof **per spawn**, while
+  RelayAuth's own identity model checks it **once at creation** and persists
+  `sponsorBinding` (`identities.ts:491-505`; `tokens.ts:154-209`). Using a
+  binding-time credential per-operation is what made expiry fatal.
+
+**The replacement direction, being priced by `relay-lead-0814`:** (a) an **audit
+log** of who registered/rotated/released/reclaimed an agent, under which
+credential — which alone may satisfy the SOC2 traceability requirement; and (b)
+**scoping the workspace key** so possession stops equalling impersonation. The
+lead has been told to say so plainly if the honest answer is that the sponsor
+shape was right and only its credential lifetime was wrong.
+
+**Salvageable, so it is findable rather than lost:** the fleet-wire carrier
+`AgentRegister.registration_authority` (`crates/broker/src/fleet_wire.rs:242`),
+populated and fail-closed at `runtime/api.rs` and `runtime/relaycast_events.rs`,
+plus guarantees G1–G3.
+
+**Open and unresolved: what happens to relaycast#324 and relaycast-cloud#60**,
+which exist only to serve the retired design. Not authorised for closure; the
+lead owes a recommendation. **relaycast#325 is explicitly NOT part of this** —
+it is the legacy-identity route, independent of all sponsor machinery, and it
+stays priority.
+
 ## SOC2 sponsor hole — the only thing that closes it is relaycast#324, and it has no owner
 
 **Trigger: Khaliq must name an owner for relaycast PR #324.** Established
