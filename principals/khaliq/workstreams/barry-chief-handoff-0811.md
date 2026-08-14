@@ -164,3 +164,24 @@ Barry.
   before briefing the new worker.
 - 2026-08-11 ~20:13Z — First worker HANDOFF received
   (`factory-publish-31523445478-fix-barry-0811`, CONTINUE). Recorded above.
+- **2026-08-13 ~10:26Z — Barry confirmed still unusable, root cause is
+  credits, not a machine problem.** Khaliq confirmed directly: Barry is out
+  of credits. Live re-check corroborates: box healthy (swap 0, load high but
+  stable, 27+ day uptime), ~10 agent-relay sessions still resident
+  (`relayfile-storm-guard-0811`, `workforce-relayflows-release2-barry-0811`,
+  `obligation-boomerang-lead-0811`, `factory-publish-31523445478-fix-barry-0811`,
+  `workforce-307-merge-owner-barry-0811`, `factory-dispatch-fix-lead-0812`,
+  `relay-1488-fix-barry-0811`, `chief-barry-codex-0811-1440`,
+  `mp-integration-proof-0812`, `mp-factory-hooks-0812`, plus 3 Claude
+  sessions), but none can produce new work — same underlying cause as the
+  2026-08-12 07:30Z diagnosis (Codex usage-limited, Claude unauthenticated),
+  now explicitly confirmed as a credits/billing issue rather than a
+  fixable auth/config bug. Not usable for dispatch until credits are
+  restored — not an engineering blocker.
+  **Also reconfirms a fleet-wide pattern**: live `RELAY_API_KEY`/
+  `RELAY_AGENT_TOKEN` values are visible in plaintext in these processes'
+  `ps aux` command-line args on Barry too — the same exposure shape already
+  found tonight on sf-mini's broker argv and in relayhistory's `ai-hist`
+  ps-capture indexing. Three independent findings of the same pattern across
+  the fleet; worth treating as one systemic issue (how these processes
+  receive credentials at launch) rather than three unrelated leaks.

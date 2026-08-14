@@ -1,10 +1,165 @@
 ---
 status: active
 owner: chief
-updated: 2026-08-11
+updated: 2026-08-13
 repos: [relay, relayfile, factory, workforce, cloud, agents, relaycast, relaycast-cloud, internal-agents, skills]
 ---
 # Active lanes — dispatched work and who owns it
+
+## 2026-08-13 ~13:00 CEST — sf-mini + barry inventories, same methodology as finn-mini
+
+Same purpose as the finn-mini sweep above: identify every genuinely live agent
+before Khaliq releases whatever's inactive, flag at-risk work first.
+Investigation only — nothing killed, pushed, merged, or modified by the
+investigating agents.
+
+### sf-mini
+
+11 live agents (16 registered in `state-sf-mini.json`, 5 confirmed
+`<defunct>` zombies with no live children). Raw `ps` showed ~69
+agent-relay-tagged rows — each codex agent spawns 6 child processes, each
+claude agent spawns 4; dedupe is against live root PIDs, all verified via
+`ps -p`. The broker (`agent-relay-broker init`, separately being unwedged —
+not duplicated here) and `node up` process are infra, not agents.
+
+**Done / safe to release:**
+
+| Agent | Brief | Evidence |
+|---|---|---|
+| `mp-relayhistory-journal-0813` | `conversationTurns` table + turns/metadata API in relayhistory-cloud | relayhistory-cloud#23 merged (`c0d100d`), prod deploy verified live (200 on `/v1/sessions/.../turns`). Idle ~12.5h. |
+| `mp-session-probe-0812` | Research: does workforce `--resume`/`--continue` work | Findings posted to #general, no code expected. Idle ~13h. |
+| `mp-cred-probe-0813` | Research: multiplayer-session credential/authorship model | Findings posted, no code expected. Idle ~11.5h. |
+| `mp-factory-hooks-0813` | `onTicketDispatch` relay hook in factory | Commit `5406664` merged into factory#237, which Khaliq closed for a redesign (pluggable via packages/delivery, not relay-hardcoded) — commit itself safe on `origin/feat/multiplayer-session`, agent's job complete. Idle ~12.5h. |
+| `mp-conflict-fix-0813-v2` | Resolve conflicts on workforce PR #208 | Pushed `7eaf5e2`; `gh pr view 208` → MERGEABLE/CLEAN, still OPEN. Idle ~3h. |
+| `mp-relayhistory-deploy-0813` | Watch relayhistory-cloud PR #23, deploy on merge | Prod deploy verified live. Idle ~2.5h. |
+| `mp-pr-opener-0813` | Open PRs for 3 overnight commit sets | All 3 opened (relayhistory-cloud#23 merged; workforce#308, factory#237 closed by Khaliq for redesign — not this agent's fault). Idle ~2.5h. |
+| `relay-drive-mode-claude-0812` (v1/v2/v3) + `relay-drive-mode-fix-0813` | 4 successive spawns fixing relay#1495 | All 4 now `<defunct>`. Target **relay#1495 MERGED** (mergedBy khaliqgant). v1–v3 died with zero net progress (likely OOM, sf-mini swap 80% that night); only fix-0813 (4th attempt) landed one real commit before Khaliq finished the rest himself and merged. Zero footprint now. |
+| `khaliq-attach-live2-0812` | Idle standby target for cross-node-attach proof | `<defunct>`, no work was ever assigned, nothing at risk. |
+
+**Blocked/parked intentionally:**
+- `mp-relay-session-sdk-0813` — relay#1496 open (draft), CI green, under active review; origin branch has moved ahead of this agent's local worktree already (someone else carrying it forward). Idle ~2.5h.
+- `soc2-hole1-0813` — opened draft PRs relayauth#80 and relay#1497 for the sponsor-impersonation fix, task complete, correctly parked awaiting review. Idle ~2.5h.
+- `cross-repo-coordinator-0812` — pure coordinator for the cross-node multiplayer-continuity effort (paired with finn-mini's `mp-continuity-proof-0813`), no code risk of its own, waiting on other agents. Idle ~2.5h.
+
+**Stuck/broken:** none among the 11 live agents.
+
+**Recently active / needs care before touching:**
+- `mp-turn-streaming-0813` — built `RelayhistoryTurnWriter` (workforce), committed `32fb0fd`, reported COMPLETE at 09:47 CEST, but **the commit is unpushed**, stacked on `codex/add-cursor-harness` — the same shared checkout `mp-conflict-fix-0813-v2` is using for the unrelated PR #208. Unresponsive since 09:50 CEST; a coordinator STEER at 10:48 CEST went unanswered for 2+ hours and it's now the sole blocker for finn-mini's `mp-continuity-proof-0813`. **Before touching**: cherry-pick `32fb0fd` onto a clean branch off `main`, push, open a PR — do not push `codex/add-cursor-harness` as-is (would leak the turn-streaming commit into PR #208).
+
+**sf-mini cross-cutting findings:**
+1. Live `RELAY_API_KEY`/`RELAY_AGENT_TOKEN` (`rk_live_*`/`at_live_*`) exposed in plaintext in every agent's `ps` output via CLI args — corroborates `soc2-hole1-0813`'s own brief ("a workspace key leaked into a crash log on sf-mini"). Affects all 11 live agents.
+2. Two distinct death waves among the 5 defunct zombies: v1–v3 (pre-07:26 CEST, likely OOM, zero progress) vs. `relay-drive-mode-fix-0813`/`khaliq-attach-live2-0812` (10:21–10:23 CEST, correlates with the separately-reported broker deadlock). Notably 4 codex-harness agents writing at that exact window survived; only `claude`-harness PTY wrappers died — suggests the broker's reap/restart path selectively orphans claude sessions. Worth passing to whoever is unwedging the broker.
+3. **Unowned uncommitted fix at risk of silent loss**: `~/Projects/AgentWorkforce/relay/ws-unknown-fix` (branch `agent/fix-broker-node-workspace`) has a real, substantive uncommitted fix to `crates/broker/src/relaycast/auth.rs` (workspace_id resolution on token rotation during restart-reclaim) plus test coverage — no PR exists, no currently-registered agent owns it (presumably leftover from `relay-broker-ws-unknown-codex-0812`, not in the current state file). Needs an owner before that worktree is ever reset.
+4. `~/Projects/AgentWorkforce/relay` is a worktree container, not a git checkout itself (`checkout/`, `session-sdk/`, `ws-unknown-fix/`, `npm-inspect-11.5.5/`) — tripped up `soc2-hole1-0813` before a coordinator steer; worth noting in future sf-mini briefs targeting this repo.
+5. factory's local `main` on sf-mini is 1 commit ahead of `origin/main` (`5406664`, already safely landed via the closed #237's source branch) — minor hygiene flag, a stray `git push origin main` from this checkout would push unreviewed.
+
+### barry
+
+16 live agents (confirmed via the 16 top-level `agent-relay-broker pty` PIDs
+in `state-barry.json`, all alive via `ps -p`; raw `ps aux` grep returned 66
+lines from broker/pty/child fan-out). Confirmed node-wide: all 11 `codex`
+agents that made an API call hit the identical usage-limit message (resets
+Aug 18 2026 7:25 AM); all 5 `claude` agents are stuck at "Not logged in ·
+Run /login" — Claude auth is fully broken on barry, a harder failure than
+usage-limited. No agent here can produce new work right now, confirming
+Khaliq's framing.
+
+**Done / safe to release (real work independently verified as merged, or confirmed zero work done):**
+
+| Agent | Brief | Evidence |
+|---|---|---|
+| `workforce-307-merge-owner-barry-0811` | Merge/verify workforce PR #307 (persona spawn) | **MERGED** 2026-08-11T17:58:28Z, `df37d323`. Idle ~41h. |
+| `workforce-relayflows-release2-barry-0811` | Publish workforce 4.1.38+, then relayflows | workforce `4.1.39` released and on npm (provenance verified); relayflows PR #29 **MERGED** 2026-08-11T18:57:38Z. Idle ~39h. |
+| `factory-230-pr-feedback-barry-0811` | Close review feedback on factory PR #232 | **MERGED** 2026-08-11T18:05:56Z; agent correctly deferred merge authority itself. Idle ~41h. |
+| `factory-publish-31523445478-fix-barry-0811` | Recover failed 0.1.58 publish, fix protected-branch safety | factory PR #234 and #235 both **MERGED** (19:11:54Z, 20:00:46Z), then hit usage limit. Idle ~35h. |
+| `relayfile-storm-guard-0811` + `relayfile-storm-guard-claude-barry-0811` | Storm-guard fix for chief senses/mount supervisors (codex original + claude handoff) | chief PR #40 **MERGED** 2026-08-11T21:19:03Z including a later review-fix commit. Local worktree is stale/behind post-refactor main — nothing unpushed of value. Claude continuation never got past "Not logged in," contributed nothing further but nothing was lost. Idle ~38h/39h. |
+| `obligation-boomerang-lead-0811` | Implement relay#1474 obligation/boomerang, verify vs fixture PR #1476 | **Initially looked at-risk (finn-mini false-alarm pattern), resolved as superseded.** Local worktree has one real unpushed commit (`f0e0b3ee`, 13 files/826 lines) never pushed anywhere (404 on GitHub). But relay#1474 is CLOSED and **PR #1485 is MERGED** 2026-08-12T08:37:47Z with 43/45 checks green — a different, working, already-shipped implementation of the same feature. Agent's own log says its arm-by-arm acceptance was never obtained. Nothing to rescue. Idle ~46h. |
+| `mp-integration-proof-0812`, `mp-factory-hooks-0812` | Cross-harness `--resume` continuity; factory onTicketDispatch hook | Zero work — target repos don't even exist locally on barry, hit usage limit almost immediately. Idle ~13h. |
+| `factory-dispatch-fix-lead-0812`, `relay-1488-fix-barry-0811` | Root-cause factory dispatch staleness; fix relay PR #1488 review threads | Zero work — hit usage limit during MCP startup, before repo access. Idle ~27h. |
+
+**Blocked/parked intentionally:** none — no genuine non-credit self-halt found.
+
+**Stuck/broken (all credit/auth-exhausted, zero work produced this session):**
+- `factory-lead`, `lifecycle-workflows-lead-0812b`, `factory-236-finish-0812`, `soc2-lead-0811` — all hit "Not logged in" essentially immediately; `factory-236-finish-0812`'s target (factory PR #236) was separately merged by other identities, not this session, so nothing lost. `soc2-lead-0811` despite a 2.5-day-old PID and 297KB log never produced real SOC2 work — the relayauth#75/sales#27 text in its log is from the injected brief, not its own output. Idle 27h–52h.
+- `chief-barry-codex-0811-1440` — secondary-Chief coordination role, no code deliverable expected, heaviest rate-limiting of any agent on the node (39× 429s). Idle ~39h.
+
+**Recently active / needs care before touching:** none — every agent with real work product has that work independently verified merged or superseded on GitHub; nothing unique/unpushed remains only in a local worktree.
+
+**barry cross-cutting findings:**
+1. **Claude CLI is fully unauthenticated on barry** ("Not logged in · Run /login"), affecting all 5 claude-based agents, none of which produced any work this session — needs re-auth before releasing/respawning any claude-cli lane on barry, separate from the codex usage-limit issue.
+2. Live `RELAY_API_KEY`/`RELAY_AGENT_TOKEN` exposed in plaintext via `ps aux` for all 16 agents — same class of exposure as sf-mini's finding above, worth a single fleet-wide rotation/hardening pass rather than per-node fixes.
+3. `gh auth status` on barry reports the `barryollama` token invalid, despite PRs authored by that identity merging successfully through Aug 12 — token likely expired sometime after that work landed. Future barry agents relying on interactive `gh` will fail until re-authenticated.
+4. `ai-hist` is not installed on barry (present on finn-mini) — this sweep relied on raw worker logs under `~/.agentworkforce/relay/barry-node/state/team/worker-logs/`, workable but noisy with ANSI/PTY escapes.
+5. The codex→claude usage-limited handoff pattern is fragile: `relayfile-storm-guard-claude-barry-0811` was spawned as a continuation for a usage-limited codex worker, but landed on a node where Claude auth was also broken, so the handoff never executed — only safe because the original work was already captured upstream.
+
+### Combined verdict
+
+Nothing found on either node changes Khaliq's release plan for the
+credit-exhausted/idle majority. Two items need action **before** any
+spin-down/release touches their checkouts:
+- sf-mini `mp-turn-streaming-0813` — cherry-pick and push `32fb0fd` first (see above).
+- sf-mini `ws-unknown-fix` worktree — needs an owner to commit/push the uncommitted broker auth fix before that worktree is ever reset.
+
+Everything else across both nodes (27 agents total: 11 sf-mini, 16 barry) is
+either independently verified done, correctly parked, or a zero-value
+credit/auth-exhausted session — safe to release once Khaliq confirms.
+
+## 2026-08-13 ~11:14 CEST — full finn-mini inventory, captured before any spin-down
+
+Khaliq authorized spinning down finn-mini agents to relieve sustained memory
+pressure (94.8% swap, ~86MB free RAM), on the condition every live agent's
+work is captured durably first. Real distinct agent count: **21** (raw `ps`
+suggested ~56, which double/triple-counted broker/pty wrappers and codex
+helper subprocesses) — confirmed against
+`~/.agentworkforce/relay/finn-mini-node/state/state-finn-mini.json`, all 21
+PIDs verified alive via `ps -p`. Staleness figures below are relative to
+~2026-08-13 11:14 CEST.
+
+**Done / safe to spin down (work complete and independently verified):**
+
+| Agent | Brief | Evidence |
+|---|---|---|
+| `storm-guard-fix-finn-0811` | Fix chief PR #40 (senses storm-guard) | Merged, squash `5bb15d06`, 2026-08-11T21:19Z. Idle ~38h. |
+| `factory-236-finish-finn-0812` | Fix factory PR #236 (release revalidation) | Merged 2026-08-12T17:55Z, commits `469eebf`/`4b5933f`/`f7fc299`, all threads resolved. Idle ~23h. |
+| `relay-1488-fix-finn-0812` | Fix relay PR #1488 review threads | Merged, head `bce0f53a`, updated 2026-08-12T08:57Z, tests/clippy/fmt clean. Idle ~24.5h. |
+| `cloud-fleet-proof-owner-0812` | Own cloud#2918, post summary comment | Comment posted, github.com/AgentWorkforce/cloud/issues/2918#issuecomment-5263717484. Idle ~25h. |
+| `mp-factory-delivery-0813` | Pluggable `onTicketDispatch` delivery | factory PR #238 opened 2026-08-13T08:34Z, OPEN/MERGEABLE, 1,492 tests passed. Idle ~35min. |
+| `sf-mini-tracebug-0812` | Root-cause sf-mini broker crash | relay PR #1491 opened, CI green, explicitly handed off to chief for merge decision. Idle ~15.5h. |
+| `relayfile-backend-fix-v3-0812` | Fix file.agentrelay.com backend bugs | Commit `c7f8594885` — this is [[daytona-fleet-nodes]]'s cloud#3007, now merged and deployed. Agent itself blocked on a missing local key for a second verification pass. Idle ~10h. |
+| `mp-conflict-fix-0813` | Fix workforce PR #208 conflicts + check 3 other PRs | Pushed `7eaf5e2`; PR #208 now MERGEABLE/CLEAN. Checked factory #204, #199, relayhistory-cloud #16 — no blocking human feedback on any. Could not report via relay (MCP bug, see below). Idle ~1h49m. |
+
+**Blocked/parked intentionally — correct self-halt, not stuck:**
+
+- `factory-dispatch-fix-finn-0812` — found likely root cause (dead relayfile daemon holding stale credentials), explicitly told by chief at 10:08 to hold silently. Idle ~25h.
+- `workforce-relayflows-release-barry-0811` — correctly refused to force a broken publish after a race with another successful run. **Flag: npm has `4.1.40` published but GitHub only tags/releases `4.1.39`** — real inconsistency needing an owner decision before this lane can close. Idle ~36h.
+- `webhook-queue-incident-lead-0812` — investigated and coordinated with `factory-dispatch-fix-finn-0812`, now explicitly waiting on a reply from chief. Idle ~23.5h.
+- `chief-proof-coordinator-0811` — coordination-only role, last reported on subordinate liveness, idle since. Idle ~34h.
+
+**Stuck/broken — real defects, no further value in current state, candidates to release:**
+
+- `lifecycle-workflows-lead-0811` — session hit "Login expired" 4 minutes after start (2026-08-11 14:06), unauthenticated ~45h, zero work done.
+- `lifecycle-workflows-lead-finn-0812` — Agent Relay MCP tools never worked in-session, no channel to chief, never verified its assigned gap-2 PR. Idle ~23.5h.
+- `webhook-queue-recheck-0812` — started cold with no real briefing context, broken MCP tools, couldn't reach chief at all. Idle ~15h.
+- `relayfile-lead-0811b` — MCP tools never loaded, never delivered its MOUNT-PROOF-RESULT despite being alive 2+ days. Recommend respawn rather than resume.
+- `daytona-524-proof-0813` — task/reality mismatch: instead of executing its cloud#3007 brief, it's been watching unrelated channel chatter and explicitly declining to act. Idle ~42min but not on-task.
+
+**Recently active / needs care before touching:**
+
+- `soc2-attestation-0813` — actively working (~26min ago), found gaps 1/2 substantially pre-exist, validation only, no commits/PR yet — safe to pause without loss.
+- `mp-integration-proof-0813` — landed real commits (`5e186bc`, `295db42` in `workforce`), but reported as **unreachable from checkouts/remotes after a pull** — possible orphaned/at-risk commits. **Verify/export from finn-mini's `workforce` checkout before touching this session.**
+- `mp-cred-probe-0812` — likely duplicate/orphaned dispatch; `mp-cred-probe-0813` already completed and reported this exact task hours earlier ("CRED-PROBE FINDINGS 0813", 2026-08-12T23:16Z). Low value to preserve.
+- `fleet-attach-impl-0811` — parked ~34h, but very likely responsible for relay#1495 ([[cross-node-attach]]), pushed as recently as ~2h ago — not 100% attributable to this exact PTY session, don't release without checking.
+
+**Cross-cutting infrastructure findings, need explicit owner action:**
+
+1. **Live Agent Relay MCP tool-exposure bug on finn-mini** — at least 5 sessions (`webhook-queue-recheck-0812`, `mp-conflict-fix-0813`, `mp-factory-delivery-0813`, `relayfile-lead-0811b`, `lifecycle-workflows-lead-finn-0812`) had `send_dm`/`post_message` unregistered or unable to reach chief. Several completed real work and silently failed to report it — a distinct, currently-active defect, not per-agent flakiness.
+2. **Misrouted broadcast** — at least 2 unrelated sessions (`mp-cred-probe-0812`, `relayfile-lead-0811b`) received a "STEER for mp-conflict-fix-0813" message not meant for them, apparently `cross-repo-coordinator-0812` ([[relayhistory-continuity-proof]]) broadcasting to #general instead of DMing the right target.
+3. **Security: live credentials indexed into relayhistory's own session data.** An `ai-hist search` result for `fleet-attach-impl-0811` surfaced what appear to be live `RELAY_AGENT_TOKEN`/`RELAY_API_KEY` values embedded in a raw `ps` snapshot captured into relayhistory's data. Values not repeated anywhere in this record. Needs rotation, and — since [[relayhistory-continuity-proof]] is actively building on relayhistory as "our first customer" right now — a redaction-path review of `ai-hist`'s `ps`-capture behavior, not just a one-off rotation.
+4. **npm/git version divergence** — `workforce` `4.1.40` is live on npm with no matching GitHub tag/release (only `4.1.39` has one). Needs an explicit retag-or-deprecate decision.
+
+All findings above are read-only — no process was killed/stopped, nothing merged or pushed by the investigating agents themselves (aside from the pre-existing work already described above).
+
+## Historical entries below this point predate 2026-08-13 and are kept for context.
 
 **Goal:** One durable record of every dispatched lane, what it owns, and where
 that work stands — so a lane is never lost to a compaction, an agent death, or a

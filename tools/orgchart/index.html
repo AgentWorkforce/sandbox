@@ -616,21 +616,10 @@ function workerCard(node) {
     el.textContent = node.label;
     return el;
   }
-  // The tree shows the readable label; the raw name stays addressable in the
-  // card's own metadata and in the tooltip.
-  const el = card({ ...agent, title: agent.title || node.label });
-  const nameEl = el.querySelector('.name');
-  // `node.label` is already the declared title when there is one and the
-  // inferred label otherwise, so it is the readable name in both cases. Gating
-  // this on `inferredLabel` left every titled seat — most of the overlay — with
-  // the raw agent id as its primary name, which is what this block exists to
-  // stop.
-  if (nameEl) {
-    nameEl.textContent = node.label;
-    nameEl.title = node.meta.agentName;
-    el.dataset.rawName = node.meta.agentName;
-  }
-  return el;
+  // Keep the canonical live identity as the primary card text. `node.label`
+  // is the hierarchy's readable role fallback and belongs in the subtitle;
+  // replacing `.name` with it makes every Codex/Claude seat look identical.
+  return card({ ...agent, title: agent.title || node.label });
 }
 
 function isExpandable(node) {

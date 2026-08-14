@@ -1,11 +1,199 @@
 ---
 status: active
-owner: daytona-mount-proof-0811
-previous_owner: daytona-relayfile-closeout-barry-0811
+owner: daytona-overnight-fix-0813
+previous_owner: daytona-mount-proof-0811
 reports_to: chief
-updated: 2026-08-12
+updated: 2026-08-13
 repos: [cloud, relay, sandbox]
 ---
+
+## 2026-08-13 ~22:00Z — architecture correction, stated directly by Khaliq: fresh sandbox per agent, not one reused box
+
+Khaliq: Daytona should provision a **fresh sandbox per agent**, not reuse one
+long-lived box. This overturns the model every entry below was written
+against — the whole 24h-heartbeat-continuity acceptance bar (see "Done when"
+below) was designed for a persistent node, and a liveness/uptime check is
+the wrong criterion for an ephemeral-per-agent model.
+
+**Practical effect**: the identity-reclaim gate (`relay#1499`, draft, not
+merged) that's been blocking `daytona-fleet-proof-0811`'s restart may be
+solving a problem that mostly goes away under this model — a brand-new
+sandbox each time has no stale identity to reclaim. `provisionFleetSandboxNode()`
+(`packages/web/lib/fleet/sandbox-bridge.ts:464` in `cloud`) is already a
+complete, tested function with **zero production callers** — it may be
+exactly the mechanism this model needs; it was simply never wired to
+anything (see the mechanism-map section below, still accurate).
+
+**Dispatched `daytona-overnight-fix-0813` on finn-mini (2026-08-13 22:07Z)**
+to investigate and implement against this corrected model overnight, no live
+supervision. Explicitly told NOT to restart the old `daytona-fleet-proof-0811`
+sandbox — that's the model being moved away from. Told to reason in writing
+about whether `relay#1499` is still needed at all under this model rather
+than assume either way. Report via send_dm to "chief" at checkpoints.
+
+**The "Done when" criteria below (Phase 1's 24-hour continuous-uptime bar)
+are now stale against this correction** — do not treat them as the
+acceptance bar for new work until they're rewritten for the fresh-per-agent
+model. Whoever picks this up next: rewrite "Done when" before trusting it.
+
+## 2026-08-13 ~10:45Z — structural finding: sandbox `dedfeb9a` has a hard 2GB memory ceiling, not the ~377GB the host reports; this is what actually caused tonight's restart attempt to go sideways before the identity-reclaim gate was even reached
+
+Dispatched to attempt the Daytona broker restart (11.5.6, containing relay#1484
++ relay#1495). Two real findings worth keeping independent of the
+identity-reclaim entry below:
+
+**1. `free -h` inside this sandbox reports the HOST's memory (377Gi total),
+not the container's real limit.** The actual constraint is
+`/sys/fs/cgroup/memory.max` = **2147483648 bytes (2GB), flat**. Baseline
+usage before touching anything was already 2.08GB/2.15GB (97%) — driven by
+the live broker, 3 old idle PTY sessions (`daytona-proof-worker-0811`,
+`daytona-mount-audit-0811`, `daytona-mount-proof-v4-0811`, all confirmed dead
+in worker-log output for 11h–2+ days via `stat`/`tail`), and the relayfile-mount
+process. `npm install -g agent-relay@11.5.6` at that baseline got **OOM-killed
+(exit 137)** twice, silently the first time (pipeline swallowed the real exit
+code) — left the on-disk `agent-relay` CLI in a broken state (missing
+top-level `package.json`/`dist`/`bin`, dangling global symlinks, at least one
+incomplete transitive dependency). Repaired: killed the 3 confirmed-idle PTY
+sessions to free memory (99.7% → 59.6% used), then a clean `npm install -g
+agent-relay@11.5.6` succeeded with headroom (41–65% used throughout). CLI and
+broker binary both verified at 11.5.6 afterward.
+
+**Practical implication for anyone touching this sandbox**: `free -h`/`df -h`
+give a false sense of headroom here. Check `/sys/fs/cgroup/memory.current` vs
+`memory.max` before any memory-heavy operation (`npm install`, a build, a
+broker restart bringing up two broker processes briefly). A full `npm install
+-g` at >90% cgroup usage reliably OOM-kills. This plausibly also explains why
+the on-disk 11.5.4 upgrade recorded at 2026-08-12 20:44Z never got its process
+restarted that night — not just "supervision model not understood yet," but a
+box with very little real margin for the operation.
+
+**2. `npm pack <single-package>` is a safe, low-footprint alternative to `npm
+install -g` on this box** — used successfully twice tonight (once for the
+broker binary alone, once combined with `npm install -g` after freeing memory)
+without triggering the OOM. Worth defaulting to for any future targeted
+package fetch here rather than a full `npm install -g`.
+
+**Broker restart itself then hit the identity-reclaim gate below** — this
+memory finding is what got the CLI to a working state to even attempt that,
+not the reason the restart ultimately didn't complete. Live broker (pid
+315/325 before shutdown) and the relayfile-mount process (pid 90608)
+confirmed undisturbed throughout all of the above; node identity/enrollment
+files on disk confirmed unmodified since their original 2026-08-11 creation.
+
+## 2026-08-13 ~11:15Z — identity-reclaim gate durable fix landed, unblocks Daytona's path back online
+
+`relay#1498` (issue) + `relay#1499` (draft PR, not merged). Fixes the gate that
+took `daytona-fleet-proof-0811` offline earlier tonight (see
+[[cross-node-attach]] for the incident). Root cause confirmed entirely
+client-side in the broker (`admit_agent_registration`,
+`crates/broker/src/relaycast/auth.rs`) — relaycast-cloud has no server-side
+`identity_key` knowledge at all. Design: automatic reconnect/collision path
+left exactly as strict as today (no regression to the AR-448 hijack
+protection); new deliberate, operator-invoked `agent-relay-broker
+reclaim-legacy-identity <name>` command backfills the identity key on one
+named record, refusing if already stamped or if the record shows `online`.
+"Auto-grandfather None→allow" was considered and rejected — traced through
+that it would let any workspace-key holder win a race to permanently hijack a
+legacy name, strictly worse than today's unrecoverable-but-safe state. 928
+broker tests passing, clean gates. **Once reviewed/merged, this is Daytona's
+path back online**: `reclaim-legacy-identity daytona-fleet-proof-0811` before
+attempting the broker restart again. Not merged yet — Khaliq's call.
+
+## 2026-08-13 ~13:15Z — chief took ownership of cloud#2918; #2916 SDK bump verified, but it wasn't the real snapshot blocker
+
+Chief (this session) took direct ownership of `cloud#2918` (Fleet production proof
+tracker) now that `cloud#2916` (`@agent-relay/sdk` 10.0.0→11.4.1 app-level bump)
+merged (`2cb14cd`, by Khaliq, confirmed on `origin/main@245a3719`). Posted a full
+evidence-based update to the issue itself
+(https://github.com/AgentWorkforce/cloud/issues/2918#issuecomment-5279546063).
+Key correction to the record, verified from source rather than assumed:
+
+- **The persistent Daytona fleet-node snapshot was already on relay SDK 11.4.1
+  since 2026-08-04** (`769d32b1`, `chore(snapshot): promote
+  relay-orchestrator-sdk-11.4.1-...`), via the rebuild workflow's own
+  `sdk_version` dispatch input — decoupled from `package.json` by design.
+  Read-only `query_nodes` against `daytona-fleet-proof-0811` right now confirms
+  `"version":"relay-broker/11.4.1"` on the live broker. So #2916 does **not**
+  touch or require rebuilding the fleet snapshot; that's why Phase 2 (cloud#2984,
+  08-11) could already prove dispatch+execution on a Daytona node a full two days
+  before #2916 existed.
+- What #2916 actually fixes: cloud's own app-level `@agent-relay/sdk` dependency
+  and the `SANDBOX_FALLBACK_DEPENDENCY_SPECS` fallback install list in
+  `packages/core/src/bootstrap/launcher.ts`, used when an *ephemeral
+  workflow-execution* sandbox (not a persistent fleet node) bootstraps the SDK
+  at runtime. Real, correctly-scoped fix — just not the fix the issue's "known
+  state" note implied.
+- Re-checked #2655's three named missing pieces against current `main`:
+  `@agent-relay/factory` is **still not baked into** `deploy/daytona/Dockerfile`
+  (only `@agent-relay/sdk` is installed there) — unresolved, though not proven to
+  block anything since Phase 2 didn't need it; the 10.x node model gap is
+  **resolved** (mechanism B / `provisionFleetSandboxNode` is the live path,
+  proven since cloud#2984/#2991); token injection at provision time is
+  **resolved for node enrollment**, still open specifically for the Relayfile
+  mount (see 09:37Z entry above — same 403 gate, unrelated to #2916).
+- Read-only check only: `daytona-fleet-proof-0811` (`node_212862301507432448`)
+  is currently `offline`/`handlersLive:false`, last heartbeat
+  `2026-08-13T10:46:37Z`. **Did not restart it** — this is the exact
+  legacy-registered node the identity-reclaim gate applies to.
+- No mutating action taken (no snapshot rebuild, no fresh sandbox provisioned).
+  Next concrete step — provisioning a *fresh* staging Daytona sandbox to run
+  the still-outstanding 24h-heartbeat/restart-same-identity proof — is
+  identified but held for Khaliq's explicit go-ahead, per tonight's no-mutation
+  rule.
+
+## 2026-08-13 ~09:37Z — cloud#3007 and cloud#3009 merged and deployed; live proof blocked at auth, not at the 524
+
+**cloud#3007** (Daytona 524 fix — force `useSession: false` one-shot exec path,
+plus a credential-file race fix) merged by Khaliq at `eb29f0f3`, deploy run
+`31684477341` succeeded 08:58:37Z. **cloud#3009** (relayfile-mount-by-default
+on new sandbox nodes) merged by Khaliq at `c32d58a2`, deploy run `31678696887`
+succeeded 07:39:54Z. Both live in production.
+
+**Live proof against the real sandbox (`dedfeb9a-8682-4b89-957f-5bd15603ee0c`)
+attempted, blocked — but at a different layer than the 524 this PR fixes.**
+`POST https://agentrelay.com/cloud/api/v1/fleet/nodes/sandbox/dedfeb9a.../relayfile-mount`
+with `{"workspaceId":"50587328-441d-4acb-b8f3-dbe1b3c5de99"}` (the Cloud app
+workspace ID, resolved server-side to `rw_7ccfea89`) returned **`403
+Forbidden` in 1.02s** — before the rate-limiter, workspace-owner check, or any
+Daytona/mount code ever runs. Root cause: `requireSessionAuth` on this route
+(`route.ts:145-147`, gate at `request-auth.ts:149-153`) only accepts an actual
+`agent_relay_session` browser cookie, `source: "session"`. A CLI-minted
+`cld_at_…` token authenticates correctly everywhere else (confirmed via
+`/api/v1/auth/whoami` — resolves to Khaliq, org owner, correct workspace) but
+resolves to `source: "token"`/`subjectType: "cli"`, which this route rejects
+outright. **Not new** — `relayfile-backend-fix-v3-0812` hit and documented the
+identical 403 on 2026-08-12 18:10Z. The only invocation that ever got past
+this gate (2026-08-12 20:04-20:06Z, the one that originally produced the 500
+cloud#3001/#3007 were written to fix) was fired from Khaliq's own logged-in
+browser, not any CLI/agent credential — there is no bearer→cookie exchange
+endpoint in production.
+
+**So the 524-vs-fixed question is still genuinely untested.** cloud#3007's
+fix is deployed but has never been exercised by a request that got past auth.
+
+**Pre-invocation sandbox state, confirmed via `daytona exec` (read-only):** no
+`relayfile-mount` process running; `relayfile status` still returns `error:
+cloud session expired. Run 'agent-relay cloud login' to sign in again.` —
+unchanged from the historical broken state, consistent with nobody having
+successfully invoked the repair since deploy.
+
+**Deliberately not attempted**: extracting/simulating Khaliq's browser
+session cookie (headless Chrome cookie decryption needs interactive macOS
+Keychain approval — previously ruled unsafe for unattended use) and patching
+the route's auth gate to accept CLI credentials (explicitly deferred by chief
+on 08-12: "don't add bearer-auth support to the endpoint, that's real scope
+beyond tonight"). Both remain out of scope for an invoke-only proof.
+
+**Next, needs Khaliq specifically:**
+1. Invoke the exact request above from his own logged-in browser (same as
+   08-12 20:04Z), then have chief verify `relayfile status` on the sandbox
+   afterward to close the loop — the fastest path to an actual answer.
+2. Or authorize a reviewed, scoped change to accept an owner-scoped CLI/
+   service credential on this specific route, if browser-only invocation is
+   the wrong long-term shape for this endpoint.
+
+Files: `packages/web/app/api/v1/fleet/nodes/sandbox/[sandboxId]/relayfile-mount/route.ts`,
+`packages/web/lib/auth/request-auth.ts`, `packages/web/lib/workspaces/relay-workspace-binding.ts`.
 
 ## 2026-08-12 20:55Z — ../sandbox is the fix, not a diversion; also reopens E2B
 
@@ -578,6 +766,47 @@ are different claims.
 - Shared `cloud` checkout re-measured: **117** commits behind `origin/main`
   (was 115 on 08-09; `origin/main` also advanced to `639ec90c9d`). All work done
   in an isolated clone; the shared tree was not modified.
+
+### 2026-08-13 20:19Z — relayfile#416 MERGED and being published
+
+`081efd12ab2009b85e95027c22990ef45ec1afef`. This closes out the mount
+bootstrap-stall root cause and fix (below). Note: 4 review-thread findings
+from a later review round (from-scratch-bootstrap gap, weak regression test)
+were being fixed in parallel by `relayfile-416-review-fix-0813` at merge
+time — confirm those landed via a fresh GraphQL check before treating the
+PR as fully clean, don't assume the merge alone closed them. Daytona itself
+remains deprioritized as secondary tonight (sf-mini/finn-mini are primary),
+so this fix is banked for whenever Daytona work resumes, not being
+live-tested against the sandbox right now.
+
+### 2026-08-13 ~10:35Z — mount bootstrap-stall bug fixed, draft PR up
+
+`relayfile#416` (branch `fix/bootstrap-watchdog-progress-mtime`, draft, not
+merged). Real root cause found and fixed for the `mount`-phase 500 discovered
+earlier tonight (see 09:37Z entry above): two watchdogs stacked around the
+bootstrap reconcile in `AgentWorkforce/relayfile`'s Go daemon
+(`internal/mountsync/syncer.go`). The internal one
+(`bootstrapProgress.touch()`) correctly sees per-file/per-page progress; the
+external one (`AgentWorkforce/sandbox`'s `buildIdleWatchedCommand`, wrapping
+every mount invocation) can only see the `--state-file`'s on-disk mtime,
+which only updated once per fully-completed page. Against this workspace's
+17,384 tracked files, a single page's downloads ran past the 60s watchdog
+window while genuinely progressing — a false-positive cancel, exactly
+matching the observed log. `sandbox`'s `orchestrator.ts` already had a
+comment half-acknowledging this and mitigated by matching the two watchdogs'
+timeout values, which only delays the same failure to a bigger page rather
+than fixing the granularity mismatch.
+
+**Fix:** `bootstrapProgress.touch()` now also does a cheap `os.Chtimes()` on
+the state file every time it fires, not a full rewrite — best-effort,
+no-op-safe on a fresh bootstrap. Two new tests
+(`internal/mountsync/bootstrap_test.go`), both confirmed to fail pre-fix and
+pass post-fix (not tautological): a direct unit test on the mtime refresh,
+and an end-to-end repro seeding real persisted non-complete state and proving
+the mtime advances mid-page. Full repo test suite (`go test ./...`, all 13
+packages), `go vet`, `make build` (all 3 binaries), and `gofmt -l` all clean.
+Worked in an isolated worktree, did not touch the shared `relayfile` checkout
+or invoke the live Daytona endpoint. Waiting on Khaliq's review/merge.
 
 ### 2026-08-06
 

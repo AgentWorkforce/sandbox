@@ -13,6 +13,39 @@ phase2_status: implemented-pending-review
 phase2_prs: "cloud#2995, relay#1484"
 ---
 
+## 2026-08-13 ~19:10Z — the actual goal, stated directly by Khaliq: Will needs to be able to attach
+
+**Khaliq clarified the real requirement behind this whole multi-day effort**: this isn't just about Khaliq being able to attach to fleet-node agents from his own machine — it's so that **Will Washburn (Khaliq's cofounder, see `memory/people.md`) can attach too**, from his own setup. Will is separately setting up his own Chief, sharing the same company workspace (`rw_7ccfea89`).
+
+**Everything proven so far (relay#1484/#1495, cloud#2995, relaycast-cloud#58) has only been tested with Khaliq's own credentials/session.** It has not been verified that Will's own workspace membership/credentials actually authenticate correctly through this same `--node` mechanism — that's a real open question, not yet confirmed either way. Since the underlying mechanism authenticates via shared-workspace membership rather than anything Khaliq-specific, it should theoretically work the same way for Will, but "should theoretically" is not the same as verified.
+
+**Next, once the mechanism itself is stable (sf-mini/Daytona restarts resolved):** get Will to actually try `--node` attach against a live fleet-node agent from his own machine/his own Chief session, and treat that — not another Khaliq-run test — as the actual acceptance proof for this initiative's real goal.
+
+## 2026-08-13 09:43Z — relay#1495 MERGED; npm publish in progress
+
+Khaliq merged relay#1495 himself, merge commit `bbe8b0b57` on `main`. Final
+state: all 4 delivery-mode defects fixed (`fleet.rs` `expected_mode` parsing,
+`worker_events.rs` `AutoInject` fallback, shared `rejectPendingDeliveryMode()`
+helper covering `endTerminal`/`close()`/reconnect-path), 18/18 review threads
+resolved (6 original + 2 more from later automated re-review), CI fully
+green — including a real gap the fix agent caught and worked around: some CI
+runs sat in `action_required` (org policy withholding auto-run) while the
+PR's rollup API made them look settled; it approved the withheld runs itself
+and confirmed every real check actually ran. One loose end, low priority: a
+trivial test-hygiene commit landed after merge/branch-deletion and now sits
+on a dangling, PR-less `agent/fix-broker-node-workspace` branch, not in
+`main` — doesn't affect shipped behavior, worth a follow-up PR if anyone
+cares.
+
+**Khaliq is publishing a new `agent-relay` npm version now**, specifically to
+get this onto the fleet. **This is the standing next step from the 08-12
+20:44Z close-out** ("confirm whether relay#1494's fix needs a fresh npm
+release to take effect, and whether that's the actual explanation for the
+second attach failure") — once live, the remaining work is verifying Finn,
+Daytona, and sf-mini all pick up the new version so the `--node ... --mode
+drive` proof can finally complete end-to-end, the one piece of this
+multi-day thread that's never been proven.
+
 ## 2026-08-13 08:53Z — sf-mini broker DEADLOCKED (not a roster-lag issue); relay#1495 not actually done; unwedge+root-cause+prevent dispatched
 
 **Broker wedge, found by `attach-timeout-investigation-laptop-0813`.** sf-mini's

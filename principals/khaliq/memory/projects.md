@@ -49,3 +49,37 @@
   existing agents is a compatibility shim, not the destination.
 - **Watchdog** — prospective/design partner in Norway for an early proactive
   agent team deployment.
+- **"Skip" — a customer-facing Chief-like persona (2026-08-13, from Khaliq
+  directly).** Built for one of our customers, designed to live entirely
+  cloud-hosted rather than needing a local machine presence the way Chief
+  does. Its iMessage surface lives in the sibling `cloud` repo but is meant to
+  be a **thin client only** — the actual Chief-equivalent logic/brain stays in
+  the `chief` app, not duplicated into `cloud`. Continuity requirement: a
+  customer starting a chat with Skip in cloud, continuing via Slack, then
+  moving to a local surface should be one continuous session throughout, not
+  three disconnected conversations — the same relayhistory continuation
+  mechanism (computed internal relay session ID + jsonl transcript uploaded to
+  relayhistory-cloud) is meant to carry this, working across both harness and
+  machine. See `workstreams/relayhistory-continuity-proof.md` for the
+  engineering effort proving this mechanism.
+- **Full rebrand underway: "Chief" → "Skip" (2026-08-13, Khaliq via
+  chief-app-local, stated as "completely").** Not yet scoped or started — see
+  `memory/open-threads.md` for the held decision and the scope question asked.
+  Unclear whether this unifies with the "Skip" customer persona noted above
+  (same name, established earlier the same session) or is a separate, larger
+  decision to rename the whole Chief product. Whoever picks this up next
+  should resolve that ambiguity with Khaliq before executing.
+- **Cloud dashboard information architecture, stated directly by Khaliq
+  (2026-08-13):** Chief owns workstreams, and agents live nested *under*
+  their workstream — not a flat list. Each agent entry in that nested view
+  should be attachable/driveable directly. This means `cloud#3016`'s
+  session-listing/attach-command feature (currently rendering on a separate
+  `/dashboard/fleet` page) should integrate into the Chief page's
+  workstream/agent hierarchy, not live disconnected on its own. Also reframes
+  the "891 agents" flat/cluttered Organization tree found the same night — it
+  needs restructuring around workstream grouping, not just a staleness/polling
+  fix. Real prerequisite, not yet resolved: whether the data model has a real
+  workstream field to group by, or whether this depends on the
+  registration-metadata-write-path work already identified (agents need to
+  publish their actual workstream at spawn time — see
+  `workstreams/relayhistory-continuity-proof.md`'s cloud-dashboard entries).

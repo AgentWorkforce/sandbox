@@ -38,7 +38,7 @@
   },
   "mergePolicy": "never",
   "slack": {
-    "channel": "factory"
+    "channel": "C0BJ7E09WP6"
   },
   "babysitter": {
     "enabled": true

@@ -586,3 +586,19 @@
   draft would be staged against a projection that is not advancing. Confirm the
   loop is live, rewrite the body, then post and move AR-448 out of
   `Ready for Agent`.
+
+- **Full rebrand: "Chief" → "Skip" (2026-08-13, Khaliq via chief-app-local).**
+  Decision stated as "completely" — not a scoped/partial rename. Blast radius
+  is large: this repo's own `CLAUDE.md` defines the entire operating identity
+  as "Chief" ("You are Chief, the configured principal's long-lived chief of
+  staff..."), and the name likely threads through docs, code identifiers,
+  other repos, and external-facing copy. **Not started** — deliberately held
+  pending scope/sequencing confirmation from Khaliq (asked directly: does
+  "completely" mean this repo/CLAUDE.md and product docs only, or does it also
+  reach code identifiers, other repos, external comms). Trigger: Khaliq
+  answers the scope question, or gives an explicit go-ahead with scope
+  implied. See `memory/projects.md` for how this connects to the existing
+  "Skip" product thread (a customer-facing cloud-hosted persona, tracked
+  before this rebrand decision landed — worth checking whether this rebrand
+  unifies that persona with the core Chief product, or if they remain
+  distinct and this is a separate, larger naming decision).

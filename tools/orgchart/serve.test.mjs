@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -540,6 +540,15 @@ test('declared titles win over inference, and IDs stay out of the label', () => 
     .find((p) => p.label === 'Chief').children[0].children[0];
   assert.equal(chiefWorker.label, 'Chief of Staff');
   assert.equal(chiefWorker.meta.inferredLabel, false);
+});
+
+test('hierarchy worker cards keep the canonical agent name as primary text', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const source = html.match(/function workerCard\(node\) \{[\s\S]*?\n\}/)?.[0];
+
+  assert.ok(source, 'workerCard renderer is present');
+  assert.match(source, /return card\(\{ \.\.\.agent, title: agent\.title \|\| node\.label \}\)/);
+  assert.doesNotMatch(source, /nameEl\.textContent\s*=\s*node\.label/);
 });
 
 test('every node reports its own subtree size for the disclosure control', () => {
