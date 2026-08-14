@@ -6,14 +6,78 @@ updated: 2026-08-14
 repos: [chief, relay, cloud, sandbox]
 ---
 
-Goal: Chief runs as an agent on a cloud sandbox node rather than on Khaliq's
-laptop, and Khaliq and Will can both attach to it from any machine.
+Goal: Chief runs as an agent in a long-lived cloud sandbox, rotating its own
+session every two hours under the same canonical name, attachable by Khaliq and
+Will from any machine.
+
+## The architecture, decided by Khaliq 2026-08-14
+
+**A long-lived sandbox, a short-lived session.** The sandbox persists; Chief
+hands off and respawns roughly every two hours to stay context-fresh, and
+**keeps the name `chief` across every rotation**. This resolves the tension
+between Khaliq's fresh-sandbox-per-agent correction in
+[[daytona-fleet-nodes]] and a resident Chief: freshness is bought by cycling
+the *session*, not the box.
+
+It is consistent with `CLAUDE.md` §7 as written — a handoff replaces a session,
+never Chief's address, and it is complete only when a process is running under
+the exact `teams.json` name and has answered a liveness probe through that
+identity. What changes is the cadence: what was an occasional manual event
+becomes a scheduled loop running ~12 times a day.
+
+**That cadence is what makes the current token defect a blocker rather than a
+nuisance.** The rotation is a name-reacquisition loop, and name reacquisition
+is exactly what broke this morning: the token for the record named `chief` was
+invalidated while its session was still live, and three fallback records
+(`chief-sf-mini`, `chief-sfm-v2`, `chief-sfm-final`) were created in a
+three-minute window at 06:01–06:03Z — the signature of a reacquisition attempt
+failing and retreating to new names. Twelve rotations a day against a broken
+reclaim path produces twelve burned names a day. `chief-token-rootcause-0814`
+(finn-mini) is therefore on this workstream's critical path, not off to one
+side.
+
+The mechanism is already partly located: restart-reclaim lives in
+`crates/broker/src/relaycast/auth.rs` in `relay`; `relay#1499`
+(`fix/legacy-identity-reclaim-0813`, draft) is operator recovery for pre-gate
+identity records; and per [[active-lanes]] there is an **unowned, uncommitted
+fix** to that same file on sf-mini at
+`~/Projects/AgentWorkforce/relay/ws-unknown-fix` (branch
+`agent/fix-broker-node-workspace`) covering workspace-id resolution on token
+rotation during restart-reclaim, with no PR and no owner. That worktree must
+get an owner before anything resets it.
+
+**Requirements the loop has to satisfy, each with a reason:**
+
+- **Make before break.** Do not tear down the outgoing session until the
+  incoming one has answered a liveness probe *through the canonical name*. §7's
+  fail-safe is explicit: if the name cannot be reacquired, keep the existing
+  resident online and page Khaliq. Degrading to a stale-but-live Chief is
+  correct; degrading to no Chief is not.
+- **One brain writer at a time.** The overlap window puts two Chiefs briefly
+  alive, which is the exact condition §7 forbids for brain writes. The handover
+  needs a defined instant where write authority transfers, not a polite
+  convention.
+- **Flush before handing off.** Continuity across rotation is carried by the
+  brain, so an un-committed durable fact is a fact lost every two hours. The
+  outgoing session commits before it stands down.
+- **Rotate the agent, never the node.** Restarting a fleet node kills every
+  agent on it, because spawned agents are children of the node broker. A Chief
+  rotation must not touch the broker, or it takes every delegate lane with it
+  twelve times a day.
+- **Do not drop in-flight DMs.** Messages arriving during the swap must land
+  with the incoming session, not into the gap.
+
+**Prior art to assemble from rather than invent** — `workforce` already ships
+the proactive persona runtime, where a persona plus `defineAgent({ schedules,
+triggers, onEvent })` deploys **the same artifact local or cloud**. A two-hour
+rotation is a schedule. Check it, and `relayflows`, before building a bespoke
+rotator (see [[agent-lifecycle-workflows]]).
 
 ## Now
 
-Not started. This is priority 3 of Khaliq's stated four (2026-08-14) and had no
-workstream until today; it existed only in conversation. Nothing has been
-built, dispatched, or proven. It is stated here so it stops being invisible.
+Architecture decided (above), nothing built. This is priority 3 of Khaliq's
+stated four (2026-08-14) and had no workstream until today; it existed only in
+conversation. Nothing has been dispatched or proven.
 
 Chief today runs on `chief-broker` — Khaliq's MacBook (`Khaliqs-MBP.home`) —
 as a PTY agent under the local broker, with the brain on that machine's disk.
@@ -58,14 +122,27 @@ Every dependency below is a real blocker, not a formality.
 
 ## Next
 
-1. Decide the hosting model against Khaliq's fresh-sandbox-per-agent
-   correction: is Chief the one exception that gets a persistent node, or does
-   Chief become resumable enough to be re-created per session? Write the answer
-   down before any implementation — this choice determines everything else.
-2. Decide where the brain lives and who writes it when Chief is remote.
-3. Only then dispatch an implementation lane.
+1. **Unblock name reacquisition.** `chief-token-rootcause-0814` must answer
+   whether a new process can take over the canonical name `chief` without
+   burning it, and if not, what has to be built. Nothing else here can proceed
+   on a broken reclaim path. Give the orphaned `ws-unknown-fix` worktree an
+   owner in the same pass.
+2. Decide where the brain lives and who commits it when Chief is remote, and
+   what marks the instant write authority transfers between rotations.
+3. Check `workforce`'s scheduled-persona runtime for whether the rotation loop
+   already exists before writing one.
+4. Only then dispatch an implementation lane.
 
 ## History
+
+### 2026-08-14 — architecture decided: long-lived sandbox, two-hour session rotation
+
+Khaliq: Chief lives in a long-lived sandbox but hands off and respawns every
+two hours to stay fresh, keeping the same name. Recorded above with the
+requirements that follow from it. The consequence worth naming: this converts
+the open token defect from an incident into a critical-path blocker, because
+the rotation *is* a name-reacquisition loop and reacquisition is what is
+currently broken.
 
 ### 2026-08-14 — workstream opened
 
