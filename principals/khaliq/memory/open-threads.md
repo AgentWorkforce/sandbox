@@ -591,14 +591,52 @@
   Decision stated as "completely" — not a scoped/partial rename. Blast radius
   is large: this repo's own `CLAUDE.md` defines the entire operating identity
   as "Chief" ("You are Chief, the configured principal's long-lived chief of
-  staff..."), and the name likely threads through docs, code identifiers,
-  other repos, and external-facing copy. **Not started** — deliberately held
-  pending scope/sequencing confirmation from Khaliq (asked directly: does
-  "completely" mean this repo/CLAUDE.md and product docs only, or does it also
-  reach code identifiers, other repos, external comms). Trigger: Khaliq
-  answers the scope question, or gives an explicit go-ahead with scope
-  implied. See `memory/projects.md` for how this connects to the existing
-  "Skip" product thread (a customer-facing cloud-hosted persona, tracked
-  before this rebrand decision landed — worth checking whether this rebrand
-  unifies that persona with the core Chief product, or if they remain
-  distinct and this is a separate, larger naming decision).
+  staff..."), and the name threads through docs, code identifiers, other repos,
+  and external-facing copy. **Started 2026-08-14 on Khaliq's explicit
+  instruction.** The deterministic harness and full Chief→Skip rebrand are now
+  one active product workstream, registered at
+  `workstreams/skip-deterministic-harness.md`; the earlier customer-facing Skip
+  persona is part of the same cross-surface product direction. The first slice
+  is an audit-only, storage-agnostic supervision loop plus deterministic route
+  and communication specs. Full rename mechanics remain sequenced behind the
+  stable harness contracts so running Chief deployments are not broken
+  mid-migration.
+
+## SOC2 sponsor hole — the only thing that closes it is relaycast#324, and it has no owner
+
+**Trigger: Khaliq must name an owner for relaycast PR #324.** Established
+2026-08-14 by `relay-lead-0814` and `relay-1505b`, each citing consuming code
+rather than PR titles.
+
+The exposure is live. `POST /v1/agents/:name/rotate-token` carries **no sponsor
+proof on the wire** and is authenticated only by the workspace API key, so a
+caller authenticated as sponsor B can rotate an agent bound to sponsor A.
+
+- **relay#1497 is not a boundary.** Its refusal is a client-side check inside
+  the relay CLI: GET `/v1/agents/:name`, read `relayauth_sponsor_id` from
+  metadata, compare locally, decline to call. curl or any second SDK bypasses
+  it. It protects only against a client that has already agreed to be bound.
+- **relay#1505 is the real boundary and is inert.** The adjudicating code
+  (`packages/engine/src/engine/agentCredentialAuthority.ts`) does not exist on
+  relaycast `main` — only on **relaycast PR #324, draft, zero reviews**. So
+  production cannot be running it. #1505 also pins relaycast as a git dep at
+  that draft branch's tip, which is a hard merge blocker on its own, and every
+  entry point fail-opens (`if (!enforced) return { mode: unenforced }`) unless
+  `RELAYCAST_AGENT_CREDENTIAL_AUTHORITY_PUBLIC_KEY_PEM` and `_ISSUER` are set
+  in the deployed environment. It can merge, deploy, and enforce nothing with
+  no signal that it is inert.
+- **Two guarantees have no home.** G5 (reclaim requires matching sponsor) and
+  G6 (rotation refuses cross-sponsor takeover) exist in #1497 and are not
+  covered by #1505 today. A client-side stopgap is **not implementable**:
+  #1505's server deliberately omits sponsor-binding fields from the
+  client-visible GET-agent response, so the client has no data to check even if
+  the code were written. G1–G3 carried over near-identically; G4 was
+  deliberately replaced by server-side DB columns.
+
+Real sequence: relaycast#324 reviewed, merged, released → production configured
+with both env vars → #1505 repins to a released version and merges. #1505 is
+not close to mergeable, and closing #1497 first would remove a courtesy check
+while replacing it with nothing.
+
+`relay-lead-0814` has **held** the #1497 close and offered to take #324, but
+will not reach into another repo unasked. Nothing else can close this hole.
