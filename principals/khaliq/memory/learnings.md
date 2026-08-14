@@ -1441,3 +1441,35 @@ trap that would otherwise cost them a re-open.
   **A merge is not a fix. Before reporting something resolved, name the
   artifact a user would actually run and check its version.** Treat it as one
   release-hygiene problem, not four tickets.
+
+- **A lane's own report that nothing is at risk is not evidence.** During a
+  laptop shutdown, `relay-1431` reported "NOTHING AT RISK" and had **three
+  unpushed commits** in its worktree — the entire rebase onto current main,
+  existing nowhere else. The relay lead found them by looking *inside* the
+  lanes' worktrees rather than collecting their self-assessments, and pushed
+  them to a rescue branch. An agent cannot see its own exposure reliably: it
+  reports on what it believes it did, not on what `git log @{u}..HEAD` says.
+  Check the worktrees yourself. And when rescuing, push to a **rescue branch**
+  rather than force-pushing over a PR branch under time pressure — reinstating
+  it later is a decision that deserves a three-way diff, not a hurried
+  `--force`.
+
+- **Review-bot coverage must be verified per reviewer, against the merged
+  head.** relay#1504 merged at `77c4de01e` with *neither* bot having seen it:
+  CodeRabbit's last review was `d55682d15`, and cubic's only review was the
+  branch's first sha from the previous day — it never reviewed again across ten
+  pushes including the entire redesign. The unreviewed delta was the most
+  consequential change in the PR. Twelve review comments in the timeline prove
+  nothing if all twelve predate the head. The reviews API records `commit_id`
+  per review: compare it to `headRefOid` before calling a PR reviewed, and note
+  that CI passing is not review — CI could not see the wire contract that PR
+  changed at all.
+
+- **A rate-limited safety net announces itself and then silently does not
+  fire.** An explicit `@coderabbitai review` was posted against the correct
+  head; the bot replied 26 seconds later naming the exact change it would
+  evaluate, then failed with "Review rate limited." The acknowledgement is what
+  makes this dangerous — it reads as coverage. When rate limits are in play
+  (GitHub GraphQL and CodeRabbit were both limited on 2026-08-14), any rule of
+  the form "wait for X before proceeding" can become unsatisfiable without
+  saying so. Verify the artifact, never the promise.
