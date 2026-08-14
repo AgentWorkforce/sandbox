@@ -643,6 +643,38 @@ agent. The live proof: `chief`'s seat was released at 2026-08-14T07:25:14Z with
   `sponsorBinding` (`identities.ts:491-505`; `tokens.ts:154-209`). Using a
   binding-time credential per-operation is what made expiry fatal.
 
+**THE REVIEWING LEAD'S VERDICT, recorded because it dissents from the decision
+and a future reader deserves it:** *the sponsor design was the right shape.*
+Bind an agent identity to a verified human sponsor, store the binding as
+immutable server-side state, refuse cross-sponsor operations — relaycast#324
+implements exactly that, and its review found it sound on every axis examined:
+NULL and immutable-column handling, JWT verification, a discriminating
+cross-sponsor test pair, fail-closed legacy migration, and an authenticated
+completion path across all three entry points. **The defect was using a
+binding-time credential per operation.** And #1505 already contained the correct
+pattern — an `IncumbentCredentialCache`, applied to the broker's own identity
+but not to the agents it spawns. The PR held both shapes; only one survives a
+15-minute grant. So *"retire the sponsor design"* and *"fix #1505"* were
+separate decisions. Khaliq took the first. If this is ever revisited, the work
+is recoverable: #1505's branch, the `registration_authority` fleet-wire carrier
+(`crates/broker/src/fleet_wire.rs:242`), and relaycast#324 itself.
+
+**The crux for SOC2, unresolved:** an audit log is **detective, not
+preventive** — it records an impersonation, it does not stop one. It satisfies
+**traceability**, which is a real and separately required control. It does *not*
+close the access-control finding the sponsor work existed for. Which control is
+actually needed depends on how the SOC2 item is worded, and nobody has checked
+that wording.
+
+**Cheap part already done:** every agent-mutation point was enumerated during
+the #324 review — `registerAgent` (`engine/agent.ts:190`), `registerAgentViaNode`
+(`node.ts:1196`), `ensureWebhookAgent` (`inboundWebhook.ts:28`), `rotate-token`
+(`routes/workspace.ts:432`), `dispatchRelease` (`action.ts:664`),
+`applyReleaseCompletionEffect` (`action.ts:1302`), `claimLegacyAgentIdentity`
+(relaycast#325). That enumeration was the expensive half of the audit-log work
+and it is written down. One repo, small, low blast radius; an audit write that
+fails must never fail the operation.
+
 **The replacement direction, being priced by `relay-lead-0814`:** (a) an **audit
 log** of who registered/rotated/released/reclaimed an agent, under which
 credential — which alone may satisfy the SOC2 traceability requirement; and (b)

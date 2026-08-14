@@ -1428,3 +1428,16 @@ trap that would otherwise cost them a re-open.
   operation — it takes out the whole control plane of that broker and defeats
   ordinary shutdown. Any "is the node healthy" check that runs *through* the
   broker's own API inherits the wedge and reports nothing.
+
+- **This org merges and forgets to ship.** Four instances in one day, each of
+  which read as "done" to everyone involved: relay#1499 merged into main while
+  calling a route that existed only in an unmerged relaycast PR; relayfile#417
+  merged with npm still serving the broken 0.10.39; a relay release sitting
+  unpublished with five merged fixes behind it, including the one cross-node
+  attach needs; and relaycast#325 merged without a version bump, so the
+  published `@relaycast/engine` 8.0.0 does not contain it and relaycast-cloud's
+  lockfile still resolves to the old build. The failure surfaces downstream as
+  a mysterious 404 or a stale binary, far from the merge that caused it.
+  **A merge is not a fix. Before reporting something resolved, name the
+  artifact a user would actually run and check its version.** Treat it as one
+  release-hygiene problem, not four tickets.
