@@ -1345,3 +1345,29 @@ mechanism can reveal a second silent defect (the ignored `limit`) that the
 workaround alone would never surface, and it hands the eventual fixer the exact
 trap that would otherwise cost them a re-open.
 - **Factory GitHub-native routing uses the source repo, not the readiness label.** `labelRoutesForIssue` explicitly filters out `config.safety.requireLabel` ("factory") from candidate routing labels for GitHub issues. If no routing labels remain, `githubMirrorRouteForIssue` reads the `source.repo` field from the VFS issue payload and matches it against `byLabel` VALUES (not keys) — so an issue in `AgentWorkforce/relay` routes to `AgentWorkforce/relay` without needing a `relay` label. Intervening in labels mid-dispatch causes a race: the projection updates between the triage read and the dispatch live-read, triggering `LiveDispatchStateChangedError`. **Rule:** for GitHub-native Factory issues, only the `factory` readiness label is required; do not add or remove labels between filing and dispatch.
+
+- **A shared env-var name with two owners is a defect, whatever each side does
+  with it.** `AGENT_RELAY_BIN` means the *broker* binary in `relay`
+  (`packages/cli/src/cli/lib/client-factory.ts:64`) and the *agent-relay Node
+  CLI* in relayfile's Go CLI (`cmd/relayfile-cli/main.go:1160`). Relay exports
+  it to every agent it spawns, so Relayfile's credential re-mint execs the Rust
+  broker, fails on `unrecognized subcommand 'cloud'`, and reports
+  "agent-relay CLI >= 8.7.0 required" against a CLI that is already 11.5.5 and
+  already has the subcommand. A routine credential expiry became days of
+  stalled Factory dispatch, and the error message sent the operator to a
+  no-op upgrade. Two related rules: a fix that lands in one implementation of a
+  path leaves the other one live — the TypeScript SDK was migrated off the
+  shell-out and the Go CLI never was, which is also why grepping only the
+  TypeScript found nothing; and a self-heal path that cannot succeed converts
+  every transient failure into a permanent one.
+
+- **Version the binary on each host before attributing a node's behaviour to
+  its flags.** sf-mini accepted `fleet spawn` requests, returned a fully
+  successful placement with `queued:false`, and launched nothing. The reported
+  cause was its `--no-spawn` flag; the actual cause was `agent-relay-broker`
+  3.0.0 against an 11.5.5 CLI, left behind by an upgrade that rolled back onto
+  a bad artifact. finn-mini carries `--no-spawn` too and spawns fine — that
+  control arm is what killed the flag hypothesis in one command. A node record
+  reporting an old version may be reporting accurately rather than staling, and
+  an obsolete broker still advertises capabilities it cannot honour, so the
+  requester must confirm the launch rather than trust the placement response.
