@@ -1710,3 +1710,50 @@ trap that would otherwise cost them a re-open.
   the actual binaries. Corollary worth keeping: the lane applied our own
   standing rule *to its own lead* and was right to. A hypothesis handed down
   with authority is still a hypothesis.
+
+- **A credential authorised for an action may not be authorised to VERIFY it.**
+  2026-08-15, the fleet-wide DM outage (`relay#1523`). `dm send` performed its
+  recipient lookup on the **agent-scoped** client:
+  `deps.createAgentRelay(...)` then `relay.agents.list()`. An agent token can
+  send a DM but **cannot do a workspace-wide roster read**, so the lookup threw,
+  a bare `.catch(() => undefined)` swallowed it, and every recipient came back
+  `recipient_unresolved`. `relay#1525` fixed it by splitting the credentials —
+  workspace-scoped for the lookup, agent-scoped for the send so attribution
+  survives.
+  **The rule:** when an operation verifies itself, ask whether the credential
+  doing the verifying has the same authority as the credential doing the work.
+  A verification step silently broader than the action it guards will fail for
+  the *common* case while the action itself succeeds — which reads as the action
+  being broken. The tell here was that `message post` worked and `dm send` did
+  not: post needs no roster read.
+  **Corollary that cost a day: `.catch(() => undefined)` is not error handling,
+  it is evidence destruction.** It converted a precise authorisation error into
+  an undiagnosable enum. Catch narrowly, and log what you swallow — an operator
+  cannot debug a value that never existed.
+
+- **Reading the changed-FILE list is not reading the diff, and I have now made
+  this mistake twice in one week.** On `#1497`/`#1505` I claimed one PR was a
+  superset of another from filenames alone; a lane refuted it. On `#1525` I
+  claimed twice — to Khaliq and in writing on the issue — that it "only fixed
+  the reporting, not the delivery," because every changed file was CLI-side. It
+  had in fact fixed the recipient resolution outright, which is the whole bug.
+  Both times the file list was *consistent* with my claim and did not support
+  it.
+  **The rule, stated as a standard rather than a correction because it is now a
+  class:** a claim about what a change DOES requires reading the hunks. File
+  paths tell you where someone worked, never what they concluded. If a diff is
+  too large to read, say the claim is unverified — an unverified claim marked as
+  such is useful; a confident one from filenames is a coin flip that gets
+  amplified downstream. Both of mine reached other agents before they were
+  caught.
+
+- **Probing the source when the artifact is what is deployed answers a question
+  nobody asked.** I spent a long stretch proving the resolver logic was correct
+  by running it against `main` — while every measurement on the board came from
+  the installed 11.6.3 binary, which predates the fix. The code was right and
+  the runtime was wrong, and those are not the same investigation. A related
+  trap fired on the way: grepping the installed bundle returned 0 hits for
+  `recipient_unresolved`, a string the binary demonstrably prints, because it is
+  a compiled 78MB Mach-O and needs `strings`. **Always run the control — search
+  for something you KNOW is present. A zero from a broken instrument looks
+  exactly like a zero from an honest one.**
