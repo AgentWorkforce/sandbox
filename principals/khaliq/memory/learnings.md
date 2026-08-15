@@ -1757,3 +1757,43 @@ trap that would otherwise cost them a re-open.
   a compiled 78MB Mach-O and needs `strings`. **Always run the control — search
   for something you KNOW is present. A zero from a broken instrument looks
   exactly like a zero from an honest one.**
+
+- **A readiness gate keyed on a vendor's cosmetic string is a time bomb, and
+  removing its timeout is what arms it.** 2026-08-15, the fleet-wide dispatch
+  outage. `claude_grid_ready` required the literal text `"Welcome back"` or
+  `"Welcome to "` on screen; Claude Code stopped rendering it on routine
+  launches. Three consecutive live launches showed a composer and no banner, so
+  the gate returned false forever, `worker_ready` never fired, `initial_tasks`
+  was never released, and every spawned agent sat at 0% CPU holding a brief it
+  was never handed — with no session transcript and nothing logged at an enabled
+  level. Agent-to-agent DMs died with it, because injection rides the same path.
+  **The gate was survivable until `7ca5e2dc6` deleted its timeout** with the
+  rationale "elapsed time is not proof of a ready prompt" — true, and it turned a
+  fragile heuristic into a total outage. Before that, detection was the fast path
+  and a deadline was the escape hatch.
+  **The rules.** When a check reads something you do not own — a vendor TUI, a
+  greeting, a log line — assume it will change without notice and make its
+  failure bounded. Ask of any correctness improvement: *what happens when this
+  check cannot pass, and how would we know?* Prefer fail-open-and-loud to
+  fail-closed-and-silent wherever the protected failure is recoverable and the
+  unprotected one is total. And distinguish **"unrecognised"** from
+  **"deliberately vetoed"** — two reviewers caught that my first fix would have
+  timed out past an unanswered Codex trust prompt and typed a brief into a
+  security question. A blind heuristic may be overridden; an explicit refusal
+  never may.
+
+- **A test double that is more cooperative than production makes the suite
+  blind.** The same outage. `->pty:ready` short-circuits readiness before any
+  heuristic runs, and it appears three times in the repo: the check, a unit
+  test, and `tests/e2e/fleet/nodes/stub-agent.cjs`, which writes it. **Nothing
+  in production emits it — only the E2E test double.** So every fleet E2E run
+  took the reliable path while production took the fragile one, and the failing
+  code was never executed under test. "Fleet E2E is green" carried no
+  information about the thing that broke.
+  **The rule: ask which path the test double takes.** If a stub implements the
+  happy protocol that no real dependency implements, the suite is testing the
+  stub. Green means nothing there. Related trap from the same night: the four
+  existing readiness unit tests all included the welcome banner in their
+  fixtures, so they passed identically before and after the string stopped
+  appearing — a fixture that always satisfies the condition cannot detect the
+  condition disappearing.

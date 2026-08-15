@@ -1,5 +1,28 @@
 # Open threads
 
+- **Overnight 2026-08-15 -> 16: fleet recovery shipped, verification pending.**
+  Four PRs merged tonight, all authored under Khaliq's explicit direction:
+  `relay#1529` (the fleet dispatch outage — readiness gate had no timeout),
+  `relay#1530` (Prettier unblock — generated trajectory artifacts committed by
+  `#1520` were failing `format:check` on every PR), `relay#1527` (agent remove
+  routed to the release path, SQL leak redacted), and `relaycast#331` (tombstone
+  on the DELETE route; also fixed subscription leak, tombstone revival, missing
+  `metadata.release`, node-binding release, and non-atomic apply — all found in
+  review, all real, and two of them pre-existing in `#309`/`#330`).
+  **Filed `relay#1531` for Factory**: deliver briefs and messages over the MCP
+  channel instead of simulated keystrokes, which removes the failure class
+  rather than bounding it.
+  **State at hand-off:** both npm publishes were in flight; relaycast-cloud
+  needs its `@relaycast/*` bump and a deploy (the lockfile pins exact versions,
+  so a caret range alone will not move it); then an end-to-end verification
+  measured AT THE RECIPIENT; then all three nodes installed and restarted.
+  **Restarting chief-broker kills ~40 agents including Chief and the acting
+  relay lead**, so it must be sequenced last and after this record is written.
+  **Still unowned:** credential rotation for the `at_live_`/`rk_live_` pair
+  exposed in a transcript tonight plus `relay#1526` (credentials in child argv,
+  visible to `ps` on every node), and the E2E shutdown fix at `160d5a2c2` which
+  has been green for hours with no PR opened.
+
 - **The fleet cannot be dispatched: broker PTY message injection is dead —
   `relay#1523` + unfiled injection defect, 2026-08-15.** Both agent-to-agent DMs
   and **spawn briefs** ride the same last mile — the node broker injecting a
