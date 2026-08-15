@@ -1797,3 +1797,36 @@ trap that would otherwise cost them a re-open.
   fixtures, so they passed identically before and after the string stopped
   appearing — a fixture that always satisfies the condition cannot detect the
   condition disappearing.
+
+- **A newer binary installed is not the binary your shell runs — check `which
+  -a`, not just the version you installed.** 2026-08-16, closing out the fleet
+  outage. I installed `agent-relay@11.6.5` on chief-broker, confirmed
+  `~/.agentworkforce/relay/bin/agent-relay --version` reported 11.6.5, and then
+  spent a round diagnosing why DM resolution still failed. Every command I ran
+  used a **mise-installed npm copy at 11.6.3** that shadowed the relay shim
+  earlier in `PATH`:
+      /Users/khaliqgant/.local/share/mise/installs/node/22.22.2/bin/agent-relay   11.6.3
+      /Users/khaliqgant/.local/bin/agent-relay                                    -> 11.6.5
+  Invoking the absolute path immediately showed the fix working:
+  `recipient_unresolved` became `resolved: <name>, matched: true`. **The rule:
+  when a version-dependent behaviour does not change after an install, resolve
+  the binary before re-diagnosing the bug** — `which -a` and the absolute path,
+  not the version of the thing you meant to run. This is the same family as
+  "the deployed artifact is not the checkout", one layer closer to home.
+
+- **Ask what supervises a process before you restart it, and whether stopping it
+  releases its name.** Same night. finn-mini and sf-mini run their fleet nodes
+  under `launchctl` (`com.agentrelay.fleet-node`), so `kickstart -k` is a safe
+  restart. **chief-broker does not**: its node is pid-1-parented with no launchd
+  service, so killing it leaves the host with no node and nothing to bring it
+  back. Worse, the wrapper script documents that SIGTERM flushes state but does
+  **not** deregister the node name, and the fail-closed admission gate then
+  refuses re-registration because the reclaim key is never persisted — "that is
+  how the name `chief` was permanently burned and Chief went down." Only an
+  explicit `agent-relay node down` releases it.
+  **The rule: a restart is not a uniform operation across a fleet.** Check the
+  supervisor per host, and check whether a clean stop is required to release a
+  claimed identity. I was one command from stranding a node with no live agent
+  able to recover it, and the thing that stopped me was reading the wrapper
+  rather than assuming the hosts matched.
+

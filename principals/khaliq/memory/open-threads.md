@@ -1,5 +1,18 @@
 # Open threads
 
+- **chief-broker still runs broker 11.6.3 — DELIBERATE, and it needs a careful
+  hand, not a kickstart.** `agent-relay@11.6.5` is installed on that host but a
+  running broker keeps its old image, so the dispatch fix is not active there.
+  I did NOT restart it: chief-broker's node is pid-1-parented with **no launchd
+  service**, and its own wrapper documents that a SIGTERM restart does not
+  deregister the node name — the fail-closed gate then refuses re-registration
+  and the name is burned, which is how `chief` was lost once before. Safe
+  procedure: `agent-relay node down` (releases the name), then start the node
+  again, then `./restore-residents.sh chief-broker` to re-spawn
+  `marketing-lead` and `factory-lead` — nodes run `--no-spawn` so they do not
+  return on their own. Do NOT spawn `chief`; it is already restored on sf-mini.
+  ~37 agents on that host are killed by the stop; nearly all are stale lanes.
+
 - **Overnight 2026-08-15 -> 16 recovery: COMPLETE on finn-mini and sf-mini,
   chief-broker binary installed and awaiting a node restart.**
   **Shipped and verified in production:** `relaycast@8.0.3` deployed — the three
