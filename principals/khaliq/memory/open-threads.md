@@ -1,5 +1,81 @@
 # Open threads
 
+- **DM delivery is broken fleet-wide and reports success — `relay#1523`,
+  dispatched 2026-08-15.** `agent-relay message dm send` returns HTTP 200 and a
+  real `messageId` while `delivery.status` is `recipient_unresolved` and
+  `resolvedRecipient` is null, for **every** recipient tried — live agents on
+  the same node, and the sending identity itself. Not recipient-specific, not
+  the `wait`-mode idle queueing (`steer` fails identically), not a missing
+  workspace key (explicit `--workspace-key` fails identically). Channel posts
+  still work. Proven by negative control: a uniquely-marked DM to a live,
+  actively-writing lead never appeared in its transcript.
+  **`relay#1518` caused this shape** — it fixed a hard `Workspace key required`
+  throw by making recipient resolution *degrade* instead, which converted a
+  loud failure into a quiet one. The `delivery` object is honest; the CLI just
+  doesn't read it.
+  **Operational consequence, and it invalidates earlier records:** any agent
+  coordinating over `dm send` may be reaching nobody while believing it has
+  communicated. Chief's own 2026-08-14 briefs to `relay-lead-0814` were never
+  delivered despite returning message ids, which is why nothing Chief routed
+  through relay DM that day moved, while everything routed over the peer
+  session channel did. **Never treat a `messageId` as delivery — verify with a
+  unique marker in the recipient's transcript.**
+
+- **Chief's relay seat was released on 2026-08-14 at 12:06:00.842Z with
+  `reason: null`, and nobody knows what did it.** The Relaycast record for
+  `chief` (`id 208672157419945984`) carries the release; it invalidated the
+  agent token, and the fleet-watchdog tripped `MISSING_RESIDENT: chief` at
+  12:08:40Z. Every Chief respawn since is handed the same pre-release token
+  from local config and fails `Invalid agent token` on post, dm, and inbox
+  alike, through both CLI and MCP. **Chief is mute until this is fixed.**
+  Isolation is clean — a freshly registered name mints a working token and
+  sends real messages instantly, so the mint path is healthy and this record
+  specifically is not. **Filed as `relay#1524`, dispatched 2026-08-15**, folded
+  with the three defects below. Note: the 2026-08-14 brief to `relay-lead-0814`
+  was never delivered — see the DM delivery entry above — which is why this sat
+  unowned for a day. A release with a null reason is itself a defect; a release
+  should always carry a reason and an actor.
+
+- **Three relay defects found while trying to recover that seat, 2026-08-14.**
+  **Filed together as `relay#1524`, dispatched 2026-08-15.**
+  1. **`agent remove` fails *and* leaks raw SQL** — returns
+     `Failed query: delete from "agents" where "agents"."id" = ?` plus the
+     parameter, straight to the caller. Fix the error boundary before it
+     surfaces anywhere public. Consequence: **remove-and-re-register is not an
+     available recovery route** for a broken seat.
+  2. **`register_agent` hangs on an existing broken name** — on 11.6.2 it
+     returned the *same dead token* instantly; on 11.6.3 it hangs past 120s
+     with no response. Fresh names register in under a second.
+  3. **The remediation instruction is a loop** — the server error says to call
+     `register_agent` for a fresh token, and `register_agent` returned the dead
+     one, so the prescribed recovery could never succeed.
+
+- **Skip.app's crash takes the resident Chief down with it.** Skip 0.1.0
+  crashed 2026-08-14 13:35:52 +0200, `SIGTRAP`/`EXC_BREAKPOINT` in
+  `AgentClient.stopAutoHeartbeat()` ← `startAutoHeartbeat()` ←
+  `closure #1 in AgentClient.connect()`, inside `swift::AsyncTask::~AsyncTask`.
+  A Swift-concurrency fault destroying the previous heartbeat task on the
+  **reconnect** path, so relay churn is a trigger. Its relaunch respawns the
+  rostered resident (`parent: "Dashboard"`), which is how Chief lost its
+  session three times between 14:03 and 14:22. Crash report retained at
+  `~/Library/Logs/DiagnosticReports/Skip-2026-08-14-133552.ips`. **Filed as
+  `AgentWorkforce/skip#1`, unlabelled** — `skip` is not in `repos.names` in the
+  active Factory dispatch contract, so it cannot be routed to a lane and needs a
+  human to pick it up. Beyond the crash it asks for the resident's lifetime to be
+  decoupled from the app process.
+
+- **Cleanup debt: `chief-dmcheck-1536` is still in the workspace.** Registered
+  2026-08-14 to prove the DM path end-to-end after the 11.6.3 fix; could not be
+  deleted because `agent remove` is broken. Folded into `relay#1524`'s
+  definition of done.
+
+- **`factory#259` — Factory re-enumerates the whole issue tree every cycle**
+  (6,674 `listTree` calls, one subtree listed 67 times), overloading the
+  relayfile workspace durable object into `429 durable_object_overloaded`.
+  Reported by `factory-lead` 2026-08-14, not independently verified by Chief.
+  Trigger: it constrains any new design that adds workspace traffic — see
+  `workstreams/intent-trajectory-lineage.md`'s replay option 1.
+
 - **CORRECTION 2026-08-07, and it retracts most of what this file said this
   morning: there are THREE agent-registration paths, and the 11.4.2 admission
   gate covers only one.** Established by `relay-name-reclaim-lead` reading the
@@ -807,3 +883,68 @@ published pre-#324 `EngineConfig` type lacks `agentCredentialAuthority`, a
 deterministic consequence of the version pin. relay#1497 is CLOSED, with the
 G1–G6 accounting in its close comment. Arming is Khaliq's call and a sequenced
 operation, not a config edit.
+
+## Fleet + release state, 2026-08-14
+
+- **RESOLVED 2026-08-14 ~17:30Z — 11.6.3 shipped and fixes the DM outage.**
+  Installed on chief-broker, finn-mini and sf-mini via
+  `curl -fsSL .../install.sh | bash`; `dm send` verified returning a
+  conversationId from chief-broker, the machine that had been failing since
+  ~14:17. 11.6.3 also renders Claude MCP config with zero `npx` hits.
+- **Installing a binary is not restarting the node.** On 2026-08-14 both nodes
+  had 11.6.3 on disk at 17:25 while their `node up` processes, started 09:32,
+  kept executing the old code — neither fix took effect until a restart. Check
+  process start time against binary mtime before believing an upgrade landed.
+
+- **(was) finn-mini and sf-mini brokers on 11.5.4** rendered Claude's MCP config
+  as cold `npx -y agent-relay mcp`, so agents spawned there come up with no
+  `mcp__agent-relay__*` tools while the spawn path claims they have them.
+  relay#1503 fixed the rendering; 11.6.2+ renders the installed executable.
+  Fixed by upgrading those nodes. relay#1519 adds the regression test.
+- **Node control-plane connections blackhole silently.** On 2026-08-14 finn-mini
+  and sf-mini both showed `status=offline` with heartbeats ~30min stale while
+  their `node up` processes and every agent on them were alive and reachable by
+  DM. This is exactly the defect relay#1462 was merged to detect. Symptom to
+  watch: `fleet nodes` says offline, `ps` says otherwise.
+- **Restarting a fleet node kills every agent on it.** As of 2026-08-14 15:14Z
+  that cost is 12 live agents on finn-mini (relay-1499, relay-1503, relay-1505b,
+  relay-dmfix, relay-mcpfix, relaycast-324, relaycast-cloud-60, relay-lead-0814b,
+  relay-release-0814, chief-token-rootcause-0814, daytona-lead-0814b,
+  sponsor-safe-rollout-lead) and 1 on sf-mini (`chief`, running
+  `claude --model claude-opus-4-8`). Count before restarting, not after.
+- **`agent-relay-broker mcp-args` prints live credentials to stdout** — the
+  agent token and workspace key appear in its JSON output, including the key the
+  caller passed in. Anything that logs or transcripts that command leaks them.
+  Adjacent to the known `rk_live_` visible-in-`ps` exposure.
+- **relay#1514** (unmerged, no owner): fixes a lost-update read-merge-write live
+  in `main` at `crates/broker/src/relaycast/ws.rs:182-188`, pinned in place by a
+  test at `ws.rs:973` that asserts the defect as intended behaviour. The branch
+  was re-applied from context and never recompiled — build and test before use.
+- **relay#1511** (no owner): a broker cannot be gracefully stopped while an agent
+  registration is in flight against a slow engine; escalates to SIGKILL and takes
+  every child agent with it. Reproduced with paired arms; probe script in issue.
+
+- **Cross-node terminal attach has never worked, and it is not a provisioning
+  gap.** `agent-relay node agent attach --node <n> <agent>` fails with
+  `node_unreachable: Node '<n>' has no terminal transport` on every node.
+  Ruled out on 2026-08-14 with citations: the route is live (a probe of
+  `GET /v1/node/terminal/ws` returns `426 Expected Upgrade`), relaycast-cloud
+  routes it to the NodeDO which upgrades it under role `terminal-node`
+  (`durable-objects/node.ts:203-204`) and computes `terminal_connected` from
+  that socket (`:219`); the enrollment record carries no capability fields, so
+  RE-ENROLLING WOULD NOT HELP and would cost the node tokens; and no manifest
+  capability is involved — the gate is the live socket. The broker does try:
+  `runtime/init.rs:251-254` derives the URL unconditionally and `:337` spawns
+  `run_terminal_control_client` with a real reconnect loop.
+  **Why nobody has seen the cause:** that client logs failures to
+  `target = "relay_broker::terminal"`, the node's stderr log contains zero WARN
+  lines, and `RUST_LOG` is unset in the fleet-node wrapper — so it can fail on
+  every retry forever and write nothing. A grep for "terminal" returning empty
+  means UNOBSERVED, not "never attempted". `node up` already supports
+  `--log-file`/`--log-level` and nothing uses them.
+  **Unverified hypothesis worth checking first:** the control client is built
+  with a node token, a token minter and a session token; the terminal client
+  (`TerminalControlConfig`) gets only the session token, which node-control
+  populates in the background after minting — so if it starts before the mint
+  lands, it has no minter to recover with. Owner: lane `relay-terminal`,
+  branch `fix/terminal-transport-never-connects`.

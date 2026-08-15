@@ -62,13 +62,18 @@
   relayhistory-cloud) is meant to carry this, working across both harness and
   machine. See `workstreams/relayhistory-continuity-proof.md` for the
   engineering effort proving this mechanism.
-- **Full rebrand underway: "Chief" → "Skip" (2026-08-13, Khaliq via
-  chief-app-local, stated as "completely").** Not yet scoped or started — see
-  `memory/open-threads.md` for the held decision and the scope question asked.
-  Unclear whether this unifies with the "Skip" customer persona noted above
-  (same name, established earlier the same session) or is a separate, larger
-  decision to rename the whole Chief product. Whoever picks this up next
-  should resolve that ambiguity with Khaliq before executing.
+- **Full rebrand underway: "Chief" → "Skip" (2026-08-13 decision; build started
+  2026-08-14 on Khaliq's explicit instruction).** This is the same product
+  direction as the customer-facing Skip persona above: a Relayfile-native,
+  cross-surface control plane backed by deterministic agents and a small cheap
+  planning model pocket. It is registered at
+  `workstreams/skip-deterministic-harness.md`. The harness contracts and
+  dogfood supervision loop land before package/launch-label/external-copy rename
+  mechanics, so the running Chief deployment remains compatible during the
+  migration. The custom resident now combines five-minute workstream sweeps
+  with one durable mostly deterministic agent per conversation thread; every
+  confirmed agent dispatch carries a separate five-minute evidence follow-up.
+  The cheap OpenCode/DeepSeek model is only an ambiguity pocket, not Skip.
 - **Cloud dashboard information architecture, stated directly by Khaliq
   (2026-08-13):** Chief owns workstreams, and agents live nested *under*
   their workstream — not a flat list. Each agent entry in that nested view

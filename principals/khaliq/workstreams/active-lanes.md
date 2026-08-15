@@ -1,10 +1,49 @@
 ---
 status: active
 owner: chief
-updated: 2026-08-13
+updated: 2026-08-15
 repos: [relay, relayfile, factory, workforce, cloud, agents, relaycast, relaycast-cloud, internal-agents, skills]
 ---
 # Active lanes — dispatched work and who owns it
+
+## 2026-08-15 ~20:10 CEST — full in-flight sweep
+
+Counted from `state-chief-broker.json`, GitHub issue labels, and `gh pr list`.
+This node only; sf-mini, finn-mini and barry not re-inventoried here.
+
+**39 live agents on chief-broker.** Twelve are long-lived leads and lanes from
+08-13/08-14 (`relay-lead-0814`, `factory-lead`, `marketing-lead`,
+`relaycast-325-rebase`, `relaycast-326-review-fix-0813`, `relay-1431`,
+`relay-1504b`, `relayfile-sdk-auth-0814`, `sfmini-broker-repair-0814`,
+`skip-deterministic-harness-lead-0814`, `skip-scheduler-binding-spike-0814`,
+`chief`), several running 32–44 hours. The remaining 27 are Factory-spawned
+`ar-*` impl/review/babysit triples from 08-15.
+
+**30 Factory issues in progress across 8 repos**; 3 sitting in
+`factory:human-review` and therefore blocked on Khaliq: `factory#260`,
+`cloud#3031`, `relaycast-cloud#45`.
+
+**154 open PRs across 6 repos** — relay 35, factory 14, cloud 77, relayfile 23,
+relayfile-cloud 4, relaycast-cloud 1. **37 are CONFLICTING and 29 are drafts.**
+Effectively none carry an approving review. This is the dominant constraint on
+the whole system right now: dispatch throughput far exceeds merge throughput,
+and the gap is the human merge gate, which is Khaliq's by design.
+
+**Filed by Chief on 08-15**, all covered in `memory/open-threads.md`:
+`relay#1523` (DM delivery silently unresolved — PR `relay#1525` open, 11/11
+workflows green, unreviewed), `relay#1524` (agent identity recovery broken end
+to end — in progress, no PR), `relay#1522` (replay id + relayhistory↔relaycast
+join — deliberately unlabelled, blocked on the `rw_7ccfea89` retention read),
+`skip#1` (Skip heartbeat crash kills the resident Chief — unlabelled and
+unroutable, `skip` is not in `repos.names`).
+
+**Filed by others and worth noting:** `relay#1526` — the broker passes
+`rk_live_`/`at_live_` credentials in child argv where any local process can
+read them via `ps`. In progress as of 20:05.
+
+**Known-stale in this file:** everything below this section is the 08-13
+inventory and describes lanes that have since exited or been replaced. Read it
+as history, not as current state.
 
 ## 2026-08-13 ~13:00 CEST — sf-mini + barry inventories, same methodology as finn-mini
 

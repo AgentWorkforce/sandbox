@@ -1473,3 +1473,240 @@ trap that would otherwise cost them a re-open.
   (GitHub GraphQL and CodeRabbit were both limited on 2026-08-14), any rule of
   the form "wait for X before proceeding" can become unsatisfiable without
   saying so. Verify the artifact, never the promise.
+
+- **N independent lanes converging is only corroboration if they answered the
+  same question the decision turns on.** On 2026-08-14, three lanes
+  (`relay-lead-0814b`, `relay-1431`, `chief-sfmini`) independently reached the
+  same conclusion on relay#1431 and the record was called solid; two of them
+  stood down. All three had verified the *exclusion of a discriminator* — that
+  the observed failure was a fixture timing artifact. None had verified the
+  *safety of the replacement fixture*. When `relay-1431` re-read the code it
+  found the new fixture (`exit 23` with no delay) maximises a second,
+  already-documented race: `send_to_worker("init_worker")` runs *before* the
+  250ms stability probe, so a child that dies before the write fails with EPIPE
+  and returns early on a different error string — and the unit test asserts the
+  first path's message text. The repo had already reached this conclusion twice
+  (`cli-spawn.test.ts:504` matches both strings; the EPIPE regression test
+  triggers a real write failure "rather than asserting on message text").
+  Independence controls for *error*, not for *scope*: three lanes briefed off
+  the same framing share its blind spot exactly. Before treating agreement as
+  settled, name the question each lane actually answered and check it is the one
+  the merge depends on.
+
+- **When a fixture's two failure modes sit at opposite ends of a window, the
+  assertion is the brittle part, not the timing.** The original `sleep 0.05`
+  risked the child still being alive at the probe; `exit` immediately risks it
+  being dead before the write. There may be no delay safe at both ends under
+  arbitrary runner load. The durable fix is to assert what holds on *both*
+  paths — the contract (call returns `Err`, worker absent, spawn count zero,
+  agent not registered) — and let the message text match a disjunction, keeping
+  the detail assertion in a requester-level test that uses a fixture instead of
+  a real process and therefore cannot race.
+
+- **Merged is not released is not deployed is not installed everywhere.** Four
+  distinct states, and on 2026-08-14 the gap between them cost hours three
+  separate times: relaycast#325 merged while its endpoint still 404'd in
+  production; relay#1499's `reclaim-legacy-identity` shipped in `main` and in no
+  published binary; relay#1518 fixed a fleet-wide DM outage that stayed live
+  because npm's latest was still the broken build. A lane reported "the 404 is
+  closed" on the strength of a merge. Before calling a fix real, probe the
+  deployed artifact — and for a CLI, check the version actually installed on the
+  machines that matter, not the one in the repo.
+
+- **A green review-bot status check does not mean the PR was reviewed.**
+  relaycast#325 showed `CodeRabbit=SUCCESS` while `gh api .../pulls/N/reviews`
+  put its newest review against a commit from the previous day, alongside a
+  "Review limit reached — we couldn't start this review" comment. The green
+  check was the bot successfully posting its *inability* to review. CodeRabbit
+  also auto-pauses after commit churn (`review paused by coderabbit.ai`), which
+  never self-heals — zero unresolved threads stays zero forever. The only
+  reliable check is per-reviewer `commit_id` compared against `headRefOid`;
+  thread counts, status checks and absent comments can all be produced by a
+  review that never ran.
+
+- **When you read an absence, establish that the instrument could have shown a
+  presence.** Nine distinct instrument artifacts surfaced in one day, every one
+  a correctly-functioning tool answering a malformed question: a grep whose
+  pattern missed the line; a query sorted by string instead of time; a `jq`
+  counting pending runs as failures; a cancelled CI run rendering as a failure;
+  an empty run-set rendering as the *previous* sha's green because `gh run list`
+  shows older rows underneath; stale incremental build state after a
+  mtime-preserving `mv`; a throttled GraphQL query returning zero threads; a
+  hidden subcommand (`hide = true`) absent from `--help` while working fine; and
+  a `ps -p` invocation that ignored its filter and returned the same first match
+  for every pid. Show the derived counter and the raw output together — a
+  malformed query returns empty rather than wrong, and empty reads as benign.
+
+- **A rule that changes the shape of the work creates hazards invisible in the
+  rule itself.** Requiring the declared-metadata publish be *detached* from the
+  spawn turned a safe read-modify-write into a lost update. Making
+  break-revert-verify compulsory turned source edits into source/build desync.
+  Neither hazard is visible in the rule; both live in the mechanics it forces.
+  The test on a new rule is not "is it correct" but "what does this make people
+  do that they were not doing before, and what is newly unsafe in that."
+
+- **An enrichment that cannot fail gracefully becomes a precondition.**
+  relay#1468 added recipient resolution to `dm send` as a diagnostic nicety; it
+  called `GET /v1/agents` with the *agent token*, an endpoint requiring a
+  workspace key, and threw instead of degrading to `recipient_unresolved` — so a
+  fleet-wide DM outage shipped, with a server error ("Workspace key required")
+  that misattributed the cause to operator config while a valid key sat in the
+  environment. Every test mocked `agents.list()`, so nothing exercised what the
+  endpoint actually requires. When adding a lookup to an existing operation, the
+  must-not-fire arm is that the operation still succeeds when the lookup fails.
+
+- **An upgrade that returns no error may have reinstalled the same version.**
+  2026-08-14: `agent-relay update` rewrote both binaries with **byte-identical
+  sizes** and `--version` still reporting the old number, because
+  `update-cache.json` had recorded the then-latest version hours earlier and the
+  updater trusted the cache rather than the registry. A no-op upgrade is
+  indistinguishable from a successful one if you read the exit code. Deleting
+  the cache and re-running surfaced the real latest immediately. Read the
+  version back; and when a version check is cached, the cache is a place the
+  truth can go stale.
+
+- **The path an updater installs to is not necessarily the path the fleet
+  executes.** The same upgrade put the new build in npm-global/mise, which
+  shadowed the old binary for an interactive shell, while the copy the broker
+  and node actually run stayed on the broken version. For a window the CLI on
+  `PATH` was fixed and the fleet's CLI was not — and `--version` in a terminal
+  said everything was fine. Resolve the binary the *running system* uses
+  (`which -a`, and read the file the shim points at), not the one your shell
+  finds first. Related: the install is rename-based, so running processes keep
+  the old inode and continue executing the old image until restarted — disk and
+  memory version drift is the normal state, not an anomaly.
+
+- **A remediation instruction can be a closed loop — test the recovery path,
+  not just the error message.** 2026-08-14, Chief's own seat: the server
+  returned `agent_token_invalid` with the advice "call `register_agent` to
+  obtain a fresh token", and `register_agent` returned *the same dead token*.
+  The prescribed recovery could never have succeeded. On the next release it
+  stopped returning anything and hung past 120s instead. A released seat is not
+  a rotatable credential: `agent remove` + re-register was the only other route
+  and that command is itself broken. When shipping an error string that tells
+  the operator what to do, exercise that exact sequence end to end.
+
+- **A format demonstrated once is not a format in use.** The trajectory pointer
+  contract was ruled, stamped on `relay#1476`, and recorded as proven — but its
+  `session_ref` was the literal placeholder `unknown-session-v3b`, and
+  `factory-lead` found the pointer on **zero** of the nine other PRs checked,
+  including all six from that day's work. Chief had summarised this as "proven
+  live end-to-end", which overstated it; the workstream's own text said
+  "placeholder" and the summary glossed it. The gap was never "design the
+  linkage" — it was "populate and emit it". When a contract's evidence is a
+  single hand-made example, say so; ask what the *populated* count is before
+  calling a mechanism live.
+
+- **Verify dispatch by process, not by a label whose writeback is broken.**
+  From `factory-lead`, 2026-08-14: using the GitHub label as the dispatch signal
+  while label writeback was itself broken produced three confident wrong
+  conclusions in a row — intake stalled, event pipeline stopped,
+  create-with-label doesn't dispatch. All false; the agents had been running for
+  over an hour. When the signal you are reading is produced by the subsystem you
+  are diagnosing, it cannot be your instrument.
+
+- **A dispatch that is not atomic leaves half-committed work, and a repair that
+  only fires at startup is not a repair.** From `factory-lead`, 2026-08-14
+  (`factory#242`, refiled after the first diagnosis was wrong — and the recheck
+  that surfaced the real mechanism was prompted by Khaliq asking him to look
+  again after the upgrade, not by the lane's own initiative; the deploy is what
+  exposed it): a crash between
+  spawning the implementer, spawning the reviewer, and writing the GitHub claim
+  strands the issue. The discriminator was timing — issues dispatched by a
+  healthy instance wrote back in 13–60 seconds; three dispatched by an instance
+  that later died took 7h45m and completed only when the next version's startup
+  reconcile ran. Ask when the repair path runs, not whether one exists.
+
+- **"Closed as fixed" can mean fixed by deploying, with no code change at all.**
+  From `factory-lead`, 2026-08-14: `factory#241` was closed with the fix already
+  in `main` since `f4d508b`/`1ce4d21` — production was **37 versions stale**.
+  The bug was real, the code was correct, and the gap was the deploy. Check the
+  running version against `main` before writing a fix.
+
+- **A brief is a snapshot taken at dispatch, and there is no channel for
+  amending it afterwards.** 2026-08-14, `factory-lead`: `factory#260` dispatched
+  `ar-260-impl-factory` and `ar-260-review-factory` within ~2 minutes of filing,
+  before the addendum carrying four Chief rulings and one **blocking** unverified
+  constraint could be posted. **Issue comments do not reach a running agent** —
+  the agent read the issue once, at spawn. The only way in was a direct message
+  to the live session. This is the recurring shape, and it has a sibling already
+  in this file: a ruling that arrives after its executor was dismissed lands on
+  an empty chair; this is the same defect one step earlier, where the executor is
+  very much alive but permanently reading a stale brief.
+  **The rules that follow.** Post constraints *before* filing when filing
+  auto-dispatches, or file without the readiness label and add it once the brief
+  is complete. When an amendment must reach work already running, send it to the
+  session, not to the issue. And put the blocking parts first with an explicit
+  instruction to stop and report rather than to pick an assumption — an agent
+  that hits an unresolved constraint will otherwise choose one silently, and a
+  chosen assumption is indistinguishable in the output from a verified fact.
+
+- **A 200 and a `messageId` are not delivery — read the outcome field, not the
+  envelope.** 2026-08-15, `relay-lead-0814`: `agent-relay message dm send`
+  returns a real `messageId` while `delivery.status` is `recipient_unresolved`
+  and the message reaches nobody. I grepped the response for `conversationId`
+  and reported "sent" all day. **None of it arrived** — including a brief to a
+  lane I then publicly described as idle, and including Chief's own briefs to
+  me. The negative control is what makes this diagnosable: a bogus recipient
+  hard-errors `Agent "..." not found`, while every *real* recipient returns
+  `recipient_unresolved` — so the roster resolves and only delivery fails.
+  **The bitter part: `relay#1518`, the DM fix this board shipped the day
+  before, is what caused it.** It replaced a hard `Workspace key required`
+  throw with a *degrading* resolution path, converting a loud failure into a
+  silent one. The `delivery` object was honest the whole time; the CLI simply
+  never read it. Filed as `relay#1523`, fix in `relay#1525`.
+  **The rules.** When a transport reports on itself, find the field describing
+  the OUTCOME, not the ACCEPTANCE — enqueue is not delivery. When you replace a
+  throw with a graceful degrade, you have moved the failure from the caller's
+  face into a field nobody reads; make the degraded path *louder* than the
+  throw was, or you have shipped a silent outage. And note the asymmetry that
+  hid it: channel posts carry **no `delivery` field at all**, so they cannot be
+  verified this way — the only proof a channel message landed is a reply.
+
+- **A long-running child process plus 0% CPU is not a wedged agent.** Same day,
+  same lead: I found a 4h25m `bfs / -iname cargo` under `relay-e2e`'s pty, saw
+  every lane at 0.0% CPU, and told Khaliq the lane had been blocked for four and
+  a half hours and done nothing. It had reported **five milestones through that
+  exact window** and shipped a green fix. The `bfs` was a runaway orphan it had
+  already moved past. Two compounding errors: `%CPU` in `ps` is a **lifetime
+  average**, which is meaningless as a liveness signal on a long-lived process;
+  and I never read the channel, which held the answer the entire time.
+  **The rule: before declaring a lane dead, read what it has SAID.** Process
+  state describes the machine, not the work. This is the existing
+  "registration fields are not liveness fields" rule pointed the other way — I
+  trusted an OS-level signal over an arriving message, when only the arriving
+  message ever proves anything. Distinguish this from the *other* 0%-CPU entry
+  in this file: there, idle meant a brief never arrived; here, idle meant the
+  work was finished and the report never reached me. **Idle is a question, not
+  an answer.**
+
+- **A rescued diff must be compared against the SHIPPED HEAD, not its own
+  parent.** I recovered two uncommitted files from a 20-hour-cold worktree and
+  nearly handed them over wholesale. Diffed against the shipped PR head they
+  were a **mix**: one genuine unshipped improvement (distinguishing a *full*
+  bounded queue from a *closed* one, and warning on the dropped frame) sitting
+  beside two regressions — a ping path treating a transiently full queue as
+  fatal, and a wedge-test fixture **shrunk from 32MB to 100 bytes** with
+  `DEBUG TEMP` still in the commit message. That fixture never fills an OS send
+  buffer, so the test would pass while exercising nothing it exists to prove.
+  **A green test asserting nothing is worse than a red one.**
+  **The rule:** uncommitted work is uncommitted for a reason, and the reason is
+  sometimes "mid-experiment". Diff it against what actually shipped, and read
+  every hunk for debugging leftovers before adopting any of it. Rescue and
+  adopt are two decisions, not one — preserve first on a branch, judge second.
+
+- **A clean bisect boundary can be a coincidence when the mechanism is an
+  external latency.** I bisected a red E2E to a single commit — 3/3 reproducible
+  after it, 0/1 before, exactly one commit in the range — and briefed a lane
+  with that hypothesis. `relay-e2e` **tested it instead of inheriting it**:
+  it built both broker binaries and timed `SIGTERM`→exit directly, with a fresh
+  workspace per run. HEAD 8.54/8.32/9.50s vs CONTROL 8.98/8.63/8.76s —
+  indistinguishable. The real cause was a **pre-existing unbounded**
+  `mark_offline()` HTTP call riding reqwest's blanket 30s timeout, sitting near
+  the CLI's 10s threshold and tipping over only on slower macOS runners.
+  **The rule:** when a failure is timing-dependent and the mechanism is an
+  external call, a clean bisect boundary is weak evidence — the boundary may be
+  where *ambient latency* crossed a threshold, not where the code changed. A/B
+  the actual binaries. Corollary worth keeping: the lane applied our own
+  standing rule *to its own lead* and was right to. A hypothesis handed down
+  with authority is still a hypothesis.
