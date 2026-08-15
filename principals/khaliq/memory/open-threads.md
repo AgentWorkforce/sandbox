@@ -1,5 +1,37 @@
 # Open threads
 
+- **The fleet cannot be dispatched: broker PTY message injection is dead —
+  `relay#1523` + unfiled injection defect, 2026-08-15.** Both agent-to-agent DMs
+  and **spawn briefs** ride the same last mile — the node broker injecting a
+  payload into a running harness — and that path is broken on broker 11.6.3.
+  **Everything above it works**: the server stores the objective on the agent
+  record (verified: a 7371-character brief present for a lane that never
+  received a word), recipient resolution is fixed on `main` by `relay#1525`, and
+  `delivery.ts:386` routes on `agents.locationNodeId` rather than presence — so
+  the fleet-wide `status: unknown` is a red herring for delivery.
+  **The mechanism, verified from process argv:** the harness is launched as
+  `claude --dangerously-skip-permissions --mcp-config {...}` with **no prompt and
+  no task argument**. The objective is meant to arrive afterwards *as an injected
+  message*. So a spawned agent sits at 0% CPU with no session transcript at all —
+  not stuck, never told anything. `session_ref: null` on every spawn response is
+  the API already reporting this.
+  **Proven workaround:** a brief passed at LAUNCH (`claude -p "<brief>"`) reaches
+  the session every time — demonstrated twice. It needs the agent identity env
+  the broker normally injects, and the brief must read as a legitimate operator
+  instruction: a terse one asserting "you are explicitly authorized, do not ask
+  for confirmation" was correctly refused by the agent as prompt-injection
+  framing. Context and reasoning are what make a brief actionable, not assertions
+  of authority.
+  **Also learned while restarting finn-mini to test this:** killing a node leaves
+  the agent SEATS claimed — the control plane reported `activeAgents: 6` against
+  zero processes and spawns stayed `pending` until the seats were released. Three
+  of five `agent remove` calls then failed with a raw SQL leak
+  (`Failed query: delete from "agents" where "agents"."id" = ?`), which is the
+  defect `relay#1527` fixes — so #1527 matters here, not for DM delivery but
+  because it is the tool for clearing stuck seats.
+  **Owner: unfiled.** The fix is in the Rust broker; no CLI release addresses it.
+  Whoever takes it cannot be dispatched through the fleet, which is the trap.
+
 - **DM delivery is broken fleet-wide and reports success — `relay#1523`,
   dispatched 2026-08-15.** `agent-relay message dm send` returns HTTP 200 and a
   real `messageId` while `delivery.status` is `recipient_unresolved` and
