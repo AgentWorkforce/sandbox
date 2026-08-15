@@ -1,5 +1,33 @@
 # Open threads
 
+- **Overnight 2026-08-15 -> 16 recovery: COMPLETE on finn-mini and sf-mini,
+  chief-broker binary installed and awaiting a node restart.**
+  **Shipped and verified in production:** `relaycast@8.0.3` deployed — the three
+  seats stuck all night (`relay-e2e`, `relay-terminal`, `relay-terminal2`) now
+  release cleanly, names freed, and all 18 of their messages remain attributed
+  under `<name>#released-<id>` tombstones. `agent-relay@11.6.5` published,
+  carrying `relay#1529` (the dispatch outage), `#1530` and `#1527`.
+  **The fleet dispatch outage is fixed and proven.** On finn-mini a spawned
+  probe's brief appeared in the recipient's own transcript — the measurement
+  that read ZERO all night. On sf-mini, Chief was killed by the restart
+  (nodes run `--no-spawn`, so residents do NOT return on their own), re-spawned
+  from the `teams.json` roster, and CONFIRMED to have received its brief.
+  **chief-broker is the remaining step.** `agent-relay@11.6.5` is installed
+  there, but a running broker keeps its old image until the node restarts, so
+  the fix is NOT yet active on that host. Restarting it kills ~37 agents
+  including `marketing-lead` and `factory-lead`. One command:
+  `launchctl kickstart -k gui/$(id -u)/com.agentrelay.fleet-node`, then
+  `./restore-residents.sh chief-broker` to re-spawn the roster.
+  **Gotcha worth keeping: fleet spawns take 30-60s to appear.** Checking sooner
+  reads as a failed spawn and invites a wrong diagnosis; I nearly reported spawn
+  broken twice on that basis.
+  **Still open:** `relay#1532` fixes clippy on relay main, which I broke with
+  `#1529` (8 arguments against a limit of 7 — local `cargo test` does not run
+  clippy). `relay#1531` is filed for Factory: deliver briefs over MCP instead of
+  simulated keystrokes, which removes the failure class rather than bounding it.
+  Credential rotation for the exposed `at_live_`/`rk_live_` pair and `relay#1526`
+  remains unowned, as does the E2E shutdown fix at `160d5a2c2`.
+
 - **Overnight 2026-08-15 -> 16: fleet recovery shipped, verification pending.**
   Four PRs merged tonight, all authored under Khaliq's explicit direction:
   `relay#1529` (the fleet dispatch outage — readiness gate had no timeout),
