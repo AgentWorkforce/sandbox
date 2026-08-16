@@ -1,5 +1,16 @@
 # Open threads
 
+- **Fleet broker versions, 2026-08-16.** barry upgraded 11.5.1 -> 11.6.6 and
+  restarted (launchd-managed, zero agents, safe); finn-mini and sf-mini run
+  11.6.5 and were restarted onto it. **chief-broker still runs 11.5.4** — older
+  than it looks, because that process predates several releases and installing
+  the binary changes nothing about what is executing. Read the version the
+  control plane reports (`agent-relay fleet nodes`), NOT
+  `agent-relay-broker --version`, which only reads the file on disk.
+  chief-broker's restart stays blocked on the node-name hazard: no launchd
+  service, and its wrapper documents that SIGTERM does not deregister the name,
+  which is how `chief` was burned once already.
+
 - **chief-broker still runs broker 11.6.3 — DELIBERATE, and it needs a careful
   hand, not a kickstart.** `agent-relay@11.6.5` is installed on that host but a
   running broker keeps its old image, so the dispatch fix is not active there.
