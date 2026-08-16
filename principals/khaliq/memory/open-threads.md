@@ -1,5 +1,31 @@
 # Open threads
 
+- **Chief's OAuth token is REVOKED — it cannot call the API, and only Khaliq can
+  fix it. 2026-08-16.** Surfaced by the first working cross-node attach: Chief's
+  live screen on sf-mini shows
+
+      Please run /login - API Error: 401 OAuth access token has been revoked.
+
+  So Chief has been up, correctly briefed, and unable to act since it was
+  respawned. **This corrects two earlier diagnoses of the same silence**: it was
+  not the missing `chief.config.json` (real, and fixed), and it was not idling
+  by choice. Nothing in the brain, the roster or the broker will fix it — it
+  needs a re-auth on sf-mini.
+  The general lesson: an agent that cannot authenticate looks exactly like an
+  agent with nothing to do. Neither process state, roster status, nor a
+  delivered brief distinguishes them. **Attaching to its terminal did, in one
+  look** — which is the strongest argument for cross-node attach existing.
+
+- **Cross-node terminal attach WORKS as of 2026-08-16, on broker 11.6.7.**
+  `relay#1521` merged (`0d843597e`) and shipped. Verified with a real control:
+  30 minutes before, both `attach --node sf-mini chief` and
+  `attach --node finn-mini attach-target-0816` failed with
+  `Node '<x>' has no terminal transport`; after installing 11.6.7 and restarting
+  BOTH brokers, both render live VT screens and the target's own reply is
+  readable through the attach. **Attach needs the fixed broker on both ends** —
+  a partial rollout leaves it failing between mismatched pairs and looking
+  unfixed.
+
 - **chief-broker reboot procedure, 2026-08-16 — CORRECTION to an earlier note
   in this file.** I previously recorded that chief-broker has "no launchd
   service". Wrong: the plist is `com.agentworkforce.chief.node`, not

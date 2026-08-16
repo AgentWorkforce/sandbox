@@ -1851,3 +1851,15 @@ trap that would otherwise cost them a re-open.
   sit idle rather than announce the problem, which is indistinguishable from
   having nothing to do.
 
+- **`install.sh` trusts a local update cache, so "install the latest" can
+  install something older.** 2026-08-16: with npm `latest` at 11.6.7, the
+  installer put **11.6.6** on both nodes. `~/.agentworkforce/relay/update-cache.json`
+  still read `{"latestVersion": "11.6.5"}` from the previous night. Deleting
+  that file and re-running installed 11.6.7 and logged
+  `Installing version: 11.6.7` explicitly.
+  **The rule: after any install, read the version back and compare it to the
+  registry, not to what you asked for.** A zero exit and a cheerful log line
+  say nothing about which version landed. This is the same cache that has now
+  caused a silent no-op upgrade twice; treat `update-cache.json` as suspect
+  whenever an installed version disagrees with `npm view <pkg> version`.
+
