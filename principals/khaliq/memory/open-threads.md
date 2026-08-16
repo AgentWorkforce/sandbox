@@ -1,5 +1,28 @@
 # Open threads
 
+- **chief-broker reboot procedure, 2026-08-16 — CORRECTION to an earlier note
+  in this file.** I previously recorded that chief-broker has "no launchd
+  service". Wrong: the plist is `com.agentworkforce.chief.node`, not
+  `com.agentrelay.fleet-node` like the other hosts, which is why a kickstart
+  against the latter failed and a grep for "agentrelay" missed it. It has
+  `RunAtLoad => true`, `KeepAlive` set, and is not disabled — **so a reboot DOES
+  bring the node back**, which is what finally resolves chief-broker without the
+  risky hand-restart.
+  It is simply **not currently loaded** (0 entries in `launchctl list`): the
+  running node, pid 1311 since 2026-08-14 09:27, was started directly as
+  `agent-relay node up --background-child` rather than through
+  `chief-node-supervisor.sh`. **That matters, because the supervisor exists
+  specifically to trap SIGTERM and run a clean shutdown, and the current process
+  bypasses it.** A bare reboot therefore SIGTERMs a node that will not
+  deregister its name, and the fail-closed admission gate can then refuse
+  re-registration — the way the name `chief` was burned once already.
+  **So: run `agent-relay node down` on chief-broker BEFORE rebooting** to
+  release the name cleanly. After the reboot the node auto-starts on whatever
+  binary is installed, then `./restore-residents.sh chief-broker` re-spawns
+  `marketing-lead` and `factory-lead`. Do NOT spawn `chief` — it lives on
+  sf-mini now. Also present: `com.agentworkforce.fleet-watchdog` running
+  `tools/watchdog/fleet-watchdog.mjs`, which may also act on node state.
+
 - **Fleet broker versions, 2026-08-16.** barry upgraded 11.5.1 -> 11.6.6 and
   restarted (launchd-managed, zero agents, safe); finn-mini and sf-mini run
   11.6.5 and were restarted onto it. **chief-broker still runs 11.5.4** — older
