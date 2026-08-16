@@ -1,5 +1,19 @@
 # Learnings
 
+- **A durable record is not durable until it is committed and pushed.** Writing
+  a fact to a brain file is a checkpoint, not the audit trail. An unstaged hunk
+  in a shared worktree is invisible to a fresh clone, invisible to any agent on
+  another machine, and one `git checkout` or `git stash` from gone — and this
+  repo has parallel agents in it. Found 2026-08-16 by `marketing-lead`, which
+  ran `git show HEAD:<path> | grep -c` and got 0 against a file Chief had just
+  written: **the fix for "it lives only in a transcript" had merely moved it to
+  volatile state of a different kind.** Verify a brain write the same way — read
+  it back out of `HEAD`, not off disk.
+- **A lead that audits its principal's own work is doing the job.** The same
+  session, `marketing-lead` falsified two of Chief's claims from the roster and
+  the git tree — that no human surface was online, and that a written entry was
+  safe. Neither correction was in its brief. A lead that only answers what it is
+  asked is worth less than one that checks what it is told.
 - A process-lifetime Relaycast room is not an agent identity. Chief must bind
   to the canonical Cloud workspace so its address, inbox, and history survive
   broker restarts.
