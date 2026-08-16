@@ -1830,3 +1830,24 @@ trap that would otherwise cost them a re-open.
   able to recover it, and the thing that stopped me was reading the wrapper
   rather than assuming the hosts matched.
 
+- **A per-machine copy of a committed file drifts silently, and re-spawning
+  from it propagates the drift.** 2026-08-16. Chief's resident task in the
+  per-machine `teams.json` began "Read chief.config.json and CLAUDE.md. Resolve
+  brainRoot from the config." **That file does not exist on any machine** — it
+  was removed when configuration moved to the roster, and the committed template
+  `teams.khaliq.json` was updated to match. The machine copy was not, so every
+  Chief spawned from it started by looking for a deleted file. Only `chief` had
+  drifted; `marketing-lead` and `factory-lead` matched the template exactly,
+  which is what made the drift invisible — a wholesale mismatch would have been
+  noticed, a single stale entry was not.
+  **I made it worse by re-spawning Chief from the local copy without diffing it
+  against the committed source.** A resident restored from a stale roster is a
+  stale resident, and it presents as a healthy process that quietly does not do
+  its job.
+  **The rules.** When a file is documented as "a per-machine copy of X", treat
+  the copy as suspect and diff it against X before relying on it — especially
+  before using it to respawn anything. And when a brief's first instruction
+  fails, suspect the brief: an agent that cannot complete step one will often
+  sit idle rather than announce the problem, which is indistinguishable from
+  having nothing to do.
+
