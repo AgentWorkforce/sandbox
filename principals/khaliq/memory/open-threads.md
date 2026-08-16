@@ -1,5 +1,75 @@
 # Open threads
 
+- **Live lanes in flight at 2026-08-16 11:48Z, recorded because Chief's seat is
+  re-spawning roughly hourly.** Chief re-registered at 10:49, 11:13 and 11:42Z
+  today; each respawn loses the session and its unwritten supervision state, so
+  the lane list belongs here rather than in a transcript. **Chief is on
+  `chief-broker` (the laptop), not sf-mini** — sf-mini's node restarted at 12:46
+  local and runs `--no-spawn`, so the Chief placed there did not return and the
+  laptop's roster re-spawned the name here. Whether it moves back is Khaliq's
+  call.
+  - `relay-1535-impl-sfmini-0816` (sf-mini) — relay#1535, cross-node `--mode
+    drive`: implementation lead. Found `[object Object]` produced at
+    `transport.js:369-372`, reproduced against the **installed 11.6.3 artifact**;
+    told to re-check against **11.6.7**, which is what the fleet actually runs,
+    before the finding counts as live.
+  - `relay-1535-verify-finn-0816b` (finn-mini) — independent verifier for the
+    same issue, owning DoD 1/2/5 and the recipient-side evidence. Deliberately
+    **not** told the implementer's hypothesis. Note the trailing `b`: the
+    original name never registered, and a reused name adopts a stale record.
+    `verify-1535-codex-finn-0816` and `attach-target-0816` are its idle attach
+    targets, not workers.
+  - `relayfile-adapters-263-index-labels-fix` (sf-mini) — see the entry below;
+    unblocked with four rulings at 11:47Z.
+  - `marketing-lead`, `factory-lead` — residents on chief-broker, both
+    re-registered 11:43Z alongside Chief.
+
+- **Factory readiness reconciliation is broken in production, and the cause is
+  NOT in Factory. 2026-08-16.** The live GitHub issue `_index.json` projection
+  for `rw_7ccfea89` carries only `id / number / state / title / updated` — **no
+  `labels` field**. Measured, not inferred: 21 rows read, 0 with labels, with an
+  instrument sanity check run before the zero was believed. The concrete
+  instance is **factory#273**, created 10:45:59Z carrying the `factory` label,
+  whose projection row of the same timestamp has no labels on it — so a
+  correctly-labelled, correctly-gated issue is invisible to readiness reconcile.
+  **The adapter code is correct**: `f36f5c44` added labels to
+  `buildRecordIndexRow`, and both published 0.5.3 and 0.5.5 tarballs contain it;
+  relayfile-cloud `main` pins 0.5.3. So the failure sits at the **live
+  deployment boundary** — what is deployed is not honouring what is packaged,
+  and neither the lockfile nor the tarball tells you what is running. Three
+  candidates, not yet separated: release-ordering, a downstream drop, or a
+  second write path rewriting the row after the adapter writes it.
+  `relayfile-adapters#264` is open and **does not fix this** — it adds legacy
+  backfill only, and its body is being corrected to say so, because a PR titled
+  like a fix and merged as one is how a live outage gets closed on paper.
+  Owner for the deployment half is unplaced pending the issue number.
+
+- **FOR KHALIQ — the `0ms Latency Overhead` deck distribution question, unasked
+  after three sessions. PUT TO HIM 2026-08-16 11:46Z** via `chief-app-local`
+  (`queued_unconfirmed`, recipient matched — queued is not read). Awaiting his
+  answer; if no reply and the question is still open, re-put it rather than
+  assuming it landed. `deck/deck.md:66` reads *"0ms Latency
+  Overhead: Edge-deployed infrastructure."* Per `OPERATING.md` §Claims
+  discipline that claim is not optimistic, it is **impossible**, and it sits in
+  the surface most likely to already be in outside hands. Doctrine is settled
+  and `marketing-lead` is holding correctly: **retire the number, do not replace
+  it with a better one**, and the edit is Khaliq's call, not a quiet fix — a
+  caveat on an impossible claim reads as knowingly shipping a false claim with a
+  disclaimer.
+  **The two questions only Khaliq can answer: who received `agent-relay.pdf`,
+  and is a correction owed to named recipients?**
+  **Why this is in the file at all:** it has now needed three re-raises because
+  each Chief session promised to put it to Khaliq and then died holding it. A
+  question for the principal that lives only in a session transcript is not an
+  open thread, it is a leak. The general rule: **if the principal owes an
+  answer, the question goes in this file at the moment it is formed, not after
+  the session that formed it ends.**
+  Related and also unanswerable without him: **the X blast radius is UNKNOWN,
+  not clean.** `x-reply-radar` is a keyword radar, not an account auditor — it
+  returned a generic topical feed on both asks. Closing this needs Khaliq's
+  account access or a different tool; do not ask the radar again, since a third
+  generic answer would manufacture a false clean.
+
 - **sf-mini now starts agents in the chief repo — structural fix, 2026-08-16.**
   Spawned workers inherit the node process cwd (`worker.rs:629` falls back to
   `"."`), and the node was landing them in `$HOME`, where `CLAUDE.md`,
