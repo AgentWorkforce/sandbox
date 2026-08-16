@@ -1,5 +1,34 @@
 # Open threads
 
+- **sf-mini now starts agents in the chief repo — structural fix, 2026-08-16.**
+  Spawned workers inherit the node process cwd (`worker.rs:629` falls back to
+  `"."`), and the node was landing them in `$HOME`, where `CLAUDE.md`,
+  `teams.json` and the brain do not exist — so step one of every resident brief
+  failed. This is why Chief looked briefed and inert. `fleet spawn` still has no
+  `--cwd`, so the fix is in the wrapper
+  `~/.agentworkforce/relay/bin/start-sf-mini-fleet-node`:
+  `CHIEF_ROOT=/Users/khaliqgant/Projects/AgentWorkforce/chief` then
+  `cd "$CHIEF_ROOT" 2>/dev/null || cd "$RUN_DIR"` — falls back so a moved repo
+  cannot stop the node booting. Backup at `start-sf-mini-fleet-node.bak-cwd-*`.
+  **Verified by spawning a probe and reading its cwd**, not by assuming:
+  both the pty and its `claude` child report the chief repo. **finn-mini and
+  chief-broker still have the old behaviour** and want the same treatment.
+
+- **Chief is healthy on sf-mini as of 2026-08-16 12:4x** — correct cwd, brain
+  resolved, and it posted its own confirmation naming the newest workstream.
+  Its earlier 401s were a genuine credential gap that Khaliq fixed by logging in
+  on the machine (`.credentials.json` rewritten 12:30:20); Chief had simply
+  started 4.5 minutes BEFORE that and was holding pre-login state. The general
+  form: **an agent that cannot authenticate is indistinguishable from an idle
+  one** — process state, roster status and a delivered brief all look identical.
+  Attaching to its terminal is what distinguished them.
+  If credentials genuinely need re-exporting, run ON the machine (ssh cannot
+  satisfy the keychain prompt — it returns
+  `User interaction is not allowed`):
+      security unlock-keychain ~/Library/Keychains/login.keychain-db
+      security find-generic-password -s "Claude Code-credentials" -w > ~/.claude/.credentials.json
+      chmod 600 ~/.claude/.credentials.json
+
 - **Chief's OAuth token is REVOKED — it cannot call the API, and only Khaliq can
   fix it. 2026-08-16.** Surfaced by the first working cross-node attach: Chief's
   live screen on sf-mini shows
