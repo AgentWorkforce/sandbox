@@ -3,8 +3,8 @@ status: active
 owner: fleet-attach-impl-0811
 previous_owner: relay-1483-review-barry-0811
 reports_to: chief
-updated: 2026-08-13
-repos: [relay, cloud]
+updated: 2026-08-17
+repos: [relay, cloud, relaycast-cloud]
 phase1_pr: "relay#1480"
 phase1_status: merged
 physical_pr: "relay#1483"
@@ -12,6 +12,81 @@ physical_status: merged
 phase2_status: implemented-pending-review
 phase2_prs: "cloud#2995, relay#1484"
 ---
+
+## 2026-08-17 09:35Z — state of cross-node attach and drive, read off GitHub because the workstream file had fallen ~4 days behind
+
+Everything below this section predates `relay#1521` and reads as if attach were
+still unproven. It is not. Recorded here because the durable record moved to
+GitHub issue comments while DMs were down and the Chief seat was respawning —
+**`relay#1535` and `relay#1538` are the live record for this lane, not this
+file.**
+
+**View attach across physical nodes: WORKS.** `relay#1521` merged, broker
+11.6.7 on both ends. It needs the fixed broker on BOTH ends — a partial
+rollout fails between mismatched pairs and looks unfixed.
+
+**Cross-node `--mode drive`: WORKS on the wire, proven recipient-side.**
+`relay#1535` DoD 1/3/5 are DONE — a nonce typed through drive appeared exactly
+once on the target's own rendered screen, observed by a separate process that
+was attached before the drive started, on the *released* 11.6.7 artifact, with
+the must-not-fire control re-run. `relay#1536` (fleet drive waits for terminal
+readiness) merged 08-16 15:44Z. `cloud#3051` (real Relaycast error instead of
+`internal`) merged 18:15Z.
+
+**The acceptance criterion changed, and the change is Khaliq's, recorded on
+`relay#1538`:** *"target reacting"* is unachievable against a TUI target —
+Claude Code's Ink TUI treats fast multi-char input as a bracketed paste and
+will not auto-submit. That is a target-application property, not a transport
+property. **The criterion is the recipient's screen rendering the payload,
+observed independently.**
+
+**Concurrent drivers (DoD 2) are admitted by design now but not formally
+closed.** `relaycast-cloud#63` merged 08-16 18:06Z: `passthrough` conflicts
+with any mutable peer, `drive` only with `passthrough`, so two concurrent
+drives are admitted. Arbitration is arrival-order multiplexing into one shared
+PTY, atomic `terminal.input` frames, no exclusive floor, no per-driver echo, no
+last-writer loss. `relay#1535` has had no comment since 08-16 19:09Z, so DoD 2
+has no posted proof against the deployed contract.
+
+**The drive-leak that made every drive cost ~10 minutes is FIXED and DEPLOYED.**
+`relay#1537` closed 08-17 06:18Z by `relaycast-cloud#64` (`6a7da46a83`, Deploy
+success, live on `cast.agentrelay.com`). `webSocketClose` early-returned for
+`terminal-client` at `node.ts:1167`, so a clean detach never released the
+`TerminalSession`; only a node-originated `terminal.closed` or the 10-minute
+TTL alarm freed it. Fix keys on clean-vs-abnormal close, with `hardExpiresAt`,
+`bringAlarmForward()` and a `readyState === OPEN` owner predicate. Same root
+cause closed `relaycast-cloud#65` (delivery-mode cohort never learned of a
+departure, so the operator's manual mode was never restored).
+
+**Still open against drive, and each has its own attribution:**
+`relay#1539` (a live agent is permanently unroutable via `--node` when it is
+missing from the broker's `fleet_inventory`), `relay#1544` (drive input stream
+drops and reconnects on `worker_timeout` while the worker is healthy),
+`relay#1548` (view attach goes silent when its target disappears while drive
+emits a close code and reason — Proxy A vs Proxy B below).
+
+**Daytona attach — `relay#1538`, the JIT model, largely PASSED overnight.**
+A sandbox node is provisioned on demand and goes away; absence of a live
+Daytona node is the designed state, and `daytona-fleet-proof-0811` is a relic,
+not a starting point. Against a live JIT sandbox (`daytona-1538-verify-0817b`,
+broker 11.6.9): **Q3 view PASS** with a nonexistent-agent control arm,
+**Q4 drive PASS on the wire** (nonce from sf-mini rendered on the sandbox
+target's screen, captured by an independent observer), **Q5 accepted partial**.
+Q5's pair is the useful part: releasing the target under a *view* attach makes
+the stream go silent — no close, no error, indistinguishable from an idle
+target; releasing mid-*drive* yields `code: 1011, reason: "remote terminal
+session closed"`. The distinguishable teardown signal exists and the view path
+does not use it — that is `relay#1548`.
+
+**Loose end nobody has picked up:** the final Q5 arm — a 60-minute timestamped
+view attach on `q5-longview-target-0817`, started 00:46:00.816Z on sf-mini,
+due to report at 01:46Z — **never posted a result**. `relay#1538`'s last
+comment is the 00:46Z kickoff.
+
+**Also live and relevant to anyone working this lane:** `relay#1541`, DMs
+return `recipient_unresolved` workspace-wide while channel posts succeed, so
+resolution — not transport — is broken. Direction reaches lanes through their
+issue or PR, not through DM.
 
 ## 2026-08-13 ~19:10Z — the actual goal, stated directly by Khaliq: Will needs to be able to attach
 
