@@ -15,6 +15,7 @@ import {
   publicWorkspace,
 } from "./lib/chief-runtime.mjs";
 import { credentialHealth, scopeFreshness } from "./lib/senses-health.mjs";
+import { mountProcessesHealthy } from "./lib/senses-mount-plan.mjs";
 import { watchdogHealth } from "./lib/watchdog-health.mjs";
 
 const config = loadConfig();
@@ -168,8 +169,11 @@ try {
 // current. Report the mount and the credential, which are what Chief reads
 // through.
 const sensesRunning = processIsAlive(supervisorPid);
-const mountRunning = supervisorState?.status === "running"
-  && processIsAlive(supervisorState?.mountPid ?? null);
+const mountRunning = mountProcessesHealthy(
+  supervisorState,
+  config.senses.remotePaths,
+  processIsAlive,
+);
 const credentialExpiresAt = supervisorState?.credentialExpiresAt ?? null;
 const credential = credentialHealth(credentialExpiresAt);
 

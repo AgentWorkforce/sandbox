@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,9 +8,12 @@ import {
   configuredIntegrationProviders,
   deriveConfig,
   factoryRuntimeEnv,
+  findMountBinary,
   loadConfig,
+  mountBinaryCandidates,
   migrateLegacyRoster,
   processIsAlive,
+  relayfileMountPackageName,
 } from "./chief-runtime.mjs";
 
 test("processIsAlive treats EPERM as alive, not dead", (t) => {
@@ -35,6 +38,48 @@ test("processIsAlive treats ESRCH as dead", (t) => {
 
 test("processIsAlive is true for the current live process", () => {
   assert.equal(processIsAlive(process.pid), true);
+});
+
+test("Relayfile mount selection prefers an explicit operator pin then the packaged binary", () => {
+  assert.deepEqual(mountBinaryCandidates({
+    repoRoot: "/srv/chief",
+    env: { RELAYFILE_MOUNT_BIN: "./build/relayfile-mount" },
+    platform: "darwin",
+    arch: "arm64",
+  }), [
+    "/srv/chief/build/relayfile-mount",
+    "/srv/chief/node_modules/@relayfile/mount-darwin-arm64/bin/relayfile-mount",
+  ]);
+  assert.deepEqual(mountBinaryCandidates({
+    repoRoot: "/srv/chief",
+    env: {},
+    platform: "linux",
+    arch: "x64",
+  }), [
+    "/srv/chief/node_modules/@relayfile/mount-linux-x64/bin/relayfile-mount",
+  ]);
+});
+
+test("Relayfile mount packages fail closed on unsupported platforms", () => {
+  assert.equal(relayfileMountPackageName("darwin", "x64"), "mount-darwin-x64");
+  assert.throws(() => relayfileMountPackageName("win32", "x64"), /unsupported/u);
+  assert.throws(() => relayfileMountPackageName("darwin", "riscv64"), /unsupported/u);
+});
+
+test("Relayfile mount selection refuses a present but non-executable binary", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "chief-mount-binary-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const binary = join(root, "relayfile-mount");
+  writeFileSync(binary, "not executable\n", { mode: 0o600 });
+  const options = {
+    repoRoot: root,
+    env: { RELAYFILE_MOUNT_BIN: binary },
+    platform: "darwin",
+    arch: "arm64",
+  };
+  assert.throws(() => findMountBinary(options), /not found/u);
+  chmodSync(binary, 0o700);
+  assert.equal(findMountBinary(options), binary);
 });
 
 test("configured integration providers follow scoped senses paths", () => {

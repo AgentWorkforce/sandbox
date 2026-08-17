@@ -1,6 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -459,26 +458,52 @@ export async function mintSensesSession(config, workspace) {
   return mount;
 }
 
-export function findMountBinary() {
-  const candidates = [
-    join(homedir(), ".agent-relay/bin/relayfile-mount"),
-    join(
-      REPO_ROOT,
-      "../relayfile/dist",
-      process.arch === "arm64"
-        ? "relayfile-mount-darwin-arm64"
-        : "relayfile-mount-darwin-amd64",
-    ),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
+export function relayfileMountPackageName(
+  platform = process.platform,
+  arch = process.arch,
+) {
+  if (!new Set(["darwin", "linux"]).has(platform)) {
+    throw new Error(`Relayfile mounts are unsupported on ${platform}`);
   }
-  const probe = spawnSync("sh", ["-c", "command -v relayfile-mount"], {
-    encoding: "utf8",
-  });
-  if (probe.status === 0 && probe.stdout.trim()) return probe.stdout.trim();
+  if (!new Set(["arm64", "x64"]).has(arch)) {
+    throw new Error(`Relayfile mounts are unsupported on ${platform}/${arch}`);
+  }
+  return `mount-${platform}-${arch}`;
+}
+
+export function mountBinaryCandidates({
+  repoRoot = REPO_ROOT,
+  env = process.env,
+  platform = process.platform,
+  arch = process.arch,
+} = {}) {
+  const candidates = [];
+  const explicit = env.RELAYFILE_MOUNT_BIN?.trim();
+  if (explicit) candidates.push(resolve(repoRoot, explicit));
+  candidates.push(join(
+    repoRoot,
+    "node_modules",
+    "@relayfile",
+    relayfileMountPackageName(platform, arch),
+    "bin",
+    "relayfile-mount",
+  ));
+  return candidates;
+}
+
+export function findMountBinary(options = {}) {
+  const candidates = mountBinaryCandidates(options);
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // A present but non-executable package is not a usable runtime pin.
+    }
+  }
   throw new Error(
-    "relayfile-mount binary not found; install Relayfile or build ../relayfile",
+    "compatible Relayfile mount binary not found; run npm install or set " +
+      "RELAYFILE_MOUNT_BIN to an explicitly managed build",
   );
 }
 

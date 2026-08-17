@@ -10,7 +10,7 @@
     "doctor": "node scripts/chief-doctor.mjs",
     "validate": "node scripts/validate-config.mjs",
     "config:migrate": "node scripts/migrate-config.mjs",
-    "config:test": "node --test scripts/lib/chief-runtime.test.mjs scripts/lib/launchd.test.mjs scripts/lib/supervisor-guard.test.mjs",
+    "config:test": "node --test scripts/lib/chief-runtime.test.mjs scripts/lib/launchd.test.mjs scripts/lib/senses-mount-plan.test.mjs scripts/lib/supervisor-guard.test.mjs",
     "factory:test": "node --test scripts/lib/factory-contract.test.mjs",
     "delegation:test": "node --test scripts/lib/delegation-identity.test.mjs scripts/lib/delegation-ledger.test.mjs scripts/lib/delegation-rollup.test.mjs",
     "factory:bootstrap": "node scripts/factory-control.mjs bootstrap",
@@ -45,6 +45,12 @@
   },
   "devDependencies": {
     "agentworkforce": "4.1.37"
+  },
+  "optionalDependencies": {
+    "@relayfile/mount-darwin-arm64": "0.10.44",
+    "@relayfile/mount-darwin-x64": "0.10.44",
+    "@relayfile/mount-linux-arm64": "0.10.44",
+    "@relayfile/mount-linux-x64": "0.10.44"
   },
   "engines": {
     "node": ">=22"
