@@ -15,13 +15,14 @@ const base = {
 };
 
 test("a resident node job restarts on failure and stays down on clean exit", () => {
-  const output = plist({ ...base, resident: true });
+  const output = plist({ ...base, resident: true, exitTimeout: 20 });
   assert.match(
     output,
     /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/u,
   );
   assert.match(output, /<key>ThrottleInterval<\/key>\s*<integer>30<\/integer>/u);
   assert.match(output, /<key>RunAtLoad<\/key>\s*<true\/>/u);
+  assert.match(output, /<key>ExitTimeOut<\/key>\s*<integer>20<\/integer>/u);
 });
 
 test("a resident job logs stderr to a file so a respawn loop stays observable", () => {

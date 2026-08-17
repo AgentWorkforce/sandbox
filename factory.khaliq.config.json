@@ -1,5 +1,6 @@
 {
   "issueSource": "github",
+  "batchSize": 1,
   "repos": {
     "org": "AgentWorkforce",
     "names": [

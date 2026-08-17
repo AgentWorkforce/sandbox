@@ -68,13 +68,23 @@ const allServices = [
   },
   {
     label: "com.agentworkforce.chief.node",
-    args: [agentRelay, "node", "up"],
+    args: [
+      process.execPath,
+      join(REPO_ROOT, "scripts/chief-node-supervisor.mjs"),
+      agentRelay,
+      "node",
+      "up",
+    ],
     environment: serviceEnvironment,
     resident: true,
+    // The supervisor gives the exact broker PID 8 seconds to exit before its
+    // SIGKILL backstop. Keep launchd from killing the supervisor first.
+    exitTimeout: 20,
     // node up has historically logged credentials on stdout, so stdout stays
     // out of persistent logs until the workspace-convergence task closes that
     // leak. stderr goes to an owner-only log so a KeepAlive respawn loop is
-    // observable rather than silent.
+    // observable rather than silent. The supervisor owns the broker PID as
+    // well as the CLI wrapper, so a wedged broker cannot outlive a restart.
     stdout: "/dev/null",
     stderr: join(logs, "chief-node.log"),
   },

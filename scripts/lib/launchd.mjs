@@ -48,6 +48,7 @@ export function plist({
   environment = {},
   resident = false,
   startInterval = null,
+  exitTimeout = null,
 }) {
   if (resident && (!stderr || stderr === "/dev/null")) {
     throw new Error(
@@ -85,7 +86,7 @@ ${environmentEntries}
     </dict>
     <key>RunAtLoad</key>
     <true/>
-${resident ? RESIDENT_KEYS : ""}${startInterval == null ? "" : periodicKeys(startInterval)}    <key>StandardOutPath</key>
+${resident ? RESIDENT_KEYS : ""}${startInterval == null ? "" : periodicKeys(startInterval)}${exitTimeout == null ? "" : `    <key>ExitTimeOut</key>\n    <integer>${Number(exitTimeout)}</integer>\n`}    <key>StandardOutPath</key>
     <string>${xml(stdout)}</string>
     <key>StandardErrorPath</key>
     <string>${xml(stderr)}</string>
