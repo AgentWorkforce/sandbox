@@ -41,6 +41,8 @@
     "cloud:deploy:khaliq": "node scripts/deploy-chief-cloud.mjs"
   },
   "dependencies": {
+    "@agent-relay/fleet": "11.6.9",
+    "@agent-relay/harnesses": "11.6.9",
     "@agentworkforce/runtime": "4.1.37"
   },
   "devDependencies": {
