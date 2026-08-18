@@ -1,5 +1,72 @@
 # Open threads
 
+- **The live Factory contract had routing the committed source never carried.
+  Found and reconciled 2026-08-16.** `factory.config.json` (untracked,
+  per-machine, what Factory actually resolves) listed `relayfile-adapters` in
+  `repos.names`; `factory.khaliq.config.json` (committed, the source the copy is
+  supposed to be made from) never had it — `git log -S'relayfile-adapters'`
+  returns nothing on that file. So someone hand-added routing to the untracked
+  copy to unblock work and it existed only on this laptop: invisible to review,
+  lost on any rebuild from the committed file, and absent on every other
+  machine. Live-relevant, because `relayfile-adapters#264` is in the middle of
+  the Factory readiness break below. Reconciled by adding it to the committed
+  contract — matching the source of truth to the behaviour already in
+  production, not changing behaviour.
+  **The general rule this earns: a per-machine copy that has drifted is not a
+  copy, it is a second contract nobody reviewed.** Diff the active file against
+  its committed source at session start, the same way the roster is checked. The
+  rosters (`teams.json` vs `teams.khaliq.json`) were identical; only the Factory
+  contract had drifted.
+
+- **factory-lead's roster brief had gone stale and briefed four closed tickets.
+  Corrected at source 2026-08-16.** The brief told the lead to treat
+  #211/#221/#222/#223 and the #225 403 as one open problem; verified against
+  GitHub, #211 closed completed 08-12, #221 08-14, #222 08-15, and #223/#225 are
+  merged. The lead caught this itself and refused to work the brief as written,
+  which is the judgement the lead layer exists for. The defect was Chief's: the
+  text is baked into the roster, so **every future spawn inherits the same stale
+  theme** and re-derives the same correction. Fixed in `teams.khaliq.json` and
+  the per-machine `teams.json`, and the replacement paragraph now says in its own
+  body that it is a snapshot and that live issue state wins.
+  **Rule: correcting a lead in conversation fixes one session; the brief is
+  what fixes every session after it.** A durable instruction that names ticket
+  numbers goes stale by construction — either it carries its own expiry or it
+  gets re-verified at the roster.
+
+- **Chief's relay record is ALIVE and its tokens do not authenticate.
+  2026-08-16 12:40Z, chief-broker. AWAITING KHALIQ'S RULING.** This is *not* the
+  08-14 released-seat shape, and leading with that comparison was wrong.
+  Measured, with a positive control:
+  - Record `chief` id `214697097356713984`, created 10:49:36Z,
+    `metadata.registered_at` 12:33:01.423Z, `node_id node_5b46ac5e…` =
+    **chief-broker, the machine it is actually running on**, `lastSeenAt`
+    12:39:59Z — heartbeating seconds before the probe, carrying the correct
+    objective text.
+  - **No tombstone.** 0 records matching `released` across all 1647 agents, and
+    exactly one record named `chief`. Nothing looks released.
+  - **Every token for it is refused**, on both routes: the broker-supplied env
+    token and a fresh MCP `register_agent` mint each return `Invalid agent
+    token` from `agent me` *and* `message dm send`.
+  - **Positive control, same CLI, same env, same workspace key:**
+    `chief-tokenctl-0816` minted instantly, `agent me` returned its record, and
+    `dm send` returned a real message id at exit 0. So the mint path and the
+    workspace are healthy; this record specifically is not.
+  - **No re-mint path.** CLI `agent register chief` refuses with `already
+    exists`; MCP re-mint returns a token the API then rejects.
+  **The decision put to Khaliq:** `agent remove chief` (now routed through the
+  release path by `relay#1527`) then a clean re-register is the obvious
+  recovery, and Chief has NOT run it. A name released badly is refused by the
+  fail-closed admission gate and burned — that is how `chief` was lost once
+  already, so the recovery move is also the move that could cost the canonical
+  name permanently. Not Chief's call.
+  **Cost meanwhile:** Chief is *not addressable*. Anything sent to `chief` does
+  not arrive. Chief can still read the workspace and can send under a labelled
+  workaround identity (`chief-tokenctl-0816`), announced as such in its first
+  line, per the 08-14 precedent — labelled, never impersonated. **No renamed
+  successor was declared and the resident did not stand down.**
+  **Cleanup debt:** `chief-tokenctl-0816` is a diagnostic control arm that
+  became Chief's voice; it should be retired once the canonical seat works.
+
 - **Live lanes in flight at 2026-08-16 11:48Z, recorded because Chief's seat is
   re-spawning roughly hourly.** Chief re-registered at 10:49, 11:13 and 11:42Z
   today; each respawn loses the session and its unwritten supervision state, so

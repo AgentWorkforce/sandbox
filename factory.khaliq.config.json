@@ -16,6 +16,7 @@
       "relaycast",
       "relaycast-cloud",
       "relayfile",
+      "relayfile-adapters",
       "relayfile-cloud",
       "relayflows",
       "relayhistory",
