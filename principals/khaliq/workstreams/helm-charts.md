@@ -3,12 +3,43 @@ status: active
 owner: unassigned
 previous_owner: relayfile-helm-lead-0811
 reports_to: chief
-updated: 2026-08-11
+updated: 2026-08-18
 repos: [helm-charts]
 ---
 
 Goal: one repo holding every service's Helm chart, organized by folder, not a
 new repo per chart.
+
+## Now — 2026-08-18 — relaycast has no chart, and the repo's own README says it should
+
+Khaliq: *"shouldn't we have a helm chart in ../helm-charts for relaycast just
+like we do for relayfile?"* Checked: `charts/` contains exactly one chart,
+`relayfile/`. The repo README states it is the *"Single Helm chart repository
+for all AgentWorkforce services. Each service lives under
+`charts/<service-name>/`"* — so this is a gap by the repo's own stated purpose,
+not a preference.
+
+The prerequisite already exists. relaycast ships a working self-host container:
+a root `Dockerfile` building `relaycast-self-host:local` on
+`node:22.23.2-bookworm-slim`, a `docker-compose.yml` with healthcheck,
+published ports, a named `relaycast-data` volume and a tmpfs mount, and
+`docker/` entrypoints. So this is packaging, not new infrastructure — the
+compose file is the specification for the chart's runtime shape.
+
+Two things a `charts/relaycast/` must get right:
+
+- **Persistence is not optional.** Relaycast is stateful and keeps its data in
+  SQLite on `relaycast-data`. A chart defaulting to ephemeral storage silently
+  destroys a self-hoster's workspace on pod restart.
+- **The image tag must be pinned, not `latest`**, and `Chart.yaml` should say
+  whether `appVersion` tracks the engine version or the image tag. The
+  `Dockerfile` pins `ARG RELAYCAST_ENGINE_VERSION` and `docker/package-lock.json`
+  pins `@relaycast/engine`.
+
+Next: staff `charts/relaycast/` mirroring relayfile's structure, `helm lint` and
+`helm template` clean including non-default values, and a `relaycast` row added
+to the README table. A brief is written; it has not been placed yet because
+spawn placement is failing for Chief (see `active-lanes.md`, 2026-08-18).
 
 ## Cleanup checkpoint — 2026-08-11 15:48 CEST
 

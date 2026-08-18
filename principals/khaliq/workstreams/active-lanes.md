@@ -1,10 +1,50 @@
 ---
 status: active
 owner: chief
-updated: 2026-08-15
+updated: 2026-08-18
 repos: [relay, relayfile, factory, workforce, cloud, agents, relaycast, relaycast-cloud, internal-agents, skills]
 ---
 # Active lanes — dispatched work and who owns it
+
+## 2026-08-18 ~08:00Z — spawn placement is black-holing Chief's dispatches
+
+**Chief cannot place agents. Other requesters can.** Eleven dispatches since
+07:23Z returned `status: pending` with `dispatchedNodeId: null`, including a
+deliberately trivial probe that only runs `hostname`. In the same window
+`factory-bootstrap-diag-0818` spawned normally and runs on chief-broker — the
+same node that refused Chief's pinned probe five minutes later. MCP and CLI
+behave identically, so it is neither transport.
+
+The distinguishing field is **`handlerNodeId`**. Chief's spawns keep being
+handed to `cloud-3061-repro-0817` — a leftover Daytona sandbox from the
+cloud#3061 repro, still registered, still heartbeating, `handlersLive: true`,
+**zero agents**, and it never completes a dispatch. The one Chief spawn that
+did land (07:23Z) had a different handler. Same shape as the morning's
+`chief-grok-proof-0817` incident, but a stale **node** rather than a stale
+agent, which is why clearing agent records did not help. Not yet acted on —
+removal is a fleet-level change and needs Khaliq's call. Filed under relay#1563.
+
+**Dispatched today and NOT placed** (all pending, none running): the cloud
+relayflow seed-hang investigation, the relaycast#333 container proof, the
+sf-mini provider fix, the helm relaycast chart, and two ai-hist lanes.
+Briefs are written and verified; only placement is missing.
+
+**Running and confirmed on 2026-08-18:** `relay-1543-ackorder-sf-0817`,
+`relay-1557-replay-sf-0817`, `relay-1562-workspace-sf-0817` (sf-mini);
+`factory-lead`, `factory-cloud-observability-0818`, `factory-bootstrap-diag-0818`
+(chief-broker); six survivors on finn-mini including `cloud-3061-credential-mount-0817`
+and `relay-1550-e2e-flake-0817`.
+
+**Released today:** 16 finished or superseded lanes on finn-mini (their PRs
+merged or closed), then 30 on chief-broker at Khaliq's instruction. **That
+second sweep over-reached** — it also killed `aihist-jsonl-cache-0818b`,
+`Skip-Lead` and `Skip-Shell-97be0182`, because the keep-list was built from a
+pasted snapshot and applied to a live process table containing newer agents.
+A snapshot is not an inventory.
+
+**Merged and released:** relay#1556 (`28337030`) and relay#1551 (`5fd61e9f`),
+then **11.7.0 published to npm** (`79a69fd91`), verified on the registry rather
+than from the workflow's green tick.
 
 ## 2026-08-15 ~20:10 CEST — full in-flight sweep
 
