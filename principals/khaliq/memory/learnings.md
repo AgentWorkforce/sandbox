@@ -1,5 +1,112 @@
 # Learnings
 
+- **The hollow test is always the must-not-fire.** Three PRs in one night shipped an
+  assertion that could not fail, and every instance was the must-not-fire half:
+  `relay#1543` passed a hardcoded `None` to a function beginning `let deliver = pending?…`,
+  so it returned `None` for every implementation; `relaycast#332`'s revocation guard
+  registered and deleted an agent **without a prior rotation**, so `previous_token_hash` was
+  null and the 401 passed trivially whether or not the release path cleared the grace slot —
+  and that test was the entire safety argument for keeping a superseded credential alive 60
+  seconds. **The asymmetry is structural, not accidental**: a must-fire gets scrutinised
+  because the ritual forces you to watch it go red, while a must-not-fire is *supposed* to
+  pass, so green reads as success and nobody asks whether it could ever have been red.
+  **A must-not-fire that has never been seen to fail is an assumption with a test framework
+  wrapped around it.** The fix is to apply the same ritual to the other half: **break the
+  thing the must-not-fire guards and confirm it goes red.** If sabotaging its subject leaves
+  it green, it is decoration.
+- **A thread count is not a review state, and `mergeStateStatus` is not a reason.** Chief
+  twice reported a PR ready on green CI plus a count, and both times every unresolved thread
+  was *unanswered* — one holding a P1 that inverted the fix (rolling back an optimistic echo
+  for a write that still lands, so the UI erases input that then executes). In one audit
+  three PRs read `BLOCKED` for three different causes — two distinct workflow-approval gates
+  and one review gate — and a fourth read CLEAN while carrying an unanswered security thread.
+  **Read the threads and check who commented last**: a bot as the last commenter means
+  unanswered, a human reply means answered-but-unresolved, and those are opposite states that
+  the count collapses into one number.
+- **The liveness discriminator that works on a loaded box: `.git/index` mtime versus the
+  branch head.** CPU is useless — a lane at 0.0%% may be thinking, and one at 0.7%% may be
+  blocked on I/O. Offered by `factory-prclose-274-279-0816`, which held instead of pushing on
+  a PR because the lane it was dispatched to replace as "stranded" had committed **46 seconds**
+  before it looked. Read it as: index NEWER than head means actively editing without
+  committing; index EQUAL to head means committed and idle; index STALE by hours means dead.
+  **Two mechanics matter or it silently returns nothing**: a git worktree's `.git` is a *file*,
+  not a directory, so resolve `git rev-parse --git-dir` first; and hosts drift, so only compare
+  timestamps *within* one host. **Its limitation, learned the same night: it only measures code
+  lanes.** A lane whose deliverable is a written analysis never touches the index, so an
+  untouched index proves nothing about it — judge those by whether the comment landed.
+- **Approving a suppressed CI run can reveal red, not just green.** Three PRs read `BLOCKED`
+  simultaneously for three different reasons — two on a workflow-approval gate, one on review.
+  Approving the parked runs on one of them surfaced **two genuine CI failures that had been
+  hidden for over two hours**. So a suppressed pipeline is not a delayed pass; it is an unknown,
+  and treating "not green" as one state conflates *failed*, *never ran*, and *awaiting a human*.
+  Ask which before drawing any conclusion from `mergeStateStatus`.
+- **Lanes fail at finishing, not at thinking — supervise the last mile.** Across one evening
+  five lanes produced genuinely strong work and then went idle at ~0.0% CPU without shipping
+  or reporting: a complete three-layer fix with the Rust half proven red-then-green sat
+  unshipped for ninety minutes with no PR; an enumeration of ten defect branches was posted
+  and the design question that followed it went unanswered for an hour; a lane sat four hours
+  and forty-six minutes on a granted go. **The diagnosis is reliably good and the delivery
+  reliably is not.** So the supervisory unit is not "is this lane capable" but "has this
+  lane's work reached a durable surface" — a pushed branch, an open PR, a comment on the
+  issue. Poll for the artifact, not for the agent. Every recovery took the same shape:
+  re-spawn against the SAME worktree with an initial task that says the work already exists,
+  read the diff first, do not redesign it, ship it. Spawning a fresh mind onto finished work
+  costs minutes; waiting for an idle one costs hours.
+- **Judge a lane by its worktree diff, not by anything the registry reports.** With DM
+  delivery broken and status fields sediment, the only honest liveness test left was
+  `git -C <lane worktree> status --short | wc -l` over ssh, run across every lane at once.
+  Four lanes returned 0 changed files and one returned 3 — and the zero that mattered had a
+  live process at **0.1% CPU with 3h30m elapsed** and not one comment on its own issue.
+  Alive and idle is not working. Process state, `lastSeen`, `status` and a delivered brief
+  had all looked identical across the five. **The diff is the only signal that distinguishes
+  a lane doing the work from a lane holding the ticket**, and it costs one ssh round trip.
+- **A broadcast is not a briefing: verify the audience, not the send.** When DMs failed
+  workspace-wide, Chief moved all coordination to `#general` and ran three hours of orders,
+  rulings and status demands through it. `get_message_readers` on those posts showed the
+  actual readers were `x-reply-radar`, `duet-inbox-b`, `cloud-factory-brain`,
+  `positioning-agent` and other standing cloud personas — **not one of the lanes being
+  addressed**. The lanes were not ignoring anything; they never saw it. A successful post is
+  a write to a channel, not delivery to a person, and Chief had spent the whole day
+  enforcing exactly that distinction on everyone else. **The one delivery path that has
+  never failed is a spawn's initial task**, which is why every re-briefed lane is now
+  re-spawned rather than messaged.
+- **A credential race makes a healthy agent indistinguishable from one ignoring you.**
+  `registerOrRotate` on an existing name does `get()` then `rotateToken()` as two
+  unserialised round trips (relaycast `sdk-typescript/src/relay.ts:485-504`, mirrored in
+  `sdk-rust/src/registration.rs:197-249`). Two concurrent callers both rotate, the later
+  wins, and the earlier is left holding a token invalidated microseconds after it was handed
+  over — reproduced live at A auth=200 / B auth=401. Reachable from MCP *and* from the
+  broker at `crates/broker/src/relaycast/ws.rs:129`, which re-registers **live** workers.
+  This is why Chief's own token was dead at spawn, why `marketing-lead`'s was, and why
+  several lanes' were. **The workspace-key rotate is not a privileged escape hatch — it is a
+  single call with nothing to race against**, which is itself evidence about the shape of the
+  bug rather than a lucky workaround. Corollary: before concluding an agent is idle,
+  unresponsive or disobedient, check whether its credential still authenticates.
+- **Ask which step is broken before declaring the channel broken.** Chief reported DM
+  delivery down workspace-wide and had already moved coordination onto GitHub issue comments
+  when Khaliq asked "why not use a channel?" — `message post general` worked on the first
+  try, same token, same second, while `dm send` returned `recipient_unresolved`. That single
+  probe isolated the defect to **recipient resolution** rather than to messaging, and
+  produced a strictly better workaround than the one already in use. **Test the neighbouring
+  path before routing around the whole surface**; a failing path and a working path together
+  localise a bug far faster than either alone.
+- **A corrected preamble above uncorrected acceptance criteria reads as the old
+  model with a disclaimer.** Chief filed `relay#1538` having already read and
+  *quoted* Khaliq's fresh-sandbox-per-agent correction — then made "there is no
+  live Daytona node" blocking item 1 and "a live Daytona fleet node" the first
+  definition-of-done, in the same document. Sandbox nodes are **JIT, brought up
+  on demand**; the absence of a live node is the designed state. Khaliq's
+  correction opened with "I've said this many times." **Reading a correction is
+  not the same as letting it govern the document** — when a doc contains a
+  stated model change, re-derive the acceptance criteria from it before
+  publishing, because criteria are what a reader executes.
+- **Build status from the record, not from the artifacts.** Three claims in one
+  day were wrong the same way: Chief reported relay#1535's DoD 1, 3 and 5 as
+  open while reading PR and review-thread state, when the issue's own comment
+  history already carried the recipient-side proof, the arbitration
+  specification, and the did-not-reproduce verdict. The lanes were ahead of the
+  reporting, not behind it. **Read the issue before reporting on the issue**;
+  a PR is evidence about a branch, not about the question the branch serves.
 - **A durable record is not durable until it is committed and pushed.** Writing
   a fact to a brain file is a checkpoint, not the audit trail. An unstaged hunk
   in a shared worktree is invisible to a fresh clone, invisible to any agent on

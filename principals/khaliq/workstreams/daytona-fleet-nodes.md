@@ -7,6 +7,44 @@ updated: 2026-08-13
 repos: [cloud, relay, sandbox]
 ---
 
+## 2026-08-16 — RESTATED BY KHALIQ, AND IT KEEPS BEING MISSED: sandbox nodes are JIT
+
+**Sandbox nodes are brought up ON DEMAND. There is no live Daytona node, and
+there is not supposed to be one.** Khaliq, 2026-08-16, prefaced with "I've said
+this many times" — so this is a repeat correction, not new information.
+
+The absence of a running Daytona node is the **designed state**. It is not a
+blocker, not a gap to close before work can start, and not evidence that
+anything is broken. A sandbox is provisioned when work needs it, serves that
+work, and goes away.
+
+**Two rules that follow, and every future acceptance bar must satisfy both:**
+
+- **Uptime is the wrong criterion.** Any bar phrased as "a node stays up for N
+  hours" is measuring the persistent-node model that was overturned on
+  2026-08-13. The right criterion is whether a sandbox is **attachable within
+  its own lifetime**, between provision and teardown.
+- **`daytona-fleet-proof-0811` is a relic, not a starting point.** Offline
+  since 2026-08-13 on broker 11.4.1. Do not revive it, and do not report its
+  absence as a finding.
+
+**The real question, reframed correctly:** the broker version requirement is
+real but it attaches to the *provisioning path*, not to a node. Terminal
+transport landed in 11.6.7 and drive needs 11.6.9, so the load-bearing question
+is whether a **freshly provisioned** sandbox comes up on a current broker — if
+the image bakes something older, every on-demand sandbox is unattachable by
+construction. Read the version off the running process, not off what the image
+claims to install.
+
+**Why this entry exists at all.** Chief filed `relay#1538` on 2026-08-16 with
+"there is no live Daytona node" as blocking item 1 and "a live Daytona fleet
+node" as definition-of-done 1 — having *already read and quoted* the
+2026-08-13 fresh-per-agent correction earlier in the same document. A corrected
+preamble sat above uncorrected acceptance criteria. **Reading a correction is
+not the same as letting it govern the document: check the acceptance criteria
+against the stated model before publishing.** The issue body has been rewritten
+and the error recorded on the issue rather than deleted.
+
 ## 2026-08-13 ~22:00Z — architecture correction, stated directly by Khaliq: fresh sandbox per agent, not one reused box
 
 Khaliq: Daytona should provision a **fresh sandbox per agent**, not reuse one
