@@ -6,6 +6,37 @@ repos: [relay, relayfile, factory, workforce, cloud, agents, relaycast, relaycas
 ---
 # Active lanes — dispatched work and who owns it
 
+## 2026-08-18 22:50Z — the placement black-hole has a root cause, and it is not placement
+
+The 08:00Z section below reads as a scheduler problem. **It is a token problem.**
+sf-mini accepts every dispatch and confirms none because its node token is
+invalid — `Last read error: Invalid agent token` — while every health signal
+reads green. See `workstreams/fleet-identity-tokens.md`; that file is the live
+record for this failure, not this one.
+
+**Lanes running at 22:50Z (chief-broker; sf-mini can host none until its token is
+reissued):**
+
+| lane | on |
+|---|---|
+| `relay-publish-blocker-0818` | relay#1576 — the publish blocker, fix open |
+| `relaycast-r2-delete-0818` | R2 object deletion; unblocks relaycast-cloud#69 |
+| `relaycast-339-threads-0818b` | relaycast#339 review threads (replaced a lane whose token died) |
+| `relay-1522-replay-join-0818` | the relayhistory↔relaycast replay join |
+| `relaycast-311-identity-0818` | relaycast#311 proposal only, no patch |
+| `nightcto-proactive-0818c` | NightCTO alert → investigate → propose a PR |
+| `relaycast-retention-boundary-0818` | not Chief-dispatched |
+| `wd-*` (lead, install, linear, gmail, review-33, review-34) | not Chief-dispatched |
+
+**Released today after attach-or-recorded-evidence:** `relaycast-338-feedback`,
+`relaycast-engine-release`, `relayauth-refresh-500`, `relaycast-usage-attribution`
+(token dead), `relay-1567-finish`, `relaycast-reaper-wire`,
+`relay-1571-attach-transport`, `relay-1572-claude-review`.
+
+**Five agent names now hold orphaned control-plane seats** — every release
+reported *"the Relaycast identity could not be released… the seat may still be
+held and re-registration may rotate a live token."* Do not reuse them.
+
 ## 2026-08-18 ~08:00Z — spawn placement is black-holing Chief's dispatches
 
 **Chief cannot place agents. Other requesters can.** Eleven dispatches since

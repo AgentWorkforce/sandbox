@@ -3,7 +3,7 @@ status: active
 owner: fleet-attach-impl-0811
 previous_owner: relay-1483-review-barry-0811
 reports_to: chief
-updated: 2026-08-17
+updated: 2026-08-18
 repos: [relay, cloud, relaycast-cloud]
 phase1_pr: "relay#1480"
 phase1_status: merged
@@ -12,6 +12,46 @@ physical_status: merged
 phase2_status: implemented-pending-review
 phase2_prs: "cloud#2995, relay#1484"
 ---
+
+## 2026-08-18 22:00Z — attach and drive both verified working; three defects filed underneath them
+
+**Both modes work cross-node via `--node`, with no ssh anywhere in the path.**
+Verified from chief-broker against finn-mini:
+
+- **view** — read the remote screen, `hostname` returned `Finn-Mac-Mini`.
+- **drive** — a nonce round trip: typed locally, echoed back by the remote agent.
+
+**`--node` is canonical and `--ssh-host` is the documented fallback**, not the
+other way round. The CLI's own help says so. An earlier note here treated
+`--ssh-host` as required; that was wrong and cost a day of assuming ssh was
+mandatory for Factory agents on cloud nodes, which have no inbound ssh at all.
+
+**Driving from a script needs a real PTY.** Piping into `--mode drive` types the
+characters and never submits them; the agent never answers and it reads as a
+broken feature. `script -q /dev/null <cmd>` fixes it completely. The
+`invalid_dimensions` warning printed alongside is **cosmetic** — the CLI says
+"continuing" and the drive works through it.
+
+Three defects filed from this session:
+
+- **relay#1571** — `attach --node` intermittently reports a live node
+  unreachable. Bimodal: pass 14:02:38, pass 14:03:31, `not reachable` 14:03:45,
+  with the node online and hosting six agents throughout. It reads as an outage
+  and invites restarting a healthy node, which kills every agent on it.
+- **relay#1574** — `agent-relay update` reports success while updating a
+  *different* installation. The standalone binary and broker stayed at 11.6.7
+  with untouched timestamps while npm advanced to 11.7.1. The handshake
+  constants live in the **Rust broker**, so publishing a CLI never reached them.
+- **relay#1575** — `--state-dir X` writes `connection.json` to `X/state/` while
+  the CLI reads `X/connection.json`, so a live broker reports `STOPPED` and
+  `node agent spawn` fails with "No running broker found" naming a path the
+  operator never chose.
+
+**Reading a lane's screen is not the same as attaching to it.** Regex
+ANSI-stripping does not reconstruct a full-screen TUI — cursor-addressed writes
+come back interleaved. chief#60 (merged) now requires rendering through a
+terminal emulator before deriving machine evidence, and permits release/replace/
+blocked on recorded secondary evidence when an attach cannot complete at all.
 
 ## 2026-08-17 09:35Z — state of cross-node attach and drive, read off GitHub because the workstream file had fallen ~4 days behind
 
