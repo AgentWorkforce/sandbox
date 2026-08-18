@@ -3,7 +3,7 @@ status: active
 owner: unassigned
 previous_owner: trajectory-lead-0811v3
 reports_to: agent-coordination-lead-0811
-updated: 2026-08-14
+updated: 2026-08-18
 repos: [cloud, relayhistory, relaycast, relayfile, factory, relay]
 ---
 
@@ -11,6 +11,51 @@ Goal: every human intent maps to a complete, queryable trajectory of agent
 activity — from the sentence that expressed it to the runtime behaviour of the
 feature it produced — so that planning a new feature can read the full history of
 the component it touches.
+
+## Now — 2026-08-18 — retention is a pricing tier, which dissolves the replay blocker
+
+**Khaliq's decision, 2026-08-18:** relaycast pruning becomes **tiered**. A
+customer paying premium prices gets a longer retention window and an **optional
+never-prune tier that moves to cold storage**. Retention stops being a
+per-workspace operational override and becomes an attribute of the plan.
+
+This supersedes the three-way choice recorded below (null override / copy the
+slice at PR time / accept a 30-day bound). **Replay reaches back as far as the
+plan's retention** — a sentence that belongs in pricing rather than in an
+engineering decision log.
+
+**The engine already implements this; nobody is using it.** `workspaces.retention`
+is a per-workspace JSON column (`WorkspaceRetentionSettings`) carrying
+independent `messageTtlDays`, `deliveryTtlDays`, `messageLogTtlDays` and
+`workspaceEventTtlDays`, and **`null` disables pruning for that table** — exactly
+the never-prune tier. The 30 days is not a limit; it is a deployment-wide default
+passed at one call site in the Workers cron,
+`pruneExpired(db, { defaults: { messageTtlDays: 30 } })`, and per-workspace
+overrides are honoured inside `pruneExpired`. **There is no engine work in this.**
+
+**What is missing is a plan → retention mapping and a writer for that column.**
+
+**The gating dependency is attribution, not retention.** A workspace row carries
+no notion of which customer owns it, so a tier cannot be applied or enforced.
+That makes **relaycast#339** a prerequisite rather than a reporting nicety — and
+two of its six open review threads concern a `CHECK` constraint that permits a
+classification with **no provenance for the classification**, which is precisely
+the field a billing tier would key on. Land it properly; do not merge it to move.
+
+**Cold storage target is R2, not D1.** D1 is at 1.99 GB and is the component
+under strain in the 2026-08-18 incident. Unplanned convergence: the Cloudflare
+file adapter is gaining R2 object lifecycle now (to unblock workspace reaping),
+so the archive has a home rather than needing a new subsystem.
+
+**Consequence for workspace bloat:** a free tier with a short TTL, combined with
+`workspaces.expires_at` from relaycast#338, expires abandoned workspaces **by
+policy and continuously** — replacing the one-off backfill over a hand-written
+"inert" predicate that Chief had proposed for the 25,014 inert rows.
+
+**Still required regardless of tier:** the replay surface must **display the
+retention boundary**, so a truncated replay announces itself instead of reading
+as complete. A pointer to a conversation that has aged out is worse than no
+pointer — this workstream's own named failure mode, and no pricing tier fixes it.
 
 ## Now — 2026-08-14 — replay of completed sessions is this workstream's new consumer
 
