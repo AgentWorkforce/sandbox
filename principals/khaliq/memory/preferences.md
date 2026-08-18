@@ -42,3 +42,21 @@
   The direction is: proactive agents get a local, attachable presence so Khaliq
   can ask them what they know — starting with `x-reply-radar`, which should live
   locally as a Grok instance he can query about tweets.
+- **Spawn across engines, not just Claude** (Khaliq, 2026-08-17). Chief had
+  dispatched five lanes in one morning and only one was `codex`; the rest were
+  `claude`. The roster's fleet nodes advertise `spawn:claude`, `spawn:codex`,
+  `spawn:gemini` and `spawn:opencode`, and a lane's engine is Chief's choice at
+  dispatch time — so defaulting every appointment to one model is a choice being
+  made by habit rather than by fit. Mix them deliberately.
+  The reason it matters beyond variety: this repo's own record shows codex
+  cracking root causes that successive claude lanes circled for hours (the
+  sf-mini broker trace, the Relayfile backend pair — two claude attempts went
+  quiet, the third on codex found git-history-backed root causes in ~20
+  minutes). Independent engines fail differently, which is the whole value of a
+  second opinion on a hard defect.
+  Note the constraint discovered the same day: **the `spawn` tool's `cli` enum
+  is not a node capability.** It accepts `grok`, but no fleet node advertises
+  `spawn:grok`, and the spawn is refused at dispatch. Read the node's
+  `capabilities` from `query_nodes` before promising an engine. A node advertises
+  `spawn:<cli>` for every distinct `cli` named in its teams roster, so adding an
+  engine is a roster change plus a node restart, not a code change.
