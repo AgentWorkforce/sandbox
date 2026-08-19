@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 
 import type {
   AsyncExecStartResult,
@@ -27,7 +28,14 @@ const DEFAULT_RUN_BUDGET_MS = 30 * 60_000;
 const DEFAULT_CREATE_TIMEOUT_MS = 120_000;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 10_000;
 const ADMISSION_RECONCILIATION_TIMEOUT_MS = 1_000;
+const ADMISSION_RECONCILIATION_INTERVAL_MS = 25;
 const SCRIPT_LOG_READ_MAX_BYTES = 262_144;
+const ASYNC_SESSION_ENV = "AGENTWORKFORCE_E2B_ASYNC_SESSION";
+const ASYNC_REQUEST_ENV = "AGENTWORKFORCE_E2B_ASYNC_REQUEST";
+
+/** Terminal status used when E2B confirms that an admitted process is gone
+ * before it can publish an exit sidecar. */
+export const E2B_ASYNC_PROCESS_LOST_EXIT_CODE = 255;
 
 type E2BCommandResult = {
   exitCode: number;
@@ -37,6 +45,13 @@ type E2BCommandResult = {
 };
 
 type E2BCommandHandle = { pid: number };
+
+type E2BProcessInfo = {
+  pid: number;
+  cmd: string;
+  args: string[];
+  envs: Record<string, string>;
+};
 
 type E2BRunOpts = {
   background?: boolean;
@@ -53,9 +68,12 @@ interface E2BSandbox {
   commands: {
     run(cmd: string, opts?: E2BRunOpts & { background?: false }): Promise<E2BCommandResult>;
     run(cmd: string, opts: E2BRunOpts & { background: true }): Promise<E2BCommandHandle>;
+    list(): Promise<E2BProcessInfo[]>;
+    kill(pid: number): Promise<boolean>;
   };
   files: {
     write(path: string, data: string | ArrayBuffer): Promise<unknown>;
+    read(path: string, opts?: { format?: "text"; requestTimeoutMs?: number }): Promise<string>;
     read(path: string, opts: { format: "bytes" }): Promise<Uint8Array>;
   };
   setTimeout(timeoutMs: number): Promise<void>;
@@ -151,6 +169,8 @@ export type E2BSandboxRuntimeOptions = {
   template: string;
   /** Maximum lifetime granted to an asynchronous command and its sandbox. */
   runBudgetMs?: number;
+  /** Sandbox lifetime applied on create, connect, and each synchronous use. */
+  sandboxLifetimeMs?: number;
   /** Default timeout for the create HTTP request, not sandbox lifetime. */
   createTimeoutMs?: number;
   /** Injection seam for tests; defaults to lazy `import("e2b")`. */
@@ -161,6 +181,11 @@ type RegisteredSandbox = {
   sandbox?: E2BSandbox;
   owned: boolean;
   state?: E2BSandboxState;
+};
+
+type AsyncAdmission = {
+  fingerprint: string;
+  pid: number;
 };
 
 export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
@@ -186,19 +211,29 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   private readonly apiKey: string;
   private readonly template: string;
   private readonly runBudgetMs: number;
+  private readonly sandboxLifetimeMs: number;
   private readonly createTimeoutMs: number;
   private readonly injectedStatics?: E2BSandboxStatics;
   private staticsPromise?: Promise<E2BSandboxStatics>;
   private readonly registrations = new Map<string, RegisteredSandbox>();
+  private readonly asyncAdmissions = new Map<string, AsyncAdmission>();
 
   constructor(options: E2BSandboxRuntimeOptions) {
+    const apiKey = options.apiKey.trim();
+    if (!apiKey) {
+      throw new Error("E2B API key is required");
+    }
     const template = options.template.trim();
     if (!template) {
       throw new Error("E2B sandbox template is required");
     }
-    this.apiKey = options.apiKey;
+    this.apiKey = apiKey;
     this.template = template;
     this.runBudgetMs = positiveDuration(options.runBudgetMs, DEFAULT_RUN_BUDGET_MS);
+    this.sandboxLifetimeMs = positiveDuration(
+      options.sandboxLifetimeMs,
+      this.runBudgetMs,
+    );
     this.createTimeoutMs = positiveDuration(options.createTimeoutMs, DEFAULT_CREATE_TIMEOUT_MS);
     this.injectedStatics = options.sandbox;
   }
@@ -244,6 +279,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     const deadline = lookupDeadline(options.timeoutMs);
     const paginator = await this.listSandboxes(labels, providerStates, pageSize(options));
     const handles: RuntimeHandle[] = [];
+    const excludedIds = new Set(options.excludeIds ?? []);
 
     while (paginator.hasNext) {
       const page = await awaitLookupOperation(
@@ -252,7 +288,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
         "listing matching E2B sandboxes",
       );
       for (const info of page) {
-        if (matchesState(info.state, states)) {
+        if (matchesState(info.state, states) && !excludedIds.has(info.sandboxId)) {
           handles.push(this.registerInfo(info, options));
         }
       }
@@ -311,6 +347,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     const sandbox = await statics.create(this.template, {
       apiKey: this.apiKey,
       requestTimeoutMs,
+      timeoutMs: this.sandboxLifetimeMs,
       ...(hasEntries(metadata) ? { metadata } : {}),
       ...(hasEntries(options.env) ? { envs: options.env } : {}),
     });
@@ -370,6 +407,10 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   ): Promise<RunScriptResult> {
     const sandbox = await this.requireSandbox(handle);
     try {
+      await sandbox.setTimeout(Math.max(
+        this.sandboxLifetimeMs,
+        options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 0,
+      ));
       const result = await sandbox.commands.run(options.command, {
         ...(options.cwd ? { cwd: options.cwd } : {}),
         ...(options.timeoutMs && options.timeoutMs > 0 ? { timeoutMs: options.timeoutMs } : {}),
@@ -392,24 +433,58 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     const sandbox = await this.requireSandbox(handle);
     const sessionId = options.sessionId ?? `run-${handle.id}-${Date.now()}`;
     const paths = scriptRunPaths(sessionId);
+    const fingerprint = asyncRequestFingerprint(options);
+    const admissionKey = `${handle.id}\0${paths.sessionToken}`;
+    const known = this.asyncAdmissions.get(admissionKey);
+    if (known) {
+      if (known.fingerprint !== fingerprint) {
+        throw asyncSessionConflict(sessionId);
+      }
+      await this.killDuplicateProcesses(sandbox, paths.sessionToken, fingerprint, known.pid);
+      return { sessionId, commandId: String(known.pid), reconciled: true };
+    }
 
-    // A deterministic session may be reused after a caller crash. Clear every
-    // durable artifact before admission so a later reconciliation cannot
-    // mistake a stale command for the command submitted by this attempt.
-    const cleanup = await this.runScript(handle, {
-      command: `rm -rf ${shellSingleQuote(paths.dir)} && mkdir -p ${shellSingleQuote(paths.dir)}`,
+    // mkdir is the atomic admission claim. An existing directory is immutable:
+    // retries reconcile its durable request/process identity and never erase it
+    // or submit a second copy.
+    const claim = await this.runScript(handle, {
+      command: [
+        "# AGENTWORKFORCE_E2B_ASYNC_CLAIM",
+        `mkdir -p ${shellSingleQuote(paths.root)} || exit $?`,
+        `if mkdir ${shellSingleQuote(paths.dir)} 2>/dev/null; then`,
+        `  printf '%s\\n' ${shellSingleQuote(fingerprint)} > ${shellSingleQuote(paths.requestTmp)} &&`,
+        `  mv ${shellSingleQuote(paths.requestTmp)} ${shellSingleQuote(paths.request)} &&`,
+        "  printf '%s\\n' created",
+        "else",
+        "  printf '%s\\n' existing",
+        "fi",
+      ].join("\n"),
       cwd: options.cwd,
       env: options.env,
       timeoutMs: 30_000,
     });
-    if (cleanup.exitCode !== 0) {
+    if (claim.exitCode !== 0) {
       throw new Error(
-        `Failed to prepare E2B async session ${sessionId}: ${cleanup.output || "cleanup failed"}`,
+        `Failed to claim E2B async session ${sessionId}: ${claim.output || "claim failed"}`,
       );
+    }
+    const claimState = claim.stdout?.trim() ?? claim.output.trim();
+    if (claimState === "existing") {
+      const reconciled = await this.reconcileExistingAdmission(
+        sandbox,
+        sessionId,
+        paths,
+        fingerprint,
+      );
+      this.asyncAdmissions.set(admissionKey, reconciled);
+      return { sessionId, commandId: String(reconciled.pid), reconciled: true };
+    }
+    if (claimState !== "created") {
+      throw new Error(`E2B async session ${sessionId} returned an invalid claim result`);
     }
 
     const wrapped = [
-      `printf '%s\\n' "$$" > ${shellSingleQuote(paths.admissionTmp)}`,
+      `printf '%s\\n%s\\n' "$$" ${shellSingleQuote(fingerprint)} > ${shellSingleQuote(paths.admissionTmp)}`,
       `mv ${shellSingleQuote(paths.admissionTmp)} ${shellSingleQuote(paths.admission)}`,
       "{",
       options.command,
@@ -420,7 +495,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       'exit "$e2b_run_status"',
     ].join("\n");
 
-    await sandbox.setTimeout(this.runBudgetMs);
+    await sandbox.setTimeout(Math.max(this.sandboxLifetimeMs, this.runBudgetMs));
     try {
       const started = await sandbox.commands.run(wrapped, {
         background: true,
@@ -429,24 +504,29 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
           ? { requestTimeoutMs: options.timeoutMs }
           : {}),
         ...(options.cwd ? { cwd: options.cwd } : {}),
-        ...(hasEntries(options.env) ? { envs: options.env } : {}),
+        envs: {
+          ...(options.env ?? {}),
+          [ASYNC_SESSION_ENV]: paths.sessionToken,
+          [ASYNC_REQUEST_ENV]: fingerprint,
+        },
       });
       if (!Number.isInteger(started.pid) || started.pid <= 0) {
         throw new Error("E2B async command did not return a process id");
       }
+      this.asyncAdmissions.set(admissionKey, { fingerprint, pid: started.pid });
       return { sessionId, commandId: String(started.pid) };
     } catch (error) {
       if (isOutcomeUnknownAdmissionError(error)) {
-        const admittedPid = parseProcessId(await this.readFileBestEffort(
+        const reconciled = await this.reconcileOutcomeUnknownAdmission(
           sandbox,
-          paths.admission,
-          64,
-          ADMISSION_RECONCILIATION_TIMEOUT_MS,
-        ));
-        if (admittedPid !== null) {
+          paths,
+          fingerprint,
+        );
+        if (reconciled) {
+          this.asyncAdmissions.set(admissionKey, reconciled);
           return {
             sessionId,
-            commandId: String(admittedPid),
+            commandId: String(reconciled.pid),
             reconciled: true,
           };
         }
@@ -458,15 +538,34 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   async getScriptStatus(
     handle: RuntimeHandle,
     sessionId: string,
-    _commandId: string,
+    commandId: string,
   ): Promise<AsyncExecStatus> {
     const sandbox = await this.requireSandbox(handle);
-    const raw = await this.readFileBestEffort(
-      sandbox,
-      scriptRunPaths(sessionId).exit,
-      64,
+    const paths = scriptRunPaths(sessionId);
+    const firstExit = parseShellExitCode(
+      await this.readOptionalTextFile(sandbox, paths.exit) ?? "",
     );
-    return { exitCode: parseShellExitCode(raw) };
+    if (firstExit !== null) {
+      return { exitCode: firstExit };
+    }
+
+    const pid = parseProcessId(commandId);
+    if (pid === null) {
+      throw new Error(`Invalid E2B async command id "${commandId}"`);
+    }
+    const processes = await sandbox.commands.list();
+    if (processes.some((process) => isSessionProcess(process, paths.sessionToken, pid))) {
+      return { exitCode: null };
+    }
+
+    // Close the race where the process exits after list() but before its
+    // wrapper atomically publishes the exit sidecar.
+    const finalExit = parseShellExitCode(
+      await this.readOptionalTextFile(sandbox, paths.exit) ?? "",
+    );
+    return {
+      exitCode: finalExit ?? E2B_ASYNC_PROCESS_LOST_EXIT_CODE,
+    };
   }
 
   async getScriptLogs(
@@ -475,7 +574,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     commandId: string,
   ): Promise<RunScriptResult> {
     const sandbox = await this.requireSandbox(handle);
-    const output = await this.readFileBestEffort(
+    const output = await this.readBoundedFile(
       sandbox,
       scriptRunPaths(sessionId).output,
       SCRIPT_LOG_READ_MAX_BYTES,
@@ -511,8 +610,12 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     sessionId: string,
     commandId: string,
   ): Promise<ExecResult> {
+    const status = await this.getScriptStatus(handle, sessionId, commandId);
+    if (status.exitCode === null) {
+      throw new Error(`E2B async command "${commandId}" is still running`);
+    }
     const logs = await this.getScriptLogs(handle, sessionId, commandId);
-    return { output: logs.output, exitCode: logs.exitCode ?? 0 };
+    return { output: logs.output, exitCode: status.exitCode };
   }
 
   async uploadFile(
@@ -596,7 +699,10 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       return handle;
     }
     const statics = await this.statics();
-    const sandbox = await statics.connect(handle.id, { apiKey: this.apiKey });
+    const sandbox = await statics.connect(handle.id, {
+      apiKey: this.apiKey,
+      timeoutMs: this.sandboxLifetimeMs,
+    });
     entry.sandbox = sandbox;
     entry.state = "running";
     handle.state = "STARTED";
@@ -690,7 +796,10 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
     const statics = await this.statics();
     try {
-      const sandbox = await statics.connect(handle.id, { apiKey: this.apiKey });
+      const sandbox = await statics.connect(handle.id, {
+        apiKey: this.apiKey,
+        timeoutMs: this.sandboxLifetimeMs,
+      });
       this.registrations.set(handle.id, {
         sandbox,
         owned: registered?.owned ?? false,
@@ -725,23 +834,149 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
   }
 
-  private async readFileBestEffort(
+  private async reconcileExistingAdmission(
+    sandbox: E2BSandbox,
+    sessionId: string,
+    paths: ScriptRunPaths,
+    fingerprint: string,
+  ): Promise<AsyncAdmission> {
+    const recordedRequest = (await this.readOptionalTextFile(sandbox, paths.request))?.trim();
+    if (!recordedRequest) {
+      throw new Error(
+        `E2B async session ${sessionId} is already claimed but has no authoritative request record`,
+      );
+    }
+    if (recordedRequest !== fingerprint) {
+      throw asyncSessionConflict(sessionId);
+    }
+
+    const recordedAdmission = parseAdmissionRecord(
+      await this.readOptionalTextFile(sandbox, paths.admission),
+    );
+    if (recordedAdmission && recordedAdmission.fingerprint !== fingerprint) {
+      throw new Error(`E2B async session ${sessionId} has a mismatched admission record`);
+    }
+
+    const processes = matchingSessionProcesses(
+      await sandbox.commands.list(),
+      paths.sessionToken,
+      fingerprint,
+    );
+    if (recordedAdmission) {
+      await this.killProcessesExcept(sandbox, processes, recordedAdmission.pid);
+      return recordedAdmission;
+    }
+    if (processes.length === 1) {
+      const admission = { fingerprint, pid: processes[0]!.pid };
+      await sandbox.files.write(
+        paths.admission,
+        `${admission.pid}\n${admission.fingerprint}\n`,
+      );
+      return admission;
+    }
+    if (processes.length > 1) {
+      await this.killProcessesExcept(sandbox, processes, null);
+    }
+    throw new Error(
+      `E2B async session ${sessionId} is already claimed but admission cannot be proven`,
+    );
+  }
+
+  private async reconcileOutcomeUnknownAdmission(
+    sandbox: E2BSandbox,
+    paths: ScriptRunPaths,
+    fingerprint: string,
+  ): Promise<AsyncAdmission | null> {
+    const deadline = Date.now() + ADMISSION_RECONCILIATION_TIMEOUT_MS;
+    do {
+      const recorded = parseAdmissionRecord(
+        await this.readOptionalTextFile(sandbox, paths.admission),
+      );
+      const processes = matchingSessionProcesses(
+        await sandbox.commands.list(),
+        paths.sessionToken,
+        fingerprint,
+      );
+      if (recorded?.fingerprint === fingerprint) {
+        await this.killProcessesExcept(sandbox, processes, recorded.pid);
+        return recorded;
+      }
+      if (processes.length === 1) {
+        const admission = { fingerprint, pid: processes[0]!.pid };
+        await sandbox.files.write(
+          paths.admission,
+          `${admission.pid}\n${admission.fingerprint}\n`,
+        );
+        return admission;
+      }
+      if (processes.length > 1) {
+        await this.killProcessesExcept(sandbox, processes, null);
+        return null;
+      }
+      if (Date.now() < deadline) {
+        await delay(ADMISSION_RECONCILIATION_INTERVAL_MS);
+      }
+    } while (Date.now() < deadline);
+    return null;
+  }
+
+  private async killDuplicateProcesses(
+    sandbox: E2BSandbox,
+    sessionToken: string,
+    fingerprint: string,
+    admittedPid: number,
+  ): Promise<void> {
+    const matches = matchingSessionProcesses(
+      await sandbox.commands.list(),
+      sessionToken,
+      fingerprint,
+    );
+    await this.killProcessesExcept(sandbox, matches, admittedPid);
+  }
+
+  private async killProcessesExcept(
+    sandbox: E2BSandbox,
+    processes: E2BProcessInfo[],
+    admittedPid: number | null,
+  ): Promise<void> {
+    for (const process of processes) {
+      if (process.pid !== admittedPid) {
+        await sandbox.commands.kill(process.pid);
+      }
+    }
+  }
+
+  private async readOptionalTextFile(
+    sandbox: E2BSandbox,
+    path: string,
+    requestTimeoutMs?: number,
+  ): Promise<string | null> {
+    try {
+      return await sandbox.files.read(path, {
+        format: "text",
+        ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
+      });
+    } catch (error) {
+      if (isFileNotFound(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async readBoundedFile(
     sandbox: E2BSandbox,
     path: string,
     maxBytes: number,
     requestTimeoutMs?: number,
   ): Promise<string> {
-    try {
-      const result = await sandbox.commands.run(
-        `tail -c ${maxBytes} ${shellSingleQuote(path)} 2>/dev/null || true`,
-        requestTimeoutMs
-          ? { timeoutMs: requestTimeoutMs, requestTimeoutMs }
-          : undefined,
-      );
-      return result.stdout ?? "";
-    } catch {
-      return "";
-    }
+    const result = await sandbox.commands.run(
+      `tail -c ${maxBytes} ${shellSingleQuote(path)} 2>/dev/null || true`,
+      requestTimeoutMs
+        ? { timeoutMs: requestTimeoutMs, requestTimeoutMs }
+        : undefined,
+    );
+    return result.stdout ?? "";
   }
 }
 
@@ -884,6 +1119,24 @@ function isSandboxNotFound(error: unknown): boolean {
   );
 }
 
+function isFileNotFound(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const record = error as {
+    name?: unknown;
+    message?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+  };
+  return (
+    record.name === "FileNotFoundError"
+    || record.status === 404
+    || record.statusCode === 404
+    || (typeof record.message === "string" && /file.*not\s*found|no such file/iu.test(record.message))
+  );
+}
+
 function toArrayBuffer(buffer: Buffer): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 }
@@ -961,25 +1214,84 @@ function parseProcessId(value: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
-function scriptRunPaths(sessionId: string): {
+function parseAdmissionRecord(value: string | null): AsyncAdmission | null {
+  if (value === null) {
+    return null;
+  }
+  const [rawPid, fingerprint, ...extra] = value.trim().split(/\s+/u);
+  const pid = parseProcessId(rawPid ?? "");
+  if (pid === null || !fingerprint || extra.length > 0 || !/^[a-f\d]{64}$/u.test(fingerprint)) {
+    return null;
+  }
+  return { fingerprint, pid };
+}
+
+function asyncRequestFingerprint(options: E2BRunScriptOptions): string {
+  const env = Object.entries(options.env ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  return createHash("sha256").update(JSON.stringify({
+    command: options.command,
+    cwd: options.cwd ?? null,
+    env,
+  })).digest("hex");
+}
+
+function asyncSessionConflict(sessionId: string): Error {
+  return new Error(`E2B async session ${sessionId} is already claimed by a different request`);
+}
+
+function matchingSessionProcesses(
+  processes: E2BProcessInfo[],
+  sessionToken: string,
+  fingerprint: string,
+): E2BProcessInfo[] {
+  return processes.filter((process) => (
+    process.envs?.[ASYNC_SESSION_ENV] === sessionToken
+    && process.envs?.[ASYNC_REQUEST_ENV] === fingerprint
+  ));
+}
+
+function isSessionProcess(
+  process: E2BProcessInfo,
+  sessionToken: string,
+  pid: number,
+): boolean {
+  return process.pid === pid && process.envs?.[ASYNC_SESSION_ENV] === sessionToken;
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+}
+
+type ScriptRunPaths = {
+  root: string;
   dir: string;
   output: string;
   exit: string;
   exitTmp: string;
   admission: string;
   admissionTmp: string;
-} {
+  request: string;
+  requestTmp: string;
+  sessionToken: string;
+};
+
+function scriptRunPaths(sessionId: string): ScriptRunPaths {
   // Base64url is filesystem-safe and collision-free for the original UTF-8
   // bytes, unlike replacing punctuation with underscores.
   const safe = Buffer.from(sessionId, "utf8").toString("base64url") || "empty";
-  const dir = `/tmp/e2b-run/${safe}`;
+  const root = "/tmp/e2b-run";
+  const dir = `${root}/${safe}`;
   return {
+    root,
     dir,
     output: `${dir}/out`,
     exit: `${dir}/exit`,
     exitTmp: `${dir}/exit.tmp`,
     admission: `${dir}/admission`,
     admissionTmp: `${dir}/admission.tmp`,
+    request: `${dir}/request`,
+    requestTmp: `${dir}/request.tmp`,
+    sessionToken: safe,
   };
 }
 

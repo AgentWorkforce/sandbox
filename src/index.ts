@@ -58,7 +58,10 @@ export type {
   DaytonaUploadBundleOptions,
 } from "./daytona/runtime.js";
 
-export { E2BSandboxRuntime } from "./e2b/runtime.js";
+export {
+  E2B_ASYNC_PROCESS_LOST_EXIT_CODE,
+  E2BSandboxRuntime,
+} from "./e2b/runtime.js";
 export type {
   E2BAttachedSandboxOptions,
   E2BBundleFile,

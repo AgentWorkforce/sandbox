@@ -49,6 +49,15 @@ sandbox. Its live capability descriptor likewise reports PTY and streaming logs
 as unsupported because this adapter exposes neither behavior, even though the
 provider SDK has lower-level APIs for them.
 
+The adapter applies an explicit sandbox lifetime on create, reconnect, and
+synchronous use; `sandboxLifetimeMs` defaults to the configured asynchronous
+run budget. Asynchronous session IDs are immutable idempotency keys. A retry
+reconciles the durable admission record with E2B's process list and will not
+erase the session directory or submit another copy. Status is pending only
+while the matching provider process is present. If that process disappears
+without publishing its exit sidecar, status becomes terminal with
+`E2B_ASYNC_PROCESS_LOST_EXIT_CODE` (`255`).
+
 ## Development
 
 ```bash

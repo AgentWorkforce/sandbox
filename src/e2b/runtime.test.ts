@@ -59,9 +59,38 @@ describe("E2BSandboxRuntime public contract", () => {
     );
     assert.equal(calls.create.length, 0);
   });
+
+  it("must-not-fire: rejects an empty API key instead of allowing SDK ambient fallback", () => {
+    const { statics, calls } = fakeStatics();
+
+    assert.throws(
+      () => new E2BSandboxRuntime({ apiKey: "  ", template: TEMPLATE, sandbox: statics }),
+      /API key is required/u,
+    );
+    assert.equal(calls.create.length, 0);
+  });
 });
 
 describe("E2BSandboxRuntime launch and lookup", () => {
+  it("review guard: applies an explicit sandbox lifetime to create, reattach, and sync execution", async () => {
+    const created = fakeSandbox({ id: "sbx-lifetime-created" });
+    const reattached = fakeSandbox({ id: "sbx-lifetime-reattached" });
+    const { statics, calls } = fakeStatics({
+      createSandbox: created,
+      connected: new Map([["sbx-lifetime-reattached", reattached]]),
+    });
+    const runtime = createRuntime(statics, { sandboxLifetimeMs: 900_000 });
+
+    const createdHandle = await runtime.launch();
+    await runtime.exec(createdHandle, "true");
+    await runtime.exec({ id: "sbx-lifetime-reattached" }, "true");
+
+    assert.equal(calls.create[0]!.options.timeoutMs, 900_000);
+    assert.equal(calls.connectOptions[0]!.timeoutMs, 900_000);
+    assert.deepEqual(created.calls.setTimeout, [900_000]);
+    assert.deepEqual(reattached.calls.setTimeout, [900_000]);
+  });
+
   it("must-fire: launches the requested template with labels, env, request timeout, and workdir", async () => {
     const sandbox = fakeSandbox({ id: "sbx-created" });
     const { statics, calls } = fakeStatics({ createSandbox: sandbox });
@@ -86,11 +115,12 @@ describe("E2BSandboxRuntime launch and lookup", () => {
       options: {
         apiKey: API_KEY,
         requestTimeoutMs: 12_500,
+        timeoutMs: 1_800_000,
         metadata: { purpose: "test", name: "preferred-name" },
         envs: { AGENT_ID: "agent-1" },
       },
     }]);
-    assert.equal("timeoutMs" in calls.create[0]!.options, false);
+    assert.equal(calls.create[0]!.options.timeoutMs, 1_800_000);
   });
 
   it("must-not-fire: omits empty metadata/env and never substitutes a provider default template", async () => {
@@ -101,7 +131,7 @@ describe("E2BSandboxRuntime launch and lookup", () => {
 
     assert.deepEqual(calls.create, [{
       template: TEMPLATE,
-      options: { apiKey: API_KEY, requestTimeoutMs: 77_000 },
+      options: { apiKey: API_KEY, requestTimeoutMs: 77_000, timeoutMs: 1_800_000 },
     }]);
   });
 
@@ -177,6 +207,23 @@ describe("E2BSandboxRuntime launch and lookup", () => {
     ]);
     assert.equal(calls.list[0]!.limit, 1);
     assert.equal(calls.nextItems, 3);
+  });
+
+  it("must-not-fire: findAll never returns excluded sandbox ids", async () => {
+    const { statics } = fakeStatics({
+      pages: [[
+        sandboxInfo("sbx-excluded", "running"),
+        sandboxInfo("sbx-included", "running"),
+      ]],
+    });
+    const runtime = createRuntime(statics);
+
+    const handles = await runtime.findAllByLabels(
+      { purpose: "worker" },
+      { excludeIds: ["sbx-excluded"] },
+    );
+
+    assert.deepEqual(handles.map((handle) => handle.id), ["sbx-included"]);
   });
 
   it("must-fire: null state lookup includes running and paused sandboxes without a state query", async () => {
@@ -355,6 +402,155 @@ describe("E2BSandboxRuntime command execution", () => {
 });
 
 describe("E2BSandboxRuntime async execution", () => {
+  it("review guard: reports process loss as terminal when no exit sidecar or authoritative process exists", async () => {
+    const sandbox = fakeSandbox({ id: "sbx-process-lost", processes: [] });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    assert.deepEqual(
+      await runtime.getScriptStatus(handle, "session-process-lost", "7331"),
+      { exitCode: 255 },
+    );
+    assert.equal(sandbox.calls.listProcesses, 1);
+  });
+
+  it("review guard: retries the same async session without admitting a second live command", async () => {
+    let nextPid = 4100;
+    const sandbox = fakeSandbox({
+      id: "sbx-retry-idempotent",
+      run: async (_command, options) => options?.background
+        ? { pid: ++nextPid }
+        : { exitCode: 0, stdout: "", stderr: "" },
+    });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    assert.deepEqual(
+      await runtime.startScript(handle, { command: "node runner.mjs", sessionId: "stable-session" }),
+      { sessionId: "stable-session", commandId: "4101" },
+    );
+    assert.deepEqual(
+      await runtime.startScript(handle, { command: "node runner.mjs", sessionId: "stable-session" }),
+      { sessionId: "stable-session", commandId: "4101", reconciled: true },
+    );
+    assert.equal(
+      sandbox.calls.run.filter((call) => call.options?.background).length,
+      1,
+      "a retry must not start a second copy",
+    );
+    assert.equal(
+      sandbox.calls.run.filter((call) => call.command.startsWith("rm -rf")).length,
+      0,
+      "a retry must not erase the authoritative session record",
+    );
+  });
+
+  it("must-fire: a fresh runtime reconciles the durable admitted PID and kills only exact duplicates", async () => {
+    const sessionId = "durable-retry";
+    const admittedPid = 5101;
+    let fingerprint = "";
+    const processes: ReturnType<typeof fakeProcess>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sbx-durable-retry",
+      processes,
+      run: async (_command, options) => {
+        if (options?.background) {
+          fingerprint = options.envs?.AGENTWORKFORCE_E2B_ASYNC_REQUEST ?? "";
+          return { pid: admittedPid };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readText: async (path) => {
+        if (path.endsWith("/request")) return `${fingerprint}\n`;
+        if (path.endsWith("/admission")) return `${admittedPid}\n${fingerprint}\n`;
+        throw Object.assign(new Error("file not found"), { name: "FileNotFoundError" });
+      },
+    });
+    const firstRuntime = createRuntime(fakeStatics().statics);
+    const firstHandle = firstRuntime.attachSandbox(sandbox);
+    await firstRuntime.startScript(firstHandle, { command: "node runner.mjs", sessionId });
+    processes.push(
+      fakeProcess(admittedPid, sessionId, fingerprint),
+      fakeProcess(5102, sessionId, fingerprint),
+      fakeProcess(5103, "unrelated-session", fingerprint),
+    );
+
+    const retryRuntime = createRuntime(fakeStatics().statics);
+    const retryHandle = retryRuntime.attachSandbox(sandbox);
+    assert.deepEqual(
+      await retryRuntime.startScript(retryHandle, { command: "node runner.mjs", sessionId }),
+      { sessionId, commandId: String(admittedPid), reconciled: true },
+    );
+    assert.deepEqual(sandbox.calls.killProcesses, [5102]);
+    assert.equal(sandbox.calls.run.filter((call) => call.options?.background).length, 1);
+  });
+
+  it("must-fire: an existing claim without a sidecar adopts one exact authoritative process", async () => {
+    const sessionId = "process-only-retry";
+    let fingerprint = "";
+    const processes: ReturnType<typeof fakeProcess>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sbx-process-only",
+      claim: async (command) => {
+        fingerprint = command.match(/'([a-f\d]{64})'/u)?.[1] ?? "";
+        processes.push(fakeProcess(5201, sessionId, fingerprint));
+        return { exitCode: 0, stdout: "existing\n", stderr: "" };
+      },
+      processes,
+      readText: async (path) => {
+        if (path.endsWith("/request")) return `${fingerprint}\n`;
+        throw Object.assign(new Error("file not found"), { name: "FileNotFoundError" });
+      },
+    });
+    const runtime = createRuntime(fakeStatics().statics);
+    const handle = runtime.attachSandbox(sandbox);
+
+    const result = await runtime.startScript(handle, {
+      command: "node runner.mjs",
+      sessionId,
+    });
+
+    assert.deepEqual(result, { sessionId, commandId: "5201", reconciled: true });
+    assert.equal(sandbox.calls.write.length, 1);
+    assert.match(String(sandbox.calls.write[0]!.data), /^5201\n[a-f\d]{64}\n$/u);
+    assert.equal(sandbox.calls.run.filter((call) => call.options?.background).length, 0);
+  });
+
+  it("must-not-fire: reusing a claimed session for a different request neither starts nor kills", async () => {
+    const sessionId = "immutable-session";
+    let fingerprint = "";
+    const sandbox = fakeSandbox({
+      id: "sbx-session-conflict",
+      run: async (_command, options) => {
+        if (options?.background) {
+          fingerprint = options.envs?.AGENTWORKFORCE_E2B_ASYNC_REQUEST ?? "";
+          return { pid: 5301 };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readText: async (path) => {
+        if (path.endsWith("/request")) return `${fingerprint}\n`;
+        throw Object.assign(new Error("file not found"), { name: "FileNotFoundError" });
+      },
+    });
+    const firstRuntime = createRuntime(fakeStatics().statics);
+    await firstRuntime.startScript(firstRuntime.attachSandbox(sandbox), {
+      command: "node first.mjs",
+      sessionId,
+    });
+    const retryRuntime = createRuntime(fakeStatics().statics);
+
+    await assert.rejects(
+      () => retryRuntime.startScript(retryRuntime.attachSandbox(sandbox), {
+        command: "node different.mjs",
+        sessionId,
+      }),
+      /already claimed by a different request/u,
+    );
+    assert.equal(sandbox.calls.run.filter((call) => call.options?.background).length, 1);
+    assert.deepEqual(sandbox.calls.killProcesses, []);
+  });
+
   it("must-fire: admits one background command with durable artifacts and separate request/lifetime budgets", async () => {
     const sandbox = fakeSandbox({
       id: "sbx-async",
@@ -375,51 +571,57 @@ describe("E2BSandboxRuntime async execution", () => {
     });
 
     assert.deepEqual(result, { sessionId: "session/one", commandId: "4242" });
-    assert.deepEqual(sandbox.calls.setTimeout, [600_000]);
+    assert.deepEqual(sandbox.calls.setTimeout, [600_000, 600_000]);
     assert.equal(sandbox.calls.run.length, 2);
-    const cleanup = sandbox.calls.run[0]!;
+    const claim = sandbox.calls.run[0]!;
     const admission = sandbox.calls.run[1]!;
-    assert.match(cleanup.command, /^rm -rf .* && mkdir -p /u);
+    assert.match(claim.command, /AGENTWORKFORCE_E2B_ASYNC_CLAIM/u);
+    assert.doesNotMatch(claim.command, /rm -rf/u);
     assert.equal(admission.options?.background, true);
     assert.equal(admission.options?.timeoutMs, 600_000);
     assert.equal(admission.options?.requestTimeoutMs, 2_500);
     assert.equal(admission.options?.cwd, "/workspace");
-    assert.deepEqual(admission.options?.envs, { MODE: "async" });
+    assert.equal(admission.options?.envs?.MODE, "async");
+    assert.equal(admission.options?.envs?.AGENTWORKFORCE_E2B_ASYNC_SESSION, "c2Vzc2lvbi9vbmU");
+    assert.match(admission.options?.envs?.AGENTWORKFORCE_E2B_ASYNC_REQUEST ?? "", /^[a-f\d]{64}$/u);
     assert.match(admission.command, /admission\.tmp/u);
     assert.match(admission.command, /e2b_run_status/u);
     assert.match(admission.command, /exit "\$e2b_run_status"/u);
   });
 
-  it("must-not-fire: failed stale-artifact cleanup prevents command admission", async () => {
+  it("must-not-fire: a failed atomic session claim prevents command admission", async () => {
     const sandbox = fakeSandbox({
       id: "sbx-cleanup-fail",
-      run: async () => ({ exitCode: 3, stdout: "", stderr: "permission denied" }),
+      claim: async () => ({ exitCode: 3, stdout: "", stderr: "permission denied" }),
     });
     const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
     const handle = await runtime.launch();
 
     await assert.rejects(
       () => runtime.startScript(handle, { command: "node runner.mjs", sessionId: "session-cleanup" }),
-      /Failed to prepare E2B async session/u,
+      /Failed to claim E2B async session/u,
     );
     assert.equal(sandbox.calls.run.length, 1);
-    assert.deepEqual(sandbox.calls.setTimeout, []);
+    assert.deepEqual(sandbox.calls.setTimeout, [1_800_000]);
   });
 
   it("must-fire: reconciles an outcome-unknown admission from the new durable marker without resubmitting", async () => {
     const admissionTimeout = Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" });
     let backgroundCalls = 0;
+    let fingerprint = "";
     const sandbox = fakeSandbox({
       id: "sbx-reconcile",
-      run: async (command, options) => {
+      run: async (_command, options) => {
         if (options?.background) {
           backgroundCalls += 1;
+          fingerprint = options.envs?.AGENTWORKFORCE_E2B_ASYNC_REQUEST ?? "";
           throw admissionTimeout;
         }
-        if (command.includes("/admission'")) {
-          return { exitCode: 0, stdout: "8123\n", stderr: "" };
-        }
         return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readText: async (path) => {
+        if (path.endsWith("/admission")) return `8123\n${fingerprint}\n`;
+        throw Object.assign(new Error("file not found"), { name: "FileNotFoundError" });
       },
     });
     const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
@@ -448,7 +650,7 @@ describe("E2BSandboxRuntime async execution", () => {
       () => runtime.startScript(handle, { command: "node runner.mjs", sessionId: "session-rejected" }),
       rejection,
     );
-    assert.equal(sandbox.calls.run.filter((call) => call.command.startsWith("tail -c")).length, 0);
+    assert.equal(sandbox.calls.read.length, 0);
     assert.equal(sandbox.calls.run.filter((call) => call.options?.background).length, 1);
   });
 
@@ -456,13 +658,9 @@ describe("E2BSandboxRuntime async execution", () => {
     const timeout = Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
     const sandbox = fakeSandbox({
       id: "sbx-unproven",
-      run: async (command, options) => {
+      run: async (_command, options) => {
         if (options?.background) throw timeout;
-        return {
-          exitCode: 0,
-          stdout: command.startsWith("tail -c") ? "not-a-pid" : "",
-          stderr: "",
-        };
+        return { exitCode: 0, stdout: "", stderr: "" };
       },
     });
     const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
@@ -477,11 +675,8 @@ describe("E2BSandboxRuntime async execution", () => {
   it("must-fire: status and logs read bounded durable files and preserve a terminal non-zero exit", async () => {
     const sandbox = fakeSandbox({
       id: "sbx-poll",
-      run: async (command) => ({
-        exitCode: 0,
-        stdout: command.includes("/exit'") ? "23\n" : "last log lines",
-        stderr: "",
-      }),
+      readText: async (path) => path.endsWith("/exit") ? "23\n" : "",
+      run: async () => ({ exitCode: 0, stdout: "last log lines", stderr: "" }),
     });
     const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
     const handle = await runtime.launch();
@@ -492,22 +687,57 @@ describe("E2BSandboxRuntime async execution", () => {
       exitCode: null,
       cmdId: "900",
     });
-    assert.match(sandbox.calls.run[0]!.command, /^tail -c 64 /u);
-    assert.match(sandbox.calls.run[1]!.command, /^tail -c 262144 /u);
+    assert.equal(sandbox.calls.read[0]!.options.format, "text");
+    assert.match(sandbox.calls.run[0]!.command, /^tail -c 262144 /u);
+    assert.equal(sandbox.calls.listProcesses, 0, "a terminal sidecar avoids process polling");
   });
 
-  it("must-not-fire: missing or malformed status content is never reported as success", async () => {
-    const outputs = ["", "7 trailing", "999"];
+  it("must-fire: status rechecks the exit sidecar after observing process loss", async () => {
+    let reads = 0;
     const sandbox = fakeSandbox({
-      id: "sbx-pending",
-      run: async () => ({ exitCode: 0, stdout: outputs.shift() ?? "", stderr: "" }),
+      id: "sbx-status-race",
+      processes: [],
+      readText: async () => {
+        reads += 1;
+        if (reads === 1) {
+          throw Object.assign(new Error("file not found"), { name: "FileNotFoundError" });
+        }
+        return "19\n";
+      },
     });
     const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
     const handle = await runtime.launch();
 
-    assert.deepEqual(await runtime.getScriptStatus(handle, "pending", "1"), { exitCode: null });
-    assert.deepEqual(await runtime.getScriptStatus(handle, "malformed", "2"), { exitCode: null });
-    assert.deepEqual(await runtime.getScriptStatus(handle, "range", "3"), { exitCode: null });
+    assert.deepEqual(await runtime.getScriptStatus(handle, "exit-race", "17"), { exitCode: 19 });
+    assert.equal(reads, 2);
+    assert.equal(sandbox.calls.listProcesses, 1);
+  });
+
+  it("must-fire: missing status remains pending only while the authoritative process is live", async () => {
+    const sessionId = "pending";
+    const pid = 1;
+    const sandbox = fakeSandbox({
+      id: "sbx-pending",
+      processes: [fakeProcess(pid, sessionId)],
+    });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    assert.deepEqual(await runtime.getScriptStatus(handle, sessionId, String(pid)), { exitCode: null });
+  });
+
+  it("must-not-fire: malformed status without a live authoritative process is never pending or success", async () => {
+    const outputs = ["7 trailing", "7 trailing", "999", "999"];
+    const sandbox = fakeSandbox({
+      id: "sbx-malformed",
+      processes: [],
+      readText: async () => outputs.shift() ?? "",
+    });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    assert.deepEqual(await runtime.getScriptStatus(handle, "malformed", "2"), { exitCode: 255 });
+    assert.deepEqual(await runtime.getScriptStatus(handle, "range", "3"), { exitCode: 255 });
   });
 
   it("must-not-fire: distinct session ids cannot collide on one durable path", async () => {
@@ -518,7 +748,53 @@ describe("E2BSandboxRuntime async execution", () => {
     await runtime.getScriptStatus(handle, "a/b", "1");
     await runtime.getScriptStatus(handle, "a_b", "2");
 
-    assert.notEqual(sandbox.calls.run[0]!.command, sandbox.calls.run[1]!.command);
+    assert.notEqual(sandbox.calls.read[0]!.path, sandbox.calls.read[2]!.path);
+  });
+
+  it("must-fire: getExecLogs returns the authoritative terminal non-zero exit", async () => {
+    const sandbox = fakeSandbox({
+      id: "sbx-exec-logs",
+      readText: async (path) => path.endsWith("/exit") ? "41\n" : "",
+      run: async () => ({ exitCode: 0, stdout: "captured output", stderr: "" }),
+    });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    assert.deepEqual(await runtime.getExecLogs(handle, "finished", "88"), {
+      output: "captured output",
+      exitCode: 41,
+    });
+  });
+
+  it("must-not-fire: getExecLogs never fabricates exit zero for a running command", async () => {
+    const sandbox = fakeSandbox({
+      id: "sbx-exec-logs-running",
+      processes: [fakeProcess(89, "still-running")],
+    });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    await assert.rejects(
+      () => runtime.getExecLogs(handle, "still-running", "89"),
+      /is still running/u,
+    );
+    assert.equal(sandbox.calls.run.length, 0, "logs are not read before terminal status exists");
+  });
+
+  it("must-not-fire: getExecLogs propagates log transport failure instead of returning empty output", async () => {
+    const upstream = new Error("log transport failed");
+    const sandbox = fakeSandbox({
+      id: "sbx-exec-logs-error",
+      readText: async (path) => path.endsWith("/exit") ? "0\n" : "",
+      run: async () => { throw upstream; },
+    });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics);
+    const handle = await runtime.launch();
+
+    await assert.rejects(
+      () => runtime.getExecLogs(handle, "finished", "90"),
+      upstream,
+    );
   });
 });
 
@@ -720,31 +996,68 @@ type FakeCommandResult = {
   stderr: string;
 };
 
+function fakeProcess(pid: number, sessionId: string, fingerprint = "f".repeat(64)) {
+  return {
+    pid,
+    cmd: "/bin/bash",
+    args: ["-l", "-c", "wrapped command"],
+    envs: {
+      AGENTWORKFORCE_E2B_ASYNC_SESSION:
+        Buffer.from(sessionId, "utf8").toString("base64url") || "empty",
+      AGENTWORKFORCE_E2B_ASYNC_REQUEST: fingerprint,
+    },
+  };
+}
+
 function fakeSandbox(options: {
   id: string;
   run?: (
     command: string,
     runOptions?: FakeRunOptions,
   ) => Promise<FakeCommandResult | { pid: number }>;
+  claim?: (command: string) => Promise<FakeCommandResult>;
   readBytes?: Uint8Array;
+  readText?: (path: string) => Promise<string>;
+  processes?: Array<{
+    pid: number;
+    cmd: string;
+    args: string[];
+    envs?: Record<string, string>;
+  }>;
 }) {
   const calls: {
     run: Array<{ command: string; options?: FakeRunOptions }>;
     write: Array<{ path: string; data: ArrayBuffer }>;
-    read: Array<{ path: string; options: { format: "bytes" } }>;
+    read: Array<{ path: string; options: { format?: "text" | "bytes"; requestTimeoutMs?: number } }>;
     setTimeout: number[];
+    listProcesses: number;
+    killProcesses: number[];
   } = {
     run: [],
     write: [],
     read: [],
     setTimeout: [],
+    listProcesses: 0,
+    killProcesses: [],
   };
+  const claimedSessions = new Set<string>();
   return {
     sandboxId: options.id,
     calls,
     commands: {
       run: async (command: string, runOptions?: FakeRunOptions) => {
         calls.run.push({ command, ...(runOptions ? { options: runOptions } : {}) });
+        if (command.includes("# AGENTWORKFORCE_E2B_ASYNC_CLAIM")) {
+          if (options.claim) {
+            return options.claim(command);
+          }
+          const sessionDir = command.match(/if mkdir ('[^\n]+') 2>\/dev\/null/u)?.[1] ?? command;
+          if (claimedSessions.has(sessionDir)) {
+            return { exitCode: 0, stdout: "existing\n", stderr: "" };
+          }
+          claimedSessions.add(sessionDir);
+          return { exitCode: 0, stdout: "created\n", stderr: "" };
+        }
         if (options.run) {
           return options.run(command, runOptions);
         }
@@ -752,14 +1065,31 @@ function fakeSandbox(options: {
           ? { pid: 1001 }
           : { exitCode: 0, stdout: "", stderr: "" };
       },
+      list: async () => {
+        calls.listProcesses += 1;
+        return options.processes ?? [];
+      },
+      kill: async (pid: number) => {
+        calls.killProcesses.push(pid);
+        return true;
+      },
     },
     files: {
       write: async (path: string, data: ArrayBuffer) => {
         calls.write.push({ path, data });
         return {};
       },
-      read: async (path: string, readOptions: { format: "bytes" }) => {
+      read: async (
+        path: string,
+        readOptions: { format?: "text" | "bytes"; requestTimeoutMs?: number },
+      ) => {
         calls.read.push({ path, options: readOptions });
+        if (readOptions.format === "text" || readOptions.format === undefined) {
+          if (options.readText) {
+            return options.readText(path);
+          }
+          throw Object.assign(new Error(`file not found: ${path}`), { name: "FileNotFoundError" });
+        }
         return options.readBytes ?? new Uint8Array();
       },
     },
@@ -790,6 +1120,7 @@ function fakeStatics(options: {
   const calls: {
     create: Array<{ template: string; options: Record<string, unknown> }>;
     connect: string[];
+    connectOptions: Array<Record<string, unknown>>;
     getInfo: string[];
     list: Array<Record<string, unknown>>;
     nextItems: number;
@@ -798,6 +1129,7 @@ function fakeStatics(options: {
   } = {
     create: [],
     connect: [],
+    connectOptions: [],
     getInfo: [],
     list: [],
     nextItems: 0,
@@ -811,8 +1143,9 @@ function fakeStatics(options: {
       if (options.createError) throw options.createError;
       return created;
     },
-    connect: async (id: string) => {
+    connect: async (id: string, connectOptions: Record<string, unknown> = {}) => {
       calls.connect.push(id);
+      calls.connectOptions.push(connectOptions);
       const error = options.connectErrors?.get(id);
       if (error) throw error;
       return options.connected?.get(id) ?? fakeSandbox({ id });
@@ -856,7 +1189,11 @@ function fakeStatics(options: {
 
 function createRuntime(
   statics: E2BSandboxStatics,
-  options: { runBudgetMs?: number; createTimeoutMs?: number } = {},
+  options: {
+    runBudgetMs?: number;
+    createTimeoutMs?: number;
+    sandboxLifetimeMs?: number;
+  } = {},
 ) {
   return new E2BSandboxRuntime({
     apiKey: API_KEY,
