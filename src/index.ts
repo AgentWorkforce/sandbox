@@ -73,6 +73,30 @@ export type {
   E2BUploadBundleOptions,
 } from "./e2b/runtime.js";
 
+export { Agent37Runtime, Agent37EnvValidationError } from "./agent37/runtime.js";
+export type {
+  Agent37BundleFile,
+  Agent37Budget,
+  Agent37ContainerLogs,
+  Agent37CountOptions,
+  Agent37Instance,
+  Agent37InstanceStatus,
+  Agent37LaunchOptions,
+  Agent37LookupOptions,
+  Agent37PublicPort,
+  Agent37Resources,
+  Agent37RunScriptOptions,
+  Agent37RuntimeOptions,
+  Agent37UploadBundleOptions,
+} from "./agent37/runtime.js";
+export { Agent37ApiError, Agent37Client, isRetryableAgent37Code } from "./agent37/client.js";
+export type {
+  Agent37ClientOptions,
+  Agent37Fetch,
+  Agent37FetchInit,
+  Agent37FetchResponse,
+} from "./agent37/client.js";
+
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 
