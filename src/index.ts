@@ -73,6 +73,18 @@ export type {
   E2BUploadBundleOptions,
 } from "./e2b/runtime.js";
 
+export {
+  MicrosandboxCreateTimeoutError,
+  MicrosandboxNameTooLongError,
+  MicrosandboxRuntime,
+} from "./microsandbox/runtime.js";
+export type {
+  MicrosandboxBackend,
+  MicrosandboxRuntimeOptions,
+  MicrosandboxSdk,
+  MicrosandboxStatus,
+} from "./microsandbox/runtime.js";
+
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 
