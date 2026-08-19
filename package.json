@@ -26,7 +26,8 @@
   },
   "peerDependencies": {
     "@daytonaio/sdk": ">=0.180.0 <0.181.0",
-    "e2b": "^2"
+    "e2b": "^2",
+    "microsandbox": ">=0.6.11 <0.7.0"
   },
   "peerDependenciesMeta": {
     "@daytonaio/sdk": {
@@ -34,12 +35,16 @@
     },
     "e2b": {
       "optional": true
+    },
+    "microsandbox": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@daytonaio/sdk": "^0.180.0",
     "@types/node": "^22",
     "e2b": "^2.35.0",
+    "microsandbox": "^0.6.11",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },

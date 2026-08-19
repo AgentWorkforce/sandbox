@@ -61,6 +61,18 @@ export type {
 export { E2BSandboxRuntime } from "./e2b/runtime.js";
 export type { E2BSandboxRuntimeOptions, E2BSandboxStatics } from "./e2b/runtime.js";
 
+export {
+  MicrosandboxCreateTimeoutError,
+  MicrosandboxNameTooLongError,
+  MicrosandboxRuntime,
+} from "./microsandbox/runtime.js";
+export type {
+  MicrosandboxBackend,
+  MicrosandboxRuntimeOptions,
+  MicrosandboxSdk,
+  MicrosandboxStatus,
+} from "./microsandbox/runtime.js";
+
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 
