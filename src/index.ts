@@ -59,7 +59,16 @@ export type {
 } from "./daytona/runtime.js";
 
 export { E2BSandboxRuntime } from "./e2b/runtime.js";
-export type { E2BSandboxRuntimeOptions, E2BSandboxStatics } from "./e2b/runtime.js";
+export type {
+  E2BAttachedSandboxOptions,
+  E2BBundleFile,
+  E2BCountByLabelsOptions,
+  E2BFindByLabelsOptions,
+  E2BRunScriptOptions,
+  E2BSandboxRuntimeOptions,
+  E2BSandboxStatics,
+  E2BUploadBundleOptions,
+} from "./e2b/runtime.js";
 
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";

@@ -148,11 +148,10 @@ const capabilitiesByRuntime = new WeakMap<
  *
  * Hybrid by necessity: `asyncExec` / `reattach` / `detachedLaunch` are honestly
  * derivable from method presence, but `warmLease` and `lifecycle` are not —
- * every provider ships `findAllByLabels` (E2B and local return `[]` both for
- * "no server-side label search" and for "no matches", an ambiguity presence
- * cannot resolve) and every provider ships `start`/`stop` (present-but-no-op on
- * local and E2B). Those two are provider-declared, defaulting to `true` so an
- * undeclared runtime keeps today's behavior exactly.
+ * a provider can expose `findAllByLabels` while degrading unsupported search
+ * to `[]`, and can expose `start`/`stop` as compatibility no-ops. Method
+ * presence cannot distinguish either case. Those two are provider-declared,
+ * defaulting to `true` so an undeclared runtime keeps today's behavior exactly.
  */
 export function resolveSandboxRuntimeCapabilities(
   runtime: SandboxRuntime,

@@ -10,10 +10,8 @@ run commands, stream results back, and tear it down.
 The point of the port is that the orchestration layer holds no provider
 knowledge. Swapping providers is a change of adapter, not a change of caller.
 
-> **Status: pre-release scaffold.** This repository currently contains the
-> package skeleton — build, typecheck, test, and release wiring. The runtime
-> adapters and orchestrator land in subsequent changes, and the public API is
-> not stable until a `1.0.0` release.
+> **Status: pre-1.0.** The public API may still change before a `1.0.0`
+> release.
 
 ## Install
 
@@ -39,6 +37,17 @@ templates, endpoints, hostnames, or credentials: anything environment-specific
 is a required argument supplied by the caller. This keeps the package usable
 outside the environment it was extracted from, and keeps credential handling in
 the caller where it belongs.
+
+### E2B runtime contract
+
+`E2BSandboxRuntime` implements both the outer orchestration port and the live
+`WorkflowRuntime` surface: metadata/state lookup, reattachment, synchronous and
+durable asynchronous execution, upload/download, home-directory resolution,
+pause/resume, and owned-resource teardown. It deliberately does not expose a
+detached-launch method because E2B's public create call waits for a running
+sandbox. Its live capability descriptor likewise reports PTY and streaming logs
+as unsupported because this adapter exposes neither behavior, even though the
+provider SDK has lower-level APIs for them.
 
 ## Development
 
