@@ -11,6 +11,7 @@ import {
   Agent37ApiError,
   Agent37Client,
   Agent37EnvValidationError,
+  Agent37ForeignHandleError,
   Agent37Runtime,
   isRetryableAgent37Code,
   resolveSandboxRuntimeCapabilities,
@@ -140,6 +141,7 @@ describe("public barrel", () => {
     assert.equal(typeof pkg.Agent37Client, "function");
     assert.equal(typeof pkg.Agent37ApiError, "function");
     assert.equal(typeof pkg.Agent37EnvValidationError, "function");
+    assert.equal(typeof pkg.Agent37ForeignHandleError, "function");
     assert.equal(typeof pkg.isRetryableAgent37Code, "function");
   });
 });
@@ -147,13 +149,28 @@ describe("public barrel", () => {
 // --- capability declarations ---------------------------------------------
 
 describe("Agent37Runtime capabilities", () => {
-  it("declares async exec, reattach, warm lease, and lifecycle", () => {
+  it("declares reattach, warm lease, and lifecycle; NOT async exec", () => {
     const runtime = makeRuntime(harness(() => ({ json: {} })));
     const capabilities = resolveSandboxRuntimeCapabilities(runtime);
-    assert.equal(capabilities.asyncExec, true);
+    // asyncExec is false: nohup+/tmp emulation cannot provide durable guarantees.
+    // /tmp state is lost on stop/restart/update; instance crashes leave exit
+    // sentinels unwritten (indefinite null); no deduplication guard for duplicate
+    // startScript calls with the same sessionId.
+    assert.equal(capabilities.asyncExec, false);
     assert.equal(capabilities.reattach, true);
     assert.equal(capabilities.warmLease, true);
     assert.equal(capabilities.lifecycle, true);
+  });
+
+  it("does NOT expose startScript, getScriptStatus, getScriptLogs, startExec, getExecStatus, or getExecLogs", () => {
+    const runtime = makeRuntime(harness(() => ({ json: {} })));
+    const r = runtime as Record<string, unknown>;
+    assert.equal(r["startScript"], undefined, "startScript must be absent");
+    assert.equal(r["getScriptStatus"], undefined, "getScriptStatus must be absent");
+    assert.equal(r["getScriptLogs"], undefined, "getScriptLogs must be absent");
+    assert.equal(r["startExec"], undefined, "startExec must be absent");
+    assert.equal(r["getExecStatus"], undefined, "getExecStatus must be absent");
+    assert.equal(r["getExecLogs"], undefined, "getExecLogs must be absent");
   });
 
   it("does NOT claim detached launch: create returns only once the instance is running", () => {
@@ -481,6 +498,27 @@ describe("Agent37Runtime.launch", () => {
     assert.deepEqual(body, {});
   });
 
+  it("maps the singular label option to a metadata entry", async () => {
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+    await makeRuntime(h).launch({ label: "my-run" });
+    const body = JSON.parse(bodyText(h.requests[0] as RecordedRequest)) as Record<string, unknown>;
+    assert.deepEqual(body.metadata, { label: "my-run" });
+  });
+
+  it("merges singular label with plural labels, plural entries taking precedence", async () => {
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+    await makeRuntime(h).launch({ label: "base", labels: { purpose: "test", label: "override" } });
+    const body = JSON.parse(bodyText(h.requests[0] as RecordedRequest)) as Record<string, unknown>;
+    assert.deepEqual(body.metadata, { purpose: "test", label: "override" });
+  });
+
+  it("omits metadata entirely when neither label nor labels are provided", async () => {
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+    await makeRuntime(h).launch({ name: "x" });
+    const body = JSON.parse(bodyText(h.requests[0] as RecordedRequest)) as Record<string, unknown>;
+    assert.equal("metadata" in body, false);
+  });
+
   it("rejects env the provider would reject, before any request is sent", async () => {
     const h = harness(() => ({ status: 201, json: instanceObject() }));
     const runtime = makeRuntime(h);
@@ -513,6 +551,114 @@ describe("Agent37Runtime.launch", () => {
     );
     await makeRuntime(h).launch({ env: atLimit });
     assert.equal(h.requests.length, 1);
+  });
+});
+
+// --- ownership enforcement ------------------------------------------------
+
+describe("Agent37Runtime ownership enforcement", () => {
+  it("refuses to destroy a foreign instance not launched by this runtime", async () => {
+    const h = harness(() => ({ json: {} }));
+    await assert.rejects(
+      makeRuntime(h).destroy(RUNNING_HANDLE),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof Agent37ForeignHandleError,
+          `expected Agent37ForeignHandleError, got ${String(error)}`,
+        );
+        assert.match(error.message, /foreign/);
+        assert.match(error.message, /ab12cd34ef/);
+        return true;
+      },
+    );
+    assert.equal(h.requests.length, 0, "must not send any request for a foreign handle");
+  });
+
+  it("refuses to start a foreign instance", async () => {
+    const h = harness(() => ({ json: {} }));
+    await assert.rejects(makeRuntime(h).start(RUNNING_HANDLE), Agent37ForeignHandleError);
+    assert.equal(h.requests.length, 0, "must not send any request for a foreign handle");
+  });
+
+  it("refuses to stop a foreign instance", async () => {
+    const h = harness(() => ({ json: {} }));
+    await assert.rejects(makeRuntime(h).stop(RUNNING_HANDLE), Agent37ForeignHandleError);
+    assert.equal(h.requests.length, 0, "must not send any request for a foreign handle");
+  });
+
+  it("allows destroy on an instance launched by this runtime", async () => {
+    const launched = instanceObject({ id: "owned_instance" });
+    const h = harness((request) =>
+      request.method === "POST" && request.url.endsWith("/v1/instances")
+        ? { status: 201, json: launched }
+        : { json: {} },
+    );
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch();
+    assert.equal(handle.id, "owned_instance");
+    await runtime.destroy(handle);
+    const deleteRequest = h.requests.find(
+      (r) => r.method === "DELETE" && r.url.includes("owned_instance"),
+    );
+    assert.ok(deleteRequest, "DELETE request must have been sent for the owned instance");
+  });
+
+  it("allows start and stop on an instance launched by this runtime", async () => {
+    const launched = instanceObject({ id: "owned_instance" });
+    const h = harness((request) =>
+      request.method === "POST" && request.url.endsWith("/v1/instances")
+        ? { status: 201, json: launched }
+        : { json: { id: "owned_instance", status: "running" } },
+    );
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch();
+    const started = await runtime.start(handle);
+    assert.equal(started.state, "STARTED");
+    await runtime.stop(handle);
+    const stopRequest = h.requests.find(
+      (r) => r.method === "POST" && r.url.includes("owned_instance/stop"),
+    );
+    assert.ok(stopRequest, "POST /stop must have been sent for the owned instance");
+  });
+
+  it("findAllByLabels with owned: true returns only instances launched by this runtime", async () => {
+    const ownedInstance = instanceObject({ id: "owned_id" });
+    const foreignInstance = instanceObject({ id: "foreign_id" });
+    const h = harness((request) =>
+      request.method === "POST" && request.url.endsWith("/v1/instances")
+        ? { status: 201, json: ownedInstance }
+        : { json: { data: [ownedInstance, foreignInstance] } },
+    );
+    const runtime = makeRuntime(h);
+    await runtime.launch();
+    const ownedHandles = await runtime.findAllByLabels({}, { owned: true });
+    assert.deepEqual(
+      ownedHandles.map((handle) => handle.id),
+      ["owned_id"],
+      "owned: true must exclude foreign instances",
+    );
+    const allHandles = await runtime.findAllByLabels({}, { owned: false });
+    assert.equal(allHandles.length, 2, "owned: false (default) returns all matching instances");
+  });
+
+  it("getById with owned: true returns null for an instance not launched by this runtime", async () => {
+    const h = harness(() => ({ json: instanceObject() }));
+    const handle = await makeRuntime(h).getById("ab12cd34ef", { owned: true });
+    assert.equal(handle, null, "foreign instance must not be returned when owned: true");
+    assert.equal(h.requests.length, 0, "must short-circuit without a network round trip");
+  });
+
+  it("getById with owned: true returns an instance that was launched by this runtime", async () => {
+    const launched = instanceObject({ id: "owned_id" });
+    const h = harness((request) =>
+      request.method === "POST"
+        ? { status: 201, json: launched }
+        : { json: launched },
+    );
+    const runtime = makeRuntime(h);
+    await runtime.launch();
+    const handle = await runtime.getById("owned_id", { owned: true });
+    assert.equal(handle?.id, "owned_id");
   });
 });
 
@@ -678,18 +824,45 @@ describe("Agent37Runtime.runScript", () => {
       stdout: "partial",
       stderr: "boom",
       exitCode: 2,
+      truncated: true,
     });
   });
 
-  it("maps a missing exit code to null on the port and to 0 on the bootstrap plane", async () => {
+  it("exposes truncated: true when the provider caps output at 512 KB", async () => {
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "big output", truncated: true } }));
+    const result = (await makeRuntime(h).runScript(RUNNING_HANDLE, { command: "x" })) as {
+      truncated?: boolean;
+    };
+    assert.equal(result.truncated, true, "truncated must be surfaced so callers know output is incomplete");
+  });
+
+  it("maps a missing exit_code to null (unknown outcome, not a success)", async () => {
     const h = harness(() => ({ json: { stdout: "hi" } }));
-    const runtime = makeRuntime(h);
-    assert.equal(
-      (await runtime.runScript(RUNNING_HANDLE, { command: "x" })).exitCode,
-      null,
-      "an omitted exit_code is an unknown outcome, not a success",
+    const result = await makeRuntime(h).runScript(RUNNING_HANDLE, { command: "x" });
+    assert.equal(result.exitCode, null, "an omitted exit_code is an unknown outcome");
+  });
+
+  it("exec throws on a missing exit_code rather than projecting it to 0", async () => {
+    const h = harness(() => ({ json: { stdout: "hi" } }));
+    await assert.rejects(
+      makeRuntime(h).exec(RUNNING_HANDLE, "x"),
+      /unknown outcome|exit_code/,
+      "an unknown exec outcome must not be reported as success",
     );
-    assert.deepEqual(await runtime.exec(RUNNING_HANDLE, "x"), { output: "hi", exitCode: 0 });
+  });
+
+  it("timeoutMs on exec bounds the HTTP call, not the command inside the instance", async () => {
+    // The provider caps commands at 280s and signals that via provisioning_failed.
+    // A caller passing timeoutMs: 5000 aborts the HTTP request after 5s but the
+    // command keeps running inside the instance. This test verifies the signal
+    // is set on the request (HTTP timeout) rather than sent to the command.
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "" } }));
+    await makeRuntime(h).exec(RUNNING_HANDLE, "fast-cmd", { timeoutMs: 5000 });
+    assert.equal(
+      (h.requests[0] as RecordedRequest).hasSignal,
+      true,
+      "timeoutMs must set an AbortSignal on the HTTP request",
+    );
   });
 
   it("rejects invalid env names before they can reach a shell", async () => {
@@ -702,115 +875,6 @@ describe("Agent37Runtime.runScript", () => {
       Agent37EnvValidationError,
     );
     assert.equal(h.requests.length, 0);
-  });
-});
-
-// --- asynchronous execution ----------------------------------------------
-
-describe("Agent37Runtime.startScript", () => {
-  it("detaches the run and returns the background pid as the command id", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "4213\n", stderr: "" } }));
-    const started = await makeRuntime(h).startScript(RUNNING_HANDLE, {
-      command: "npm run build",
-      sessionId: "lease/42",
-      cwd: "/work",
-      env: { CI: "1" },
-    });
-
-    assert.deepEqual(started, { sessionId: "lease/42", commandId: "4213" });
-    const command = execCommand(h.requests[0] as RecordedRequest);
-    const dir = "/tmp/agent37-run/lease_42";
-    assert.match(command, new RegExp(`^mkdir -p '${dir}'\n`));
-    assert.match(command, new RegExp(`nohup sh '${dir}/run\\.sh' >/dev/null 2>&1 &`));
-    assert.match(command, /\necho \$!$/);
-
-    // The caller's program is carried as base64, so no caller byte is ever
-    // parsed as shell syntax.
-    assert.equal(
-      decodeWrittenFile(command, `${dir}/cmd.sh`),
-      "cd '/work' || exit 1\nexport CI='1'\nnpm run build\n",
-    );
-    assert.equal(
-      decodeWrittenFile(command, `${dir}/run.sh`),
-      `sh '${dir}/cmd.sh' > '${dir}/out' 2>&1\necho $? > '${dir}/exit'\n`,
-    );
-  });
-
-  it("carries a hostile command through base64 without letting it escape", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "1\n" } }));
-    const hostile = "echo '; rm -rf /' \"$(whoami)\" `id` \\\n";
-    await makeRuntime(h).startScript(RUNNING_HANDLE, { command: hostile, sessionId: "s1" });
-    const command = execCommand(h.requests[0] as RecordedRequest);
-    assert.ok(!command.includes("rm -rf /"), "the payload must not appear as shell text");
-    assert.equal(
-      decodeWrittenFile(command, "/tmp/agent37-run/s1/cmd.sh"),
-      `${hostile}\n`,
-    );
-  });
-
-  it("defaults the session id when the caller supplies none", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "9\n" } }));
-    const started = await makeRuntime(h).startScript(RUNNING_HANDLE, { command: "x" });
-    assert.match(started.sessionId, /^run-ab12cd34ef-\d+$/);
-  });
-
-  it("fails loudly when the bootstrap exec itself fails", async () => {
-    const h = harness(() => ({ json: { exit_code: 1, stdout: "", stderr: "no space left" } }));
-    await assert.rejects(
-      makeRuntime(h).startScript(RUNNING_HANDLE, { command: "x", sessionId: "s1" }),
-      /no space left/,
-    );
-  });
-
-  it("treats a bootstrap reply with no exit code as a failure, not a launch", async () => {
-    const h = harness(() => ({ json: { stdout: "4213\n" } }));
-    await assert.rejects(
-      makeRuntime(h).startScript(RUNNING_HANDLE, { command: "x", sessionId: "s1" }),
-      /exit null/,
-      "an unknown bootstrap outcome must not be reported as a started run",
-    );
-  });
-
-  it("routes startExec through the same durable path", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "77\n" } }));
-    const started = await makeRuntime(h).startExec(RUNNING_HANDLE, "x", { sessionId: "s2" });
-    assert.deepEqual(started, { sessionId: "s2", commandId: "77" });
-  });
-});
-
-describe("Agent37Runtime background polling", () => {
-  it("reads the exit code from the durable file", async () => {
-    for (const [raw, expected] of [
-      ["", null],
-      ["   \n", null],
-      ["0\n", 0],
-      ["137\n", 137],
-      ["not-a-number\n", null],
-    ] as const) {
-      const h = harness(() => ({ json: { exit_code: 0, stdout: raw } }));
-      const status = await makeRuntime(h).getScriptStatus(RUNNING_HANDLE, "s1", "1");
-      assert.equal(status.exitCode, expected, `for ${JSON.stringify(raw)}`);
-      assert.equal(
-        execCommand(h.requests[0] as RecordedRequest),
-        "tail -c 64 '/tmp/agent37-run/s1/exit' 2>/dev/null || true",
-      );
-    }
-  });
-
-  it("does NOT invent an exit code when reading logs", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "build output" } }));
-    const logs = await makeRuntime(h).getScriptLogs(RUNNING_HANDLE, "s1", "42");
-    assert.deepEqual(logs, { output: "build output", exitCode: null, cmdId: "42" });
-    assert.equal(
-      execCommand(h.requests[0] as RecordedRequest),
-      "tail -c 262144 '/tmp/agent37-run/s1/out' 2>/dev/null || true",
-    );
-  });
-
-  it("bounds the log read at the configured size", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "" } }));
-    await makeRuntime(h, { scriptLogReadMaxBytes: 4096 }).getScriptLogs(RUNNING_HANDLE, "s1", "1");
-    assert.match(execCommand(h.requests[0] as RecordedRequest), /^tail -c 4096 /);
   });
 });
 
@@ -925,40 +989,62 @@ describe("Agent37Runtime file transfer", () => {
 // --- lifecycle ------------------------------------------------------------
 
 describe("Agent37Runtime lifecycle", () => {
-  it("starts and stops through the hosting plane", async () => {
-    const h = harness(() => ({ json: { id: "ab12cd34ef", status: "running" } }));
+  it("starts and stops through the hosting plane (for owned instances)", async () => {
+    const launchedInstance = instanceObject({ id: "owned" });
+    const h = harness((request) =>
+      request.method === "POST" && request.url.endsWith("/v1/instances")
+        ? { status: 201, json: launchedInstance }
+        : { json: { id: "owned", status: "running" } },
+    );
     const runtime = makeRuntime(h);
-    const started = await runtime.start({ ...RUNNING_HANDLE, state: "STOPPED" });
+    const handle = await runtime.launch();
+    const started = await runtime.start({ ...handle, state: "STOPPED" });
     assert.equal(started.state, "STARTED");
-    assert.equal(
-      (h.requests[0] as RecordedRequest).url,
-      `${TEST_BASE_URL}/v1/instances/ab12cd34ef/start`,
+    assert.ok(
+      (h.requests[1] as RecordedRequest).url.includes("/owned/start"),
+      "POST /start must target the owned instance",
     );
-    await runtime.stop(RUNNING_HANDLE);
-    assert.equal(
-      (h.requests[1] as RecordedRequest).url,
-      `${TEST_BASE_URL}/v1/instances/ab12cd34ef/stop`,
-    );
-    assert.equal((h.requests[1] as RecordedRequest).method, "POST");
+    await runtime.stop(handle);
+    const stopRequest = h.requests[2] as RecordedRequest;
+    assert.ok(stopRequest.url.includes("/owned/stop"));
+    assert.equal(stopRequest.method, "POST");
   });
 
-  it("deletes the instance", async () => {
-    const h = harness(() => ({ json: { id: "ab12cd34ef", deleted: true } }));
-    await makeRuntime(h).destroy(RUNNING_HANDLE);
-    const request = h.requests[0] as RecordedRequest;
-    assert.equal(request.method, "DELETE");
-    assert.equal(request.url, `${TEST_BASE_URL}/v1/instances/ab12cd34ef`);
+  it("deletes an owned instance", async () => {
+    const launchedInstance = instanceObject({ id: "owned" });
+    const h = harness((request) =>
+      request.method === "POST" ? { status: 201, json: launchedInstance } : { json: {} },
+    );
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch();
+    await runtime.destroy(handle);
+    const deleteRequest = h.requests.find((r) => r.method === "DELETE") as RecordedRequest;
+    assert.ok(deleteRequest.url.includes("/owned"));
   });
 
-  it("treats an already-deleted instance as torn down", async () => {
-    const h = harness(() => ({ status: 404, json: { error: { code: "not_found" } } }));
-    await makeRuntime(h).destroy(RUNNING_HANDLE);
-    assert.equal(h.requests.length, 1);
+  it("treats an already-deleted owned instance as torn down", async () => {
+    const launchedInstance = instanceObject({ id: "owned" });
+    const h = harness((request) =>
+      request.method === "POST" && request.url.endsWith("/v1/instances")
+        ? { status: 201, json: launchedInstance }
+        : { status: 404, json: { error: { code: "not_found" } } },
+    );
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch();
+    await runtime.destroy(handle);
+    assert.equal(h.requests.length, 2);
   });
 
   it("does NOT swallow a non-404 delete failure", async () => {
-    const h = harness(() => ({ status: 500, json: { error: { code: "internal" } } }));
-    await assert.rejects(makeRuntime(h).destroy(RUNNING_HANDLE), /internal/);
+    const launchedInstance = instanceObject({ id: "owned" });
+    const h = harness((request) =>
+      request.method === "POST" && request.url.endsWith("/v1/instances")
+        ? { status: 201, json: launchedInstance }
+        : { status: 500, json: { error: { code: "internal" } } },
+    );
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch();
+    await assert.rejects(runtime.destroy(handle), /internal/);
   });
 
   it("fetches container logs in any state, with an optional tail", async () => {

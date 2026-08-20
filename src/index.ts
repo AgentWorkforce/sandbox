@@ -73,7 +73,7 @@ export type {
   E2BUploadBundleOptions,
 } from "./e2b/runtime.js";
 
-export { Agent37Runtime, Agent37EnvValidationError } from "./agent37/runtime.js";
+export { Agent37Runtime, Agent37EnvValidationError, Agent37ForeignHandleError } from "./agent37/runtime.js";
 export type {
   Agent37BundleFile,
   Agent37Budget,
