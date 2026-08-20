@@ -1854,9 +1854,11 @@ describe('DaytonaRuntime smoke', { concurrency: false }, () => {
     'launches a sandbox, runs node -e, and destroys it',
     { skip: HAS_DAYTONA ? false : 'DAYTONA_API_KEY is not set', timeout: 120_000 },
     async () => {
-      assert.ok(runtime, 'runtime should be initialised when DAYTONA_API_KEY is set');
+      assert.ok(runtime && daytona, 'runtime should be initialised when DAYTONA_API_KEY is set');
       handle = await runtime.launch({ label: SMOKE_LABEL });
       createdSandboxIds.add(handle.id);
+      const visible = await daytona.get(handle.id);
+      assert.equal(visible.id, handle.id, 'exact-ID cleanup predicate must see the live sandbox');
       const result = await runtime.exec(handle, "node -e 'console.log(\"ok\")'");
       assert.equal(
         result.exitCode,
