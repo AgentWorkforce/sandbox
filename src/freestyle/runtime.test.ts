@@ -422,7 +422,7 @@ describe("FreestyleRuntime lifecycle and verified cleanup", () => {
     assert.equal(calls.delete.length, 0);
   });
 
-  it("destroy accepts deleted:true as verified absence and drops ownership only afterward", async () => {
+  it("must-fire: destroy accepts deleted:true as verified absence and drops ownership only afterward", async () => {
     const { runtime, calls } = mockRuntime({
       states: [[{ id: "vm_1", name: "cmpfree-test-one", state: "stopped", deleted: true }]],
     });
@@ -430,6 +430,20 @@ describe("FreestyleRuntime lifecycle and verified cleanup", () => {
     await runtime.destroy(handle);
     await runtime.destroy(handle);
     assert.deepEqual(calls.delete, ["vm_1"]);
+  });
+
+  it("must-not-fire: a malformed retained row cannot masquerade as verified absence", async () => {
+    const malformed = {
+      id: "vm_1",
+      name: "cmpfree-test-one",
+      deleted: false,
+    } as unknown as FreestyleVmListItem;
+    const { runtime, calls } = mockRuntime({ states: [[malformed]] });
+    const handle = await runtime.launch();
+
+    await assert.rejects(runtime.destroy(handle), /VM list item 0 is malformed/u);
+    await assert.rejects(runtime.destroy(handle), /VM list item 0 is malformed/u);
+    assert.deepEqual(calls.delete, ["vm_1", "vm_1"]);
   });
 
   it("retains ownership when delete cannot be verified so cleanup can retry", async () => {
