@@ -549,6 +549,27 @@ export type MicrosandboxRuntimeOptions = {
   backendQueueTimeoutMs?: number;
   /** Injection seam for tests / a wrapping adapter — defaults to lazy `import("microsandbox")`. */
   sdk?: MicrosandboxSdk;
+  /**
+   * Called when the reclamation of a late-succeeded create — the one triggered
+   * by `MicrosandboxCreateTimeoutError` — could not tear the sandbox down.
+   *
+   * The reclamation path used to swallow every error silently, on the theory
+   * that a leaked microVM is at worst best-effort waste. It is not: a
+   * silently swallowed teardown is a leak that no downstream observer can see
+   * or bill, which is exactly the failure mode PR #10 was blocked on. Now the
+   * silent catch is replaced by this hook, called synchronously with the
+   * sandbox NAME (never argv, never a secret) and the underlying error, so
+   * consumers can log, page, or re-queue an operator cleanup. The reclamation
+   * promise still resolves — the caller of `launch` already has its typed
+   * timeout error, and throwing here would produce an unhandled rejection
+   * on a promise the caller cannot await.
+   *
+   * The hook is CALLED SYNCHRONOUSLY inside the reclamation's async catch,
+   * so it must not throw or the runtime will emit an unhandled rejection. Any
+   * async follow-up (log flush, alert dispatch) should be scheduled by the
+   * hook and awaited elsewhere.
+   */
+  onReclaimFailure?: (sandboxName: string, error: unknown) => void;
 };
 
 /**
@@ -1532,6 +1553,7 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   private readonly listPageSize: number;
   private readonly backendQueueTimeoutMs: number;
   private readonly injectedSdk?: MicrosandboxSdk;
+  private readonly onReclaimFailure?: (sandboxName: string, error: unknown) => void;
   private sdkPromise?: Promise<MicrosandboxSdk>;
 
   // What this runtime knows about each sandbox name: the live instance
@@ -1631,6 +1653,9 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     this.backendQueueTimeoutMs = options.backendQueueTimeoutMs ?? DEFAULT_BACKEND_QUEUE_TIMEOUT_MS;
     if (options.sdk !== undefined) {
       this.injectedSdk = options.sdk;
+    }
+    if (options.onReclaimFailure !== undefined) {
+      this.onReclaimFailure = options.onReclaimFailure;
     }
   }
 
@@ -1939,10 +1964,32 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       async () => {
         try {
           await this.forceDestroy(name);
-        } catch {
-          // Best effort. The sandbox stays addressable under its deterministic
-          // name, so an operator (or a later launch of the same name) can still
-          // reclaim it.
+        } catch (error) {
+          // The reclamation cannot re-throw here — the promise it lives on is
+          // detached and no caller is awaiting it, so a rejection becomes an
+          // unhandled rejection instead of ever reaching a `.catch`. But
+          // "cannot re-throw" was previously implemented as SILENTLY DROP,
+          // which is what let the cloud-backend destroy leak land: the caller
+          // saw a clean timeout error, the sandbox stayed running, and no
+          // observer was told. The hook makes the failure recoverable in the
+          // sense that actually matters — a downstream logger or pager sees
+          // it — while a later `launch` of the same name still waits on
+          // `pendingReclaims` and gets a shot at reclaiming it.
+          //
+          // Called INSIDE this catch so a throwing hook still crashes here
+          // rather than in the caller — a runtime option's misbehaviour must
+          // not surprise an unrelated caller of `launch`.
+          if (this.onReclaimFailure) {
+            try {
+              this.onReclaimFailure(name, error);
+            } catch {
+              // Deliberately swallowed: a hook that throws its own error must
+              // not be able to escalate a background reclamation failure into
+              // an unhandled rejection. The original teardown failure is
+              // already visible via any prior hook call and via the sandbox
+              // still being addressable by name on the provider.
+            }
+          }
         }
       },
       () => {
@@ -2379,11 +2426,30 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   }
 
   /**
-   * Kill + remove by name, with no ownership check.
+   * Stop-if-running + remove by name, with no ownership check.
    *
    * Private on purpose: the only callers are `destroy` (which has already
    * checked) and the reclamation of a create that landed after its deadline
    * (which is reclaiming a sandbox this runtime itself asked for).
+   *
+   * Backend-safe order — this is what makes the destroy path work on the
+   * hosted cloud backend. `SandboxHandle.kill()` is not implemented there:
+   * the SDK answers it with `UnsupportedError` (code `"unsupported"`,
+   * message `"Sandbox::kill is not supported by this backend: use
+   * Sandbox::stop"`), and the previous code re-threw that error before
+   * `remove()` was ever reached, so every cloud destroy left a running
+   * sandbox behind. `stop()` works on both backends, so the sequence is:
+   *
+   *   1. Try `kill()` — a stronger, faster teardown that local supports.
+   *   2. If the backend answers `Unsupported`, fall back to `stop()` — the
+   *      call the hosted backend documents.
+   *   3. Either way, `remove()` clears the record (which requires the
+   *      sandbox to be stopped, and cannot delete a still-running one).
+   *
+   * `already-stopped` and `not-found` on the first-step call are both fine
+   * because they mean the same thing for the caller: the sandbox is
+   * quiescent by the time `remove()` runs. Any other error is fatal to the
+   * teardown and re-thrown, so the caller retains responsibility.
    */
   private async forceDestroy(name: string): Promise<void> {
     const entry = await this.lookupHandle(name);
@@ -2393,9 +2459,22 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     try {
       await entry.kill();
     } catch (error) {
-      // `remove` requires a stopped sandbox; a kill that failed because it was
-      // already stopped must not block the removal that frees the name.
-      if (!isSandboxNotFound(error) && !isAlreadyStopped(error)) {
+      if (isSandboxNotFound(error) || isAlreadyStopped(error)) {
+        // Already quiescent; drop to remove.
+      } else if (isUnsupportedByBackend(error)) {
+        // Hosted backend path: kill is not implemented, so `stop` is the
+        // documented equivalent. A `not-found`/`already-stopped` here is
+        // still fine — same reasoning as the kill catch above. Any other
+        // error means the sandbox is NOT quiescent and remove would fail
+        // anyway, so we surface it.
+        try {
+          await entry.stop();
+        } catch (stopError) {
+          if (!isSandboxNotFound(stopError) && !isAlreadyStopped(stopError)) {
+            throw stopError;
+          }
+        }
+      } else {
         throw error;
       }
     }
@@ -2766,6 +2845,30 @@ function isAlreadyStopped(error: unknown): boolean {
   }
   const message = (error as { message?: unknown }).message;
   return typeof message === "string" && /already\s+stopped|not\s+running/i.test(message);
+}
+
+/**
+ * True when the SDK signals the backend does not implement a lifecycle call
+ * the adapter tried to use, e.g. `SandboxHandle.kill` on the hosted
+ * (cloud) backend which throws `UnsupportedError` with code `"unsupported"`.
+ *
+ * Uses the SDK's typed code first (authoritative when present, per
+ * `MicrosandboxErrorCode` in `errors.d.ts`), and only falls back to the
+ * error name when a producer forwarded the exception without preserving the
+ * code — the message text is deliberately not inspected because the
+ * caller-visible sentence "use Sandbox::stop" is a formatting detail of one
+ * SDK version, not an interoperable contract.
+ */
+function isUnsupportedByBackend(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string") {
+    return code === "unsupported" || code === "unsupportedOperation";
+  }
+  const name = (error as { name?: unknown }).name;
+  return name === "UnsupportedError" || name === "UnsupportedOperationError";
 }
 
 /** Turn the status script's `LOST <reason>` token into something a human reads. */

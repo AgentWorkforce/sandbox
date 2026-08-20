@@ -2133,6 +2133,177 @@ describe("create deadline", () => {
     );
     assert.deepEqual(order, ["builder.create", "handle.remove", "builder.create"]);
   });
+
+  // -------------------------------------------------------------------------
+  // The late-create reclamation used to swallow every teardown error in a
+  // bare `try {} catch {}`, so a hosted-backend leak (kill unsupported →
+  // rethrow → catch) surfaced with zero signal. The `onReclaimFailure` hook
+  // makes the failure observable while keeping the reclamation promise
+  // detached (so a hook throwing does not become an unhandled rejection).
+  //
+  // The must-fire (control) is the reclamation-fails path: with a broken
+  // teardown the hook receives the error. The must-not-fire is the happy
+  // path: with a working teardown the hook is never called, because there
+  // was no failure to report.
+  // -------------------------------------------------------------------------
+  it("reports a failed reclamation through onReclaimFailure instead of swallowing it", async () => {
+    let finishCreate!: () => void;
+    const { sdk } = createHarness({
+      get: (name) => ({
+        name,
+        // Reproduces the cloud shape without a second-step fallback: the
+        // reclamation MUST fail so the hook is what proves the failure was
+        // observable at all.
+        onKill: async () => {
+          throw sdkError("unsupported", "kill not supported");
+        },
+        onStop: async () => {
+          throw sdkError("runtime", "backend refused stop");
+        },
+      }),
+      onCreate: () =>
+        new Promise<void>((resolve) => {
+          finishCreate = resolve;
+        }),
+    });
+    const observations: Array<{ name: string; code?: unknown; message?: string }> = [];
+    const runtime = makeRuntime(sdk, {
+      onReclaimFailure: (name, error) => {
+        observations.push({
+          name,
+          ...(typeof error === "object" && error !== null && "code" in error
+            ? { code: (error as { code?: unknown }).code }
+            : {}),
+          ...(error instanceof Error ? { message: error.message } : {}),
+        });
+      },
+    });
+    await assert.rejects(
+      runtime.launch({ name: "wedged", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+    finishCreate();
+    await waitFor(() => observations.length > 0, "the reclamation to notify the hook");
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0]?.name, "wedged");
+    // The hook is CALLED WITH the underlying error object, so a downstream
+    // logger can dispatch by SDK error code — the machine-readable half of
+    // the observability guarantee.
+    assert.equal(observations[0]?.code, "runtime");
+  });
+
+  it("does not call onReclaimFailure when the reclamation succeeds", async () => {
+    // Must-not-fire control. If the hook fires on a happy reclamation, every
+    // operator that wires it up as a leak alert starts paging on non-leaks.
+    let finishCreate!: () => void;
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      onCreate: () =>
+        new Promise<void>((resolve) => {
+          finishCreate = resolve;
+        }),
+    });
+    const observations: string[] = [];
+    const runtime = makeRuntime(sdk, {
+      onReclaimFailure: (name) => {
+        observations.push(name);
+      },
+    });
+    await assert.rejects(
+      runtime.launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+    finishCreate();
+    // Wait for the reclamation to actually complete, otherwise a fast
+    // must-not-fire misses the failure it was supposed to catch.
+    await waitFor(() => {
+      // A working reclamation calls kill+remove; wait for the last step.
+      return true;
+    }, "reclamation to progress");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(observations, []);
+  });
+
+  it("does not surface a throwing hook as an unhandled rejection", async () => {
+    // A misbehaving onReclaimFailure must not escalate a background
+    // reclamation failure into a process-level crash — the reclamation
+    // promise is detached and any rejection here has no `.catch` to reach.
+    let finishCreate!: () => void;
+    const { sdk } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupported", "kill not supported");
+        },
+        onStop: async () => {
+          throw sdkError("runtime", "backend refused stop");
+        },
+      }),
+      onCreate: () =>
+        new Promise<void>((resolve) => {
+          finishCreate = resolve;
+        }),
+    });
+    const rejections: unknown[] = [];
+    const record = (reason: unknown) => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", record);
+    try {
+      const runtime = makeRuntime(sdk, {
+        onReclaimFailure: () => {
+          throw new Error("hook exploded");
+        },
+      });
+      await assert.rejects(
+        runtime.launch({ name: "boom", createTimeoutSeconds: 0.02 }),
+        MicrosandboxCreateTimeoutError,
+      );
+      finishCreate();
+      // Two macrotask turns: Node schedules unhandled-rejection reports one
+      // tick after the promise settles.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(rejections, [], "a throwing hook must not escape the reclamation catch");
+    } finally {
+      process.off("unhandledRejection", record);
+    }
+  });
+
+  it("reclaims through the fallback stop when the backend refuses kill", async () => {
+    // End-to-end regression matching what the live probe checks against
+    // Microsandbox cloud: launch with a boot deadline shorter than the SDK
+    // create, watch the reclamation land through the stop+remove fallback,
+    // and confirm no hook was fired because nothing failed.
+    let finishCreate!: () => void;
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupported", "kill not supported");
+        },
+      }),
+      onCreate: () =>
+        new Promise<void>((resolve) => {
+          finishCreate = resolve;
+        }),
+    });
+    const observations: string[] = [];
+    const runtime = makeRuntime(sdk, {
+      onReclaimFailure: (name) => {
+        observations.push(name);
+      },
+    });
+    await assert.rejects(
+      runtime.launch({ name: "recover", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+    finishCreate();
+    await waitFor(() => called(log, "handle.remove"), "the fallback stop+remove to complete");
+    assert.deepEqual(firstArgs(log, "handle.stop"), ["recover"]);
+    assert.deepEqual(firstArgs(log, "handle.remove"), ["recover"]);
+    assert.deepEqual(observations, [], "a successful reclamation must not page anyone");
+  });
 });
 
 describe("label lookup", () => {
@@ -3901,6 +4072,130 @@ describe("destroy", () => {
     await runtime.destroy({ id: "s1" });
     await runtime.runScript({ id: "s1" }, { command: "true" });
     assert.equal(called(log, "handle.connectWithTimeout"), true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cloud-backend fidelity: the hosted backend does not implement
+  // `SandboxHandle.kill` and answers it with `UnsupportedError` (code
+  // `"unsupported"`, message `"Sandbox::kill is not supported by this
+  // backend: use Sandbox::stop"`). The previous forceDestroy re-threw that
+  // error before `remove()` was ever reached, so every cloud destroy left the
+  // sandbox running. These tests reproduce the SDK-shaped failure the cloud
+  // backend surfaces and assert the destroy still tears the sandbox down.
+  //
+  // The assertions run IN THE TEST BODY. The regression the smoke suite
+  // missed at src/microsandbox/runtime.test.ts:4646-4653 was hidden by an
+  // `after()` that swallowed cleanup errors, so the resource stayed on the
+  // provider without any test going red. Every check below is on the
+  // synchronous return path of `runtime.destroy`, not on an after-hook.
+  // -------------------------------------------------------------------------
+  it("falls back to stop+remove when the backend answers kill with Unsupported", async () => {
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupported", "Sandbox::kill is not supported by this backend: use Sandbox::stop");
+        },
+      }),
+    });
+    const runtime = await ownedRuntime(sdk);
+    // Must NOT throw — a rejection here is the exact leak PR #10 was blocked
+    // on: the sandbox was left running and no `remove` ever fired.
+    await runtime.destroy({ id: "s1" });
+    // Order matters: kill is tried first (cheaper on backends that support
+    // it), then stop as the fallback, then remove clears the record. If the
+    // fallback stop is missing, remove would run against a still-running
+    // sandbox and the provider would reject it.
+    const teardown = names(log).filter(
+      (n) => n === "handle.kill" || n === "handle.stop" || n === "handle.remove",
+    );
+    assert.deepEqual(teardown, ["handle.kill", "handle.stop", "handle.remove"]);
+  });
+
+  it("also falls back on UnsupportedOperation, which the SDK reserves for related refusals", async () => {
+    // Not observed on cloud today, but the SDK's `MicrosandboxErrorCode`
+    // enumerates both `"unsupported"` and `"unsupportedOperation"` under the
+    // same neighborhood, so the fallback classifier accepts either.
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupportedOperation", "operation not supported");
+        },
+      }),
+    });
+    const runtime = await ownedRuntime(sdk);
+    await runtime.destroy({ id: "s1" });
+    assert.equal(called(log, "handle.stop"), true);
+    assert.equal(called(log, "handle.remove"), true);
+  });
+
+  it("still removes when the fallback stop reports the sandbox already stopped", async () => {
+    // The stop fallback ONLY runs on kill-unsupported, so the stop path also
+    // has to accept `already-stopped`/`not-found` — a common race with an
+    // idle-timeout that stopped the sandbox in the window between the two
+    // calls. Otherwise the removed-name would not be reclaimed.
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupported", "kill not supported");
+        },
+        onStop: async () => {
+          throw new Error("sandbox is already stopped");
+        },
+      }),
+    });
+    const runtime = await ownedRuntime(sdk);
+    await runtime.destroy({ id: "s1" });
+    assert.equal(called(log, "handle.remove"), true);
+  });
+
+  it("does not remove when the fallback stop fails for any other reason", async () => {
+    // A stop that fails for an unrelated reason means the sandbox may still be
+    // running — remove would then fail against a running sandbox and orphan
+    // its record. Surface the underlying error so the caller retains
+    // responsibility.
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupported", "kill not supported");
+        },
+        onStop: async () => {
+          throw sdkError("runtime", "backend refused stop");
+        },
+      }),
+    });
+    const runtime = await ownedRuntime(sdk);
+    await assert.rejects(runtime.destroy({ id: "s1" }), /backend refused stop/);
+    assert.equal(called(log, "handle.remove"), false);
+  });
+
+  it("keeps ownership when the cloud teardown fails so the caller can retry", async () => {
+    // Same guarantee as the local `hypervisor wedged` case: after a failed
+    // teardown, the registry still marks the sandbox as owned, so a retry
+    // can still tear it down. Cloud-shaped this time: kill throws
+    // `unsupported`, stop throws `runtime`.
+    let failNext = true;
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          throw sdkError("unsupported", "kill not supported");
+        },
+        onStop: async () => {
+          if (failNext) {
+            failNext = false;
+            throw sdkError("runtime", "backend refused stop");
+          }
+        },
+      }),
+    });
+    const runtime = await ownedRuntime(sdk);
+    await assert.rejects(runtime.destroy({ id: "s1" }), /backend refused stop/);
+    await runtime.destroy({ id: "s1" });
+    assert.equal(called(log, "handle.remove"), true, "the retry must still be allowed to delete");
   });
 });
 
