@@ -75,8 +75,13 @@ export type {
 
 export {
   MicrosandboxCreateTimeoutError,
+  MicrosandboxLookupTimeoutError,
   MicrosandboxNameTooLongError,
+  MicrosandboxPaginationError,
+  MicrosandboxRunLostError,
+  MicrosandboxRunNotFinishedError,
   MicrosandboxRuntime,
+  MicrosandboxSessionConflictError,
 } from "./microsandbox/runtime.js";
 export type {
   MicrosandboxBackend,

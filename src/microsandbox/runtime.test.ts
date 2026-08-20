@@ -1,18 +1,32 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { after, describe, it } from "node:test";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, it } from "node:test";
 
 import * as pkg from "../index.js";
 import {
   MicrosandboxCreateTimeoutError,
+  MicrosandboxLookupTimeoutError,
   MicrosandboxNameTooLongError,
+  MicrosandboxPaginationError,
+  MicrosandboxRunLostError,
+  MicrosandboxRunNotFinishedError,
   MicrosandboxRuntime,
+  MicrosandboxSessionConflictError,
   resolveSandboxRuntimeCapabilities,
 } from "../index.js";
+import {
+  MICROSANDBOX_RUN_ADMIT_SCRIPT,
+  MICROSANDBOX_RUN_STATUS_SCRIPT,
+} from "./runtime.js";
 import type {
   MicrosandboxBackend,
   MicrosandboxRuntimeOptions,
   MicrosandboxSdk,
+  RuntimeHandle,
   SandboxRuntime,
 } from "../index.js";
 
@@ -52,10 +66,20 @@ type HarnessConfig = {
   exec?: (argv: string[]) => ExecOutcome | Promise<ExecOutcome>;
   /** Pages returned by successive `Sandbox.listWith` calls. */
   pages?: Array<{ sandboxes: HandleSpec[]; nextCursor?: string }>;
+  /**
+   * Pages returned VERBATIM, bypassing the well-formed `pages` shaping, so a
+   * test can hand the adapter the malformed page a real backend can emit.
+   * The last entry repeats once the list is exhausted.
+   */
+  rawPages?: unknown[];
   /** `Sandbox.get` resolution, by name. */
   get?: (name: string) => HandleSpec | null | Promise<HandleSpec | null>;
+  /** Delay/hang injected into `Sandbox.get`. */
+  onGet?: () => Promise<void>;
   /** Delay/hang injected into `builder.create()`. */
   onCreate?: () => Promise<void>;
+  /** Delay/hang injected into `Sandbox.listWith`, before any page is returned. */
+  listWith?: () => Promise<void>;
   /** Filesystem behaviour overrides. */
   fs?: {
     onMkdir?: (path: string) => Promise<void>;
@@ -66,8 +90,112 @@ type HarnessConfig = {
   };
 };
 
+/**
+ * In-guest model of the async-run protocol.
+ *
+ * The adapter's two shell scripts are the real contract, and they are executed
+ * for real against `/bin/sh` further down. This model stands in for the guest
+ * in the adapter-level tests: it implements the same state machine — one
+ * atomic claim per session directory, adoption of an identical resubmit,
+ * refusal of a conflicting one, and an exit code that exists only once the run
+ * process has recorded it.
+ */
+type GuestRun = {
+  command: string;
+  pid: string;
+  bootId: string;
+  alive: boolean;
+  exit?: string;
+  output: string;
+};
+
+function createGuest() {
+  const runs = new Map<string, GuestRun>();
+  const admissions: string[] = [];
+  let nextPid = 1000;
+  let bootId = "boot-1";
+
+  const admit = (command: string, dir: string) => {
+    const existing = runs.get(dir);
+    if (!existing) {
+      const pid = String(nextPid);
+      nextPid += 1;
+      runs.set(dir, { command, pid, bootId, alive: true, output: "" });
+      admissions.push(dir);
+      return { stdout: `ADMITTED ${pid}\n` };
+    }
+    if (existing.command === command) {
+      return { stdout: `CLAIMED ${existing.pid}\n` };
+    }
+    return { stdout: "CONFLICT\n" };
+  };
+
+  const status = (dir: string) => {
+    const run = runs.get(dir);
+    if (!run) {
+      return { stdout: "MISSING\n" };
+    }
+    if (run.exit !== undefined) {
+      return { stdout: `EXIT ${run.exit}\n` };
+    }
+    if (run.bootId !== bootId) {
+      return { stdout: "LOST sandbox-restarted\n" };
+    }
+    return { stdout: run.alive ? "RUNNING\n" : "LOST process-gone\n" };
+  };
+
+  return {
+    runs,
+    admissions,
+    /** The run recorded an exit code, as its wrapper's final act. */
+    finish(dir: string, exit: number | string) {
+      const run = runs.get(dir);
+      assert.ok(run, `no run admitted at ${dir}`);
+      run.alive = false;
+      run.exit = String(exit);
+    },
+    /** The run's process died without recording anything. */
+    kill(dir: string) {
+      const run = runs.get(dir);
+      assert.ok(run, `no run admitted at ${dir}`);
+      run.alive = false;
+    },
+    /** The sandbox rebooted, so every recorded pid now belongs to someone else. */
+    restartSandbox() {
+      bootId = `boot-${bootId.length}`;
+    },
+    write(dir: string, output: string) {
+      const run = runs.get(dir);
+      assert.ok(run, `no run admitted at ${dir}`);
+      run.output = output;
+    },
+    exec(argv: string[]): ExecOutcome {
+      const script = argv[1] ?? "";
+      if (script === MICROSANDBOX_RUN_ADMIT_SCRIPT) {
+        return admit(argv[3] ?? "", argv[4] ?? "");
+      }
+      if (script === MICROSANDBOX_RUN_STATUS_SCRIPT) {
+        return status(argv[3] ?? "");
+      }
+      const tailed = /^tail -c \d+ '(.*)'/.exec(script);
+      if (tailed) {
+        const path = tailed[1] ?? "";
+        for (const [dir, run] of runs) {
+          if (path === `${dir}/out`) {
+            return { stdout: run.output };
+          }
+        }
+        return { stdout: "" };
+      }
+      return {};
+    },
+  };
+}
+
 function createHarness(config: HarnessConfig = {}) {
   const log: LogEntry[] = [];
+  // Unless a test pins an exact exec outcome, the guest model answers.
+  const guest = createGuest();
   const rec = (fn: string, ...args: unknown[]) => {
     log.push({ fn, args });
   };
@@ -148,7 +276,7 @@ function createHarness(config: HarnessConfig = {}) {
         const argv = (log
           .slice(before)
           .find((entry) => entry.fn === "exec.args")?.args[0] ?? []) as string[];
-        const outcome = (await config.exec?.(argv)) ?? {};
+        const outcome = config.exec ? await config.exec(argv) : guest.exec(argv);
         return makeOutput(outcome);
       },
       fs: () => makeFs(),
@@ -260,6 +388,7 @@ function createHarness(config: HarnessConfig = {}) {
       },
       async get(name: string) {
         rec("Sandbox.get", name);
+        await config.onGet?.();
         const spec = await config.get?.(name);
         return spec ? (makeHandle(spec) as never) : null;
       },
@@ -280,6 +409,12 @@ function createHarness(config: HarnessConfig = {}) {
         };
         rec("Sandbox.listWith");
         configure(listBuilder as never);
+        await config.listWith?.();
+        if (config.rawPages) {
+          const raw = config.rawPages[Math.min(pageIndex, config.rawPages.length - 1)];
+          pageIndex += 1;
+          return raw as never;
+        }
         const page = config.pages?.[pageIndex] ?? { sandboxes: [] };
         pageIndex += 1;
         return {
@@ -307,7 +442,7 @@ function createHarness(config: HarnessConfig = {}) {
     },
   });
 
-  return { sdk: sdkWithGlobalSetter, log };
+  return { sdk: sdkWithGlobalSetter, log, guest };
 }
 
 function makeOutput(outcome: ExecOutcome) {
@@ -336,6 +471,17 @@ function firstArgs(log: LogEntry[], fn: string): unknown[] {
   const found = log.find((entry) => entry.fn === fn);
   assert.ok(found, `expected a "${fn}" call in: ${names(log).join(", ")}`);
   return found.args;
+}
+
+/** Poll a predicate that a background continuation is expected to satisfy. */
+async function waitFor(predicate: () => boolean, description: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`timed out waiting for ${description}`);
 }
 
 function makeRuntime(
@@ -448,6 +594,342 @@ describe("backend scoping", () => {
 
     const entered = argsFor(log, "withDefaultBackend:enter").map((args) => args[0]);
     assert.deepEqual(entered, ["local", CLOUD_BACKEND]);
+  });
+});
+
+describe("backend gate (the scope is process-global)", () => {
+  /** Walk the log and prove no two backends ever hold the scope at once. */
+  const assertNoOverlappingScopes = (log: LogEntry[]) => {
+    let open: unknown = null;
+    for (const entry of log) {
+      if (entry.fn === "withDefaultBackend:enter") {
+        assert.equal(open, null, "a second backend entered while one was still open");
+        open = entry.args[0];
+      }
+      if (entry.fn === "withDefaultBackend:exit") {
+        assert.deepEqual(entry.args[0], open, "the wrong backend left the scope");
+        open = null;
+      }
+    }
+  };
+
+  it("makes a call on another backend wait instead of overlapping", async () => {
+    // `withDefaultBackend` mutates PROCESS-WIDE state and is documented as not
+    // task-local: two overlapping scopes on different backends mean one call
+    // runs against the wrong backend.
+    let releaseFirst!: () => void;
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+      },
+    });
+    const cloud = makeRuntime(sdk);
+    const local = makeRuntime(sdk, { backend: "local" });
+
+    const first = cloud.launch({ name: "cloud-1" });
+    const second = local.launch({ name: "local-1" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      argsFor(log, "withDefaultBackend:enter").map((args) => args[0]),
+      [CLOUD_BACKEND],
+      "the second backend must not open a scope while the first is held",
+    );
+    assert.equal(
+      argsFor(log, "builder.create").length,
+      1,
+      "the queued call must not reach the SDK on the wrong backend",
+    );
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    assertNoOverlappingScopes(log);
+    assert.deepEqual(
+      argsFor(log, "withDefaultBackend:enter").map((args) => args[0]),
+      [CLOUD_BACKEND, "local"],
+    );
+  });
+
+  it("lets two calls on the same backend share one open scope", async () => {
+    // Serializing everything would be correct and needlessly slow: calls that
+    // want the backend that is already in scope cannot observe a wrong one.
+    let releaseFirst!: () => void;
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+      },
+    });
+    const runtime = makeRuntime(sdk);
+    const first = runtime.launch({ name: "a" });
+    const second = runtime.launch({ name: "b" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(
+      argsFor(log, "builder.create").length,
+      2,
+      "a same-backend call must not queue behind an in-flight one",
+    );
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.equal(
+      argsFor(log, "withDefaultBackend:enter").length,
+      1,
+      "one shared scope, entered once",
+    );
+    assertNoOverlappingScopes(log);
+  });
+
+  it("closes the scope before handing it to a different backend, even on failure", async () => {
+    const { sdk, log } = createHarness({
+      onCreate: () => Promise.reject(new Error("boot refused")),
+    });
+    const cloud = makeRuntime(sdk);
+    const local = makeRuntime(sdk, { backend: "local" });
+    await assert.rejects(cloud.launch({ name: "a" }), /boot refused/);
+    await assert.rejects(local.launch({ name: "b" }), /boot refused/);
+    assertNoOverlappingScopes(log);
+  });
+
+  it("still never reaches for the permanent process-wide setter", async () => {
+    const { sdk, log } = createHarness();
+    await makeRuntime(sdk).launch({ name: "a" });
+    assert.equal(called(log, "setDefaultBackend"), false);
+  });
+
+  it("does not hold the process-global gate across a backend-bound instance call", async () => {
+    // `Sandbox` and `SandboxHandle` retain the backend they were resolved on
+    // (`backendKind` on the instance; every method delegates to that bound
+    // native object), so an instance call does NOT read the process default.
+    // Holding the gate across one would let a single long exec block every
+    // other backend's work in the process for the whole run.
+    let releaseExec!: () => void;
+    const { sdk } = createHarness({
+      exec: () =>
+        new Promise<ExecOutcome>((resolve) => {
+          releaseExec = () => resolve({ code: 0, stdout: "" });
+        }),
+    });
+    const cloud = makeRuntime(sdk);
+    const local = makeRuntime(sdk, { backend: "local" });
+    const handle = await cloud.launch({ name: "busy" });
+    const running = cloud.runScript(handle, { command: "sleep 100" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const outcome = await Promise.race([
+      local.launch({ name: "other" }).then(() => "launched"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 250)),
+    ]);
+    assert.equal(
+      outcome,
+      "launched",
+      "a backend-bound instance call must not hold the process-global gate",
+    );
+    releaseExec();
+    await running;
+  });
+
+  it("keeps interleaved two-runtime static calls on their own backend", async () => {
+    // The discriminating one. `withDefaultBackend` mutates ONE process-wide
+    // slot; this fake models exactly that slot, and every DEFAULT-DEPENDENT
+    // static records the value it observed when it ran. Two runtimes on
+    // different backends then interleave real work with an await inside every
+    // call, so any overlap of two scopes shows up as a call that observed the
+    // other runtime's backend.
+    let processBackend: unknown = "unset";
+    let depth = 0;
+    let maxDepth = 0;
+    const observed: Array<{ call: string; owner: string; backend: unknown }> = [];
+    const gap = () => new Promise((resolve) => setTimeout(resolve, 1));
+    const ownerOf = (name: string) => (name.startsWith("local") ? "local" : "cloud");
+
+    const sdk: MicrosandboxSdk = {
+      Sandbox: {
+        builder(name: string) {
+          // Recorded at BUILDER-CONSTRUCTION time, not at create() time: the
+          // SDK constructs the native builder here, so the whole chain has to
+          // sit inside one scope.
+          const atConstruction = processBackend;
+          const builder = {
+            image: () => builder,
+            fromSnapshot: () => builder,
+            cpus: () => builder,
+            memory: () => builder,
+            workdir: () => builder,
+            envs: () => builder,
+            labels: () => builder,
+            detached: () => builder,
+            idleTimeout: () => builder,
+            maxDuration: () => builder,
+            replace: () => builder,
+            async create() {
+              await gap();
+              observed.push({ call: "builder", owner: ownerOf(name), backend: atConstruction });
+              observed.push({ call: "create", owner: ownerOf(name), backend: processBackend });
+              return { name, execWith: async () => makeOutput({}), fs: () => ({}) } as never;
+            },
+          };
+          return builder as never;
+        },
+        async get(name: string) {
+          await gap();
+          observed.push({ call: "get", owner: ownerOf(name), backend: processBackend });
+          return null;
+        },
+        async listWith(configure) {
+          let seen: Record<string, string> = {};
+          const listBuilder = {
+            limit: () => listBuilder,
+            cursor: () => listBuilder,
+            labels: (labels: Record<string, string>) => {
+              seen = labels;
+              return listBuilder;
+            },
+          };
+          configure(listBuilder as never);
+          await gap();
+          observed.push({ call: "listWith", owner: seen.owner ?? "?", backend: processBackend });
+          return { sandboxes: [] } as never;
+        },
+      },
+      async withDefaultBackend(backend, fn) {
+        depth += 1;
+        maxDepth = Math.max(maxDepth, depth);
+        const previous = processBackend;
+        processBackend = backend;
+        try {
+          return await fn();
+        } finally {
+          processBackend = previous;
+          depth -= 1;
+        }
+      },
+    };
+
+    const cloud = makeRuntime(sdk);
+    const local = makeRuntime(sdk, { backend: "local" });
+    const work: Array<Promise<unknown>> = [];
+    for (let round = 0; round < 8; round += 1) {
+      work.push(cloud.launch({ name: `cloud-${round}` }));
+      work.push(local.launch({ name: `local-${round}` }));
+      work.push(cloud.getById(`cloud-get-${round}`));
+      work.push(local.getById(`local-get-${round}`));
+      work.push(cloud.findAllByLabels({ owner: "cloud" }));
+      work.push(local.findAllByLabels({ owner: "local" }));
+    }
+    await Promise.all(work);
+
+    assert.equal(maxDepth, 1, "two backend scopes were open in the process at once");
+    assert.ok(observed.length >= 8 * 6, `expected every call to be observed: ${observed.length}`);
+    const wrong = observed.filter((entry) => {
+      const expected = entry.owner === "local" ? "local" : CLOUD_BACKEND;
+      try {
+        assert.deepEqual(entry.backend, expected);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.deepEqual(
+      wrong,
+      [],
+      "a default-dependent static ran while the other runtime's backend was in scope",
+    );
+  });
+
+  it("fails closed when the backend scope cannot be entered", async () => {
+    // If the scope was never pushed, the process default is whatever someone
+    // else set. Running the call anyway sends this runtime's work to an
+    // arbitrary backend — the exact failure the gate exists to prevent.
+    const reached: string[] = [];
+    const sdk: MicrosandboxSdk = {
+      Sandbox: {
+        builder(name: string) {
+          reached.push("builder");
+          const builder = new Proxy({}, {
+            get: (_target, prop) =>
+              prop === "create"
+                ? async () => {
+                  reached.push("create");
+                  return { name } as never;
+                }
+                : () => builder,
+          });
+          return builder as never;
+        },
+        async get() {
+          reached.push("get");
+          return null;
+        },
+        async listWith() {
+          reached.push("listWith");
+          return { sandboxes: [] } as never;
+        },
+      },
+      async withDefaultBackend() {
+        throw new Error("native backend scope bindings are unavailable");
+      },
+    };
+
+    await assert.rejects(
+      makeRuntime(sdk).launch({ name: "a" }),
+      /native backend scope bindings are unavailable/,
+    );
+    assert.deepEqual(
+      reached,
+      [],
+      "a call whose backend scope failed must not run on the process default",
+    );
+  });
+
+  it("stays usable after a backend scope failure", async () => {
+    // A gate that keeps its slot after a failed enter wedges every later call
+    // in the process, on every backend, for good.
+    let failNext = true;
+    const sdk: MicrosandboxSdk = {
+      Sandbox: {
+        builder(name: string) {
+          const builder = new Proxy({}, {
+            get: (_target, prop) =>
+              prop === "create" ? async () => ({ name }) as never : () => builder,
+          });
+          return builder as never;
+        },
+        async get() {
+          return null;
+        },
+        async listWith() {
+          return { sandboxes: [] } as never;
+        },
+      },
+      withDefaultBackend(_backend, fn) {
+        if (failNext) {
+          failNext = false;
+          // Thrown SYNCHRONOUSLY, exactly as the SDK's own missing-native-
+          // binding guard does before it ever returns a promise.
+          throw new Error("scope push failed");
+        }
+        return Promise.resolve().then(fn);
+      },
+    };
+
+    const runtime = makeRuntime(sdk);
+    await assert.rejects(runtime.launch({ name: "a" }), /scope push failed/);
+    const outcome = await Promise.race([
+      runtime.launch({ name: "b" }).then(() => "recovered"),
+      new Promise((resolve) => setTimeout(() => resolve("wedged"), 250)),
+    ]);
+    assert.equal(outcome, "recovered", "a failed enter must not hold the gate shut");
   });
 });
 
@@ -648,6 +1130,98 @@ describe("create deadline", () => {
     const handle = await makeRuntime(sdk).launch({ name: "s1" });
     assert.equal(handle.id, "s1");
   });
+
+  it("reclaims a create that lands after the deadline instead of leaking it", async () => {
+    // The SDK cannot cancel an in-flight create. A sandbox that finishes
+    // booting after the caller gave up is a running microVM nobody is waiting
+    // for, holding a name the next launch needs.
+    let finishCreate!: () => void;
+    const { sdk, log } = createHarness({
+      get: (name) => ({ name }),
+      onCreate: () =>
+        new Promise<void>((resolve) => {
+          finishCreate = resolve;
+        }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+    assert.equal(called(log, "handle.kill"), false, "nothing to reclaim while the create is in flight");
+
+    finishCreate();
+    await waitFor(() => called(log, "handle.remove"), "the late sandbox to be reclaimed");
+    assert.deepEqual(firstArgs(log, "handle.kill"), ["slow"]);
+    assert.deepEqual(firstArgs(log, "handle.remove"), ["slow"]);
+  });
+
+  // Guard rather than a fix: `Promise.race` already consumed the late
+  // rejection. It stays because the reclamation path attaches handlers of its
+  // own, and losing that consumption would surface as a process-level crash.
+  it("leaves no unhandled rejection when the late create fails on its own", async () => {
+    let failCreate!: (error: Error) => void;
+    const { sdk, log } = createHarness({
+      get: (name) => ({ name }),
+      onCreate: () =>
+        new Promise<void>((_resolve, reject) => {
+          failCreate = reject;
+        }),
+    });
+    const rejections: unknown[] = [];
+    const record = (reason: unknown) => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", record);
+    try {
+      await assert.rejects(
+        makeRuntime(sdk).launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+        MicrosandboxCreateTimeoutError,
+      );
+      failCreate(new Error("boot failed"));
+      // Two macrotask turns: Node reports an unhandled rejection one tick after
+      // the promise settles with no handler attached.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.deepEqual(rejections, [], "the abandoned create must be consumed, not dropped");
+      assert.equal(
+        called(log, "handle.kill"),
+        false,
+        "a create that failed on its own left nothing to reclaim",
+      );
+    } finally {
+      process.off("unhandledRejection", record);
+    }
+  });
+
+  it("holds a relaunch of the same name until the reclamation finishes", async () => {
+    let finishCreate!: () => void;
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      get: (name) => ({ name }),
+      onCreate: () => {
+        creates += 1;
+        // Only the first create is held open; the relaunch boots immediately.
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            finishCreate = resolve;
+          });
+      },
+    });
+    const runtime = makeRuntime(sdk);
+    await assert.rejects(
+      runtime.launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+    finishCreate();
+    // The relaunch is issued while the reclamation is still pending; if it did
+    // not wait, the reclamation would delete the sandbox it just created.
+    await runtime.launch({ name: "slow" });
+    const order = names(log).filter(
+      (entry) => entry === "handle.remove" || entry === "builder.create",
+    );
+    assert.deepEqual(order, ["builder.create", "handle.remove", "builder.create"]);
+  });
 });
 
 describe("label lookup", () => {
@@ -759,6 +1333,92 @@ describe("label lookup", () => {
     assert.equal(found?.id, "b");
   });
 
+  it("keeps looking past a page of excluded sandboxes", async () => {
+    // Applying exclusions to an already-capped page answers "nothing warm
+    // available" whenever the first page happens to be full of sandboxes the
+    // caller already holds — and the caller then launches a cold sandbox it
+    // did not need.
+    const { sdk } = createHarness({
+      pages: [
+        { sandboxes: [{ name: "claimed-1" }, { name: "claimed-2" }], nextCursor: "c1" },
+        { sandboxes: [{ name: "free" }] },
+      ],
+    });
+    const found = await makeRuntime(sdk).findByLabels(
+      {},
+      { excludeIds: ["claimed-1", "claimed-2"], pageSize: 2 },
+    );
+    assert.equal(found?.id, "free");
+  });
+
+  it("counts the cap against sandboxes the caller can actually use", async () => {
+    const { sdk } = createHarness({
+      pages: [{ sandboxes: [{ name: "claimed" }, { name: "free" }] }],
+    });
+    const handles = await makeRuntime(sdk).findAllByLabels(
+      {},
+      { excludeIds: ["claimed"], limit: 1 },
+    );
+    assert.deepEqual(handles.map((handle) => handle.id), ["free"]);
+  });
+
+  it("honours exclusions on the full listing too", async () => {
+    const { sdk } = createHarness({
+      pages: [{ sandboxes: [{ name: "a" }, { name: "b" }] }],
+    });
+    const handles = await makeRuntime(sdk).findAllByLabels({}, { excludeIds: ["a"] });
+    assert.deepEqual(handles.map((handle) => handle.id), ["b"]);
+  });
+
+  it("treats pageSize as a request size, not a result cap", async () => {
+    // pageSize sizes each request; capping RESULTS by it silently truncates a
+    // listing the caller asked to receive in full.
+    const { sdk } = createHarness({
+      pages: [
+        { sandboxes: [{ name: "a" }], nextCursor: "c1" },
+        { sandboxes: [{ name: "b" }] },
+      ],
+    });
+    const handles = await makeRuntime(sdk).findAllByLabels({}, { pageSize: 1 });
+    assert.deepEqual(handles.map((handle) => handle.id), ["a", "b"]);
+  });
+
+  it("stops draining pages when the lookup deadline elapses", async () => {
+    // Without a deadline a listing that never answers hangs the caller's
+    // request forever, holding a warm-lease decision open indefinitely.
+    const { sdk } = createHarness({
+      listWith: () => new Promise<never>(() => {}),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({}, { timeoutMs: 20 }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxLookupTimeoutError);
+        assert.equal(error.timeoutMs, 20);
+        return true;
+      },
+    );
+  });
+
+  it("bounds a count with the same deadline", async () => {
+    const { sdk } = createHarness({
+      listWith: () => new Promise<never>(() => {}),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).countByLabels({}, { timeoutMs: 20 }),
+      MicrosandboxLookupTimeoutError,
+    );
+  });
+
+  it("applies the runtime's configured lookup deadline when the caller gives none", async () => {
+    const { sdk } = createHarness({
+      listWith: () => new Promise<never>(() => {}),
+    });
+    await assert.rejects(
+      makeRuntime(sdk, { lookupTimeoutMs: 20 }).findByLabels({}),
+      MicrosandboxLookupTimeoutError,
+    );
+  });
+
   it("answers a zero maxCount without any SDK call", async () => {
     const { sdk, log } = createHarness({ pages: [{ sandboxes: [{ name: "a" }] }] });
     assert.equal(await makeRuntime(sdk).countByLabels({}, { maxCount: 0 }), 0);
@@ -776,6 +1436,192 @@ describe("label lookup", () => {
     const { sdk, log } = createHarness({ pages: [{ sandboxes: [] }] });
     await makeRuntime(sdk).findAllByLabels({});
     assert.equal(called(log, "list.labels"), false);
+  });
+});
+
+describe("pagination fails closed", () => {
+  // A warm-lease decision is made from the ANSWER to a listing. A drain that
+  // gives up quietly — on a cursor that never advances, or on a page body the
+  // adapter cannot read — hands back a short list the caller cannot tell apart
+  // from "there is nothing else", and the caller launches a cold sandbox it
+  // did not need or under-counts a quota it is enforcing.
+
+  it("refuses a cursor that never advances instead of truncating the listing", async () => {
+    const { sdk, log } = createHarness({
+      rawPages: [
+        { sandboxes: [{ name: "a", status: "running" }], nextCursor: "c1" },
+        { sandboxes: [{ name: "b", status: "running" }], nextCursor: "c1" },
+      ],
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({}),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxPaginationError);
+        assert.match(error.message, /cursor/i);
+        return true;
+      },
+    );
+    assert.equal(
+      argsFor(log, "Sandbox.listWith").length,
+      2,
+      "the repeat must be caught on the page that repeats it, not after a spin",
+    );
+  });
+
+  it("refuses a cursor that is not a string", async () => {
+    const { sdk, log } = createHarness({
+      rawPages: [{ sandboxes: [], nextCursor: 42 }],
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({}),
+      MicrosandboxPaginationError,
+    );
+    assert.equal(
+      called(log, "list.cursor"),
+      false,
+      "an unreadable cursor must never be sent back to the provider",
+    );
+  });
+
+  it("refuses a page whose entries are not a listing", async () => {
+    const { sdk } = createHarness({ rawPages: [{ sandboxes: null }] });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({}),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("refuses a page that is not an object at all", async () => {
+    const { sdk } = createHarness({ rawPages: ["not-a-page"] });
+    await assert.rejects(
+      makeRuntime(sdk).findByLabels({}),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("fails a count closed too, rather than under-reporting it", async () => {
+    const { sdk } = createHarness({ rawPages: [{ sandboxes: null }] });
+    await assert.rejects(
+      makeRuntime(sdk).countByLabels({}),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("still accepts a well-formed listing that ends without a cursor", async () => {
+    const { sdk } = createHarness({
+      rawPages: [{ sandboxes: [{ name: "a", status: "running" }] }],
+    });
+    const handles = await makeRuntime(sdk).findAllByLabels({});
+    assert.deepEqual(handles.map((handle) => handle.id), ["a"]);
+  });
+});
+
+describe("limit / pageSize parity with the other runtimes", () => {
+  // Daytona, E2B and the local runtime all resolve the request size the same
+  // way — `options.limit ?? options.pageSize` — so a caller that has tuned one
+  // provider's lookup gets the same request shape here.
+
+  it("sends limit as the page request size", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [{ name: "a" }, { name: "b" }] }],
+    });
+    await makeRuntime(sdk).findAllByLabels({}, { limit: 2 });
+    assert.deepEqual(argsFor(log, "list.limit"), [[2]]);
+  });
+
+  it("prefers limit over pageSize, exactly as the other runtimes do", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [{ name: "a" }, { name: "b" }, { name: "c" }] }],
+    });
+    await makeRuntime(sdk).findAllByLabels({}, { limit: 3, pageSize: 7 });
+    assert.deepEqual(argsFor(log, "list.limit"), [[3]]);
+  });
+
+  it("falls back to pageSize when the caller gives no limit", async () => {
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [] }] });
+    await makeRuntime(sdk).findAllByLabels({}, { pageSize: 7 });
+    assert.deepEqual(argsFor(log, "list.limit"), [[7]]);
+  });
+
+  it("falls back to the runtime's configured page size when given neither", async () => {
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [] }] });
+    await makeRuntime(sdk, { listPageSize: 25 }).findAllByLabels({});
+    assert.deepEqual(argsFor(log, "list.limit"), [[25]]);
+  });
+
+  it("resolves the request size the same way on a count", async () => {
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [] }] });
+    await makeRuntime(sdk).countByLabels({}, { limit: 4 });
+    assert.deepEqual(argsFor(log, "list.limit"), [[4]]);
+  });
+});
+
+describe("lookup ownership parity with the Daytona adapter", () => {
+  // Daytona registers every found sandbox with `owned: options.owned ?? false`
+  // (runtime.ts registerSandbox call sites). Dropping that here means an
+  // explicit claim is silently ignored and the claimed sandbox can never be
+  // torn down — a leaked microVM whose name is also held forever.
+
+  it("honours an ownership claim made through findByLabels", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [{ name: "warm" }] }],
+      get: (name) => ({ name }),
+    });
+    const runtime = makeRuntime(sdk);
+    const found = await runtime.findByLabels({ team: "a" }, { owned: true });
+    assert.equal(found?.id, "warm");
+
+    await runtime.destroy(found as RuntimeHandle);
+    assert.deepEqual(
+      names(log).filter((fn) => fn === "handle.kill" || fn === "handle.remove"),
+      ["handle.kill", "handle.remove"],
+      "a claimed sandbox must be tearable down",
+    );
+  });
+
+  it("honours an ownership claim made through findAllByLabels", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [{ name: "warm" }] }],
+      get: (name) => ({ name }),
+    });
+    const runtime = makeRuntime(sdk);
+    const [found] = await runtime.findAllByLabels({ team: "a" }, { owned: true });
+    await runtime.destroy(found as RuntimeHandle);
+    assert.deepEqual(
+      names(log).filter((fn) => fn === "handle.kill" || fn === "handle.remove"),
+      ["handle.kill", "handle.remove"],
+    );
+  });
+
+  it("never claims a found sandbox by default, so a borrowed lease survives destroy", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [{ name: "borrowed" }] }],
+      get: (name) => ({ name }),
+    });
+    const runtime = makeRuntime(sdk);
+    const found = await runtime.findByLabels({ team: "a" });
+    await runtime.destroy(found as RuntimeHandle);
+    assert.equal(
+      called(log, "handle.kill") || called(log, "handle.remove"),
+      false,
+      "finding a sandbox by label is an attach, not a claim",
+    );
+  });
+
+  it("keeps a launched sandbox owned even when a later lookup does not claim it", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [{ name: "mine" }] }],
+      get: (name) => ({ name }),
+    });
+    const runtime = makeRuntime(sdk);
+    const launched = await runtime.launch({ name: "mine" });
+    await runtime.findByLabels({ team: "a" });
+    await runtime.destroy(launched);
+    assert.deepEqual(
+      names(log).filter((fn) => fn === "handle.kill" || fn === "handle.remove"),
+      ["handle.kill", "handle.remove"],
+      "an unclaimed lookup must not demote a sandbox this runtime launched",
+    );
   });
 });
 
@@ -954,138 +1800,314 @@ describe("exec (bootstrap plane)", () => {
 });
 
 describe("startScript (durable async exec)", () => {
-  it("backgrounds the run and captures output and exit code to guest files", async () => {
-    const { sdk, log } = createHarness({
-      get: (name) => ({ name }),
-      exec: () => ({ stdout: "4242\n" }),
+  it("admits a run through the guest wrapper and reports its pid", async () => {
+    const { sdk, log, guest } = createHarness({ get: (name) => ({ name }) });
+    const started = await makeRuntime(sdk).startScript({ id: "s1" }, {
+      command: "long-running --job 7",
+      sessionId: "sess-1",
     });
-    const started = await makeRuntime(sdk).startScript(
-      { id: "s1" },
-      { command: "long-job", sessionId: "sess-1" },
-    );
-    assert.deepEqual(started, { sessionId: "sess-1", commandId: "4242" });
 
+    assert.equal(started.sessionId, "sess-1");
+    assert.equal(started.commandId, "1000");
+    assert.equal(started.reconciled, undefined, "a first admission is not a reconciliation");
     const [argv] = firstArgs(log, "exec.args") as [string[]];
-    const script = argv[1] ?? "";
-    // The inner script is single-quoted for `sh -c`, so its own quoting shows
-    // up in the POSIX `'\''` escaped form.
-    assert.ok(script.startsWith("mkdir -p '/tmp/microsandbox-run/sess-1';"));
-    assert.ok(script.includes("nohup '/bin/sh' -c "));
-    assert.ok(script.includes(`> '\\''/tmp/microsandbox-run/sess-1/out'\\'' 2>&1`));
-    assert.ok(script.includes(`echo $? > '\\''/tmp/microsandbox-run/sess-1/exit'\\''`));
-    assert.ok(script.endsWith("> /dev/null 2>&1 & echo $!"));
+    assert.deepEqual(argv, [
+      "-c",
+      MICROSANDBOX_RUN_ADMIT_SCRIPT,
+      "msb-admit",
+      // The command travels as an ARGUMENT, never interpolated into script
+      // text, so nothing on the host can rewrite or mis-quote it.
+      "long-running --job 7",
+      "/tmp/microsandbox-run/sess-1",
+      "/tmp/microsandbox-run",
+      "/bin/sh",
+    ]);
+    assert.equal(guest.admissions.length, 1);
   });
 
   it("honours a custom run state directory", async () => {
-    const { sdk, log } = createHarness({ get: (name) => ({ name }), exec: () => ({ stdout: "1" }) });
-    await makeRuntime(sdk, { runStateDir: "/var/run/msb/" }).startScript(
-      { id: "s1" },
-      { command: "job", sessionId: "sess-1" },
-    );
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    await makeRuntime(sdk, { runStateDir: "/var/run/msb/" }).startScript({ id: "s1" }, {
+      command: "true",
+      sessionId: "sess-1",
+    });
     const [argv] = firstArgs(log, "exec.args") as [string[]];
-    assert.match(argv[1] ?? "", /^mkdir -p '\/var\/run\/msb\/sess-1';/);
+    assert.equal(argv[4], "/var/run/msb/sess-1");
+    assert.equal(argv[5], "/var/run/msb");
   });
 
-  it("sanitizes a session id before using it as a path segment", async () => {
-    const { sdk, log } = createHarness({ get: (name) => ({ name }), exec: () => ({ stdout: "1" }) });
-    await makeRuntime(sdk).startScript(
-      { id: "s1" },
-      { command: "job", sessionId: "../../etc/passwd" },
-    );
+  it("passes the configured shell to the guest wrapper", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    await makeRuntime(sdk, { shell: "/bin/bash" }).startScript({ id: "s1" }, {
+      command: "true",
+      sessionId: "sess-1",
+    });
     const [argv] = firstArgs(log, "exec.args") as [string[]];
-    assert.match(argv[1] ?? "", /'\/tmp\/microsandbox-run\/______etc_passwd'/);
-    assert.doesNotMatch(argv[1] ?? "", /\.\./);
+    assert.equal(argv[6], "/bin/bash");
+    assert.deepEqual(firstArgs(log, "sandbox.execWith"), ["/bin/bash"]);
+  });
+
+  it("encodes a session id reversibly instead of sanitizing it", async () => {
+    // `a/b` and `a_b` are different sessions. A replace-with-underscore
+    // sanitizer maps them onto one directory, which is enough to report one
+    // run's exit code as the other's.
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "a/b" });
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "a_b" });
+    const dirs = argsFor(log, "exec.args").map((args) => (args[0] as string[])[4]);
+    assert.deepEqual(dirs, ["/tmp/microsandbox-run/a%2Fb", "/tmp/microsandbox-run/a_b"]);
+    assert.notEqual(dirs[0], dirs[1], "two different session ids must never share a directory");
+  });
+
+  it("escapes the percent sign it uses as the escape character", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "a%2Fb" });
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "a/b" });
+    const dirs = argsFor(log, "exec.args").map((args) => (args[0] as string[])[4]);
+    assert.notEqual(dirs[0], dirs[1], "the encoding must stay reversible");
+  });
+
+  it("collapses an over-long session id onto a digest that stays unique", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: `${"x".repeat(200)}a` });
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: `${"x".repeat(200)}b` });
+    const dirs = argsFor(log, "exec.args").map((args) => (args[0] as string[])[4]);
+    for (const dir of dirs) {
+      const segment = dir.slice("/tmp/microsandbox-run/".length);
+      assert.ok(segment.length <= 65, `segment stayed ${segment.length} bytes long`);
+      assert.match(segment, /^\.[0-9a-f]{64}$/);
+    }
+    assert.notEqual(dirs[0], dirs[1]);
   });
 
   it("generates a session id when the caller supplies none", async () => {
-    const { sdk } = createHarness({ get: (name) => ({ name }), exec: () => ({ stdout: "9" }) });
-    const started = await makeRuntime(sdk).startScript({ id: "s1" }, { command: "job" });
-    assert.match(started.sessionId, /^run-s1-[0-9a-f-]{36}$/);
+    const { sdk } = createHarness({ get: (name) => ({ name }) });
+    const started = await makeRuntime(sdk).startScript({ id: "s1" }, { command: "true" });
+    assert.match(started.sessionId, /^run-s1-/);
   });
 
   it("bounds only the submit call with the caller's timeout", async () => {
-    const { sdk, log } = createHarness({ get: (name) => ({ name }), exec: () => ({ stdout: "1" }) });
-    await makeRuntime(sdk).startScript(
-      { id: "s1" },
-      { command: "long-job", sessionId: "sess-1", timeoutMs: 2_000 },
-    );
-    assert.deepEqual(firstArgs(log, "exec.timeout"), [2_000]);
-    // The backgrounded command must NOT inherit that deadline: `nohup ... &`
-    // detaches it, and nothing in the wrapper caps its lifetime.
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    await makeRuntime(sdk).startScript({ id: "s1" }, {
+      command: "sleep 600",
+      sessionId: "sess-1",
+      timeoutMs: 5_000,
+    });
+    // The submit is bounded; the backgrounded run is not, because its lifetime
+    // is the sandbox's rather than the submitting request's.
+    assert.deepEqual(firstArgs(log, "exec.timeout"), [5_000]);
     const [argv] = firstArgs(log, "exec.args") as [string[]];
-    const script = argv[1] ?? "";
-    assert.doesNotMatch(script, /timeout 2/);
-    assert.ok(script.includes("nohup "));
-    assert.ok(script.endsWith("& echo $!"));
+    assert.equal(argv[3], "sleep 600");
   });
 
-  it("escapes a command containing single quotes", async () => {
-    const { sdk, log } = createHarness({ get: (name) => ({ name }), exec: () => ({ stdout: "1" }) });
-    await makeRuntime(sdk).startScript(
-      { id: "s1" },
-      { command: "echo 'hi'", sessionId: "sess-1" },
+  it("adopts the existing run when the same session is submitted twice", async () => {
+    // The outcome-unknown case: the first submit was admitted but its response
+    // was lost, so the caller retries. Adopting is the only answer that does
+    // not start a second process or overwrite the first one's state.
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const first = await runtime.startScript({ id: "s1" }, {
+      command: "job --once",
+      sessionId: "sess-1",
+    });
+    const second = await runtime.startScript({ id: "s1" }, {
+      command: "job --once",
+      sessionId: "sess-1",
+    });
+
+    assert.equal(second.reconciled, true);
+    assert.equal(second.commandId, first.commandId);
+    assert.equal(guest.admissions.length, 1, "a retry must not start a second process");
+  });
+
+  it("refuses a session id already admitted for a different command", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "first", sessionId: "sess-1" });
+    await assert.rejects(
+      runtime.startScript({ id: "s1" }, { command: "second", sessionId: "sess-1" }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxSessionConflictError);
+        assert.equal(error.sessionId, "sess-1");
+        return true;
+      },
     );
-    const [argv] = firstArgs(log, "exec.args") as [string[]];
-    assert.match(argv[1] ?? "", /'\\''hi'\\''/);
+    assert.equal(guest.admissions.length, 1, "a conflicting submit must start nothing");
+    assert.equal(
+      guest.runs.get("/tmp/microsandbox-run/sess-1")?.command,
+      "first",
+      "the first run's state must not be overwritten",
+    );
+  });
+
+  it("never reports a stale run's exit code as the new run's", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const first = await runtime.startScript({ id: "s1" }, {
+      command: "job --once",
+      sessionId: "sess-1",
+    });
+    guest.finish("/tmp/microsandbox-run/sess-1", 5);
+
+    // Same session id, different command: the finished run's exit code belongs
+    // to the finished run, and the refusal is what keeps it that way.
+    await assert.rejects(
+      runtime.startScript({ id: "s1" }, { command: "job --again", sessionId: "sess-1" }),
+      MicrosandboxSessionConflictError,
+    );
+    assert.deepEqual(
+      await runtime.getScriptStatus({ id: "s1" }, "sess-1", first.commandId),
+      { exitCode: 5 },
+    );
+  });
+
+  it("surfaces an admission that produced no verdict", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ code: 127, stderr: "sh: not found" }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).startScript({ id: "s1" }, { command: "true", sessionId: "sess-1" }),
+      /returned no verdict \(exit 127\): sh: not found/,
+    );
   });
 });
 
 describe("getScriptStatus", () => {
-  const statusRuntime = (exitFileContents: string) =>
-    createHarness({
-      get: (name) => ({ name }),
-      exec: (argv) => {
-        const script = argv[1] ?? "";
-        return script.includes("/exit") ? { stdout: exitFileContents } : { stdout: "" };
-      },
+  it("reports still-running while the run is alive", async () => {
+    const { sdk } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, {
+      command: "sleep 600",
+      sessionId: "sess-1",
     });
-
-  it("reports still-running while the exit file is absent", async () => {
-    const { sdk } = statusRuntime("");
     assert.deepEqual(
-      await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      await runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId),
       { exitCode: null },
     );
   });
 
   it("reports a zero exit", async () => {
-    const { sdk } = statusRuntime("0\n");
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "sess-1" });
+    guest.finish("/tmp/microsandbox-run/sess-1", 0);
     assert.deepEqual(
-      await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      await runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId),
       { exitCode: 0 },
     );
   });
 
   it("reports a non-zero exit", async () => {
-    const { sdk } = statusRuntime("137\n");
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, { command: "false", sessionId: "sess-1" });
+    guest.finish("/tmp/microsandbox-run/sess-1", 137);
     assert.deepEqual(
-      await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      await runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId),
       { exitCode: 137 },
     );
   });
 
-  it("never invents an exit code from unparseable contents", async () => {
-    const { sdk } = statusRuntime("garbage\n");
+  it("ends the poll when the run's process is gone without an exit code", async () => {
+    // Without this, a run killed by the OOM reaper polls at exitCode:null
+    // forever: the exit file it would have written never arrives.
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, {
+      command: "sleep 600",
+      sessionId: "sess-1",
+    });
+    guest.kill("/tmp/microsandbox-run/sess-1");
+    await assert.rejects(
+      runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxRunLostError);
+        assert.equal(error.sessionId, "sess-1");
+        assert.equal(error.commandId, started.commandId);
+        assert.match(error.message, /never recorded an exit code/);
+        return true;
+      },
+    );
+  });
+
+  it("ends the poll when the run state is gone entirely", async () => {
+    const { sdk } = createHarness({ get: (name) => ({ name }) });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "never-started", "1"),
+      MicrosandboxRunLostError,
+    );
+  });
+
+  it("ends the poll when the sandbox restarted under the run", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, {
+      command: "sleep 600",
+      sessionId: "sess-1",
+    });
+    guest.restartSandbox();
+    await assert.rejects(
+      runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxRunLostError);
+        assert.match(error.message, /sandbox restarted/);
+        return true;
+      },
+    );
+  });
+
+  it("never invents an exit code from an unreadable exit record", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "sess-1" });
+    guest.finish("/tmp/microsandbox-run/sess-1", "garbage");
+    await assert.rejects(
+      runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxRunLostError);
+        assert.match(error.message, /unreadable/);
+        return true;
+      },
+    );
+  });
+
+  it("asks the guest through one bounded probe rather than reading files", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "sess-1" });
+    log.length = 0;
+    await runtime.getScriptStatus({ id: "s1" }, "sess-1", started.commandId);
+    const [argv] = firstArgs(log, "exec.args") as [string[]];
+    assert.deepEqual(argv, [
+      "-c",
+      MICROSANDBOX_RUN_STATUS_SCRIPT,
+      "msb-status",
+      "/tmp/microsandbox-run/sess-1",
+    ]);
+    assert.equal(called(log, "fs.readToString"), false);
+  });
+
+  it("degrades to still-running when the probe itself fails", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => {
+        throw new Error("transport reset");
+      },
+    });
     assert.deepEqual(
       await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
       { exitCode: null },
     );
   });
 
-  it("reads through a bounded tail rather than an unbounded file read", async () => {
-    const { sdk, log } = statusRuntime("0");
-    await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1");
-    const [argv] = firstArgs(log, "exec.args") as [string[]];
-    assert.match(argv[1] ?? "", /^tail -c 64 /);
-    assert.equal(called(log, "fs.readToString"), false);
-  });
-
-  it("degrades to still-running when the read itself fails", async () => {
+  it("degrades to still-running when the probe returns nothing recognizable", async () => {
     const { sdk } = createHarness({
       get: (name) => ({ name }),
-      exec: () => {
-        throw new Error("transport reset");
-      },
+      exec: () => ({ stdout: "" }),
     });
     assert.deepEqual(
       await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
@@ -1106,6 +2128,62 @@ describe("getScriptLogs", () => {
     assert.equal(result.cmdId, "cmd-9");
     const [argv] = firstArgs(log, "exec.args") as [string[]];
     assert.match(argv[1] ?? "", /^tail -c 200000 '\/tmp\/microsandbox-run\/sess-1\/out'/);
+  });
+});
+
+describe("getExecLogs (bootstrap plane)", () => {
+  const startedRun = async (sdk: MicrosandboxSdk) => {
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, {
+      command: "job",
+      sessionId: "sess-1",
+    });
+    return { runtime, started };
+  };
+
+  it("reports the exit code the run actually recorded", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const { runtime, started } = await startedRun(sdk);
+    guest.write("/tmp/microsandbox-run/sess-1", "boom\n");
+    guest.finish("/tmp/microsandbox-run/sess-1", 7);
+
+    assert.deepEqual(
+      await runtime.getExecLogs({ id: "s1" }, "sess-1", started.commandId),
+      { output: "boom\n", exitCode: 7 },
+    );
+  });
+
+  it("refuses to report a still-running run as a success", async () => {
+    // `ExecResult.exitCode` is a number, so defaulting the log read's `null`
+    // to 0 reports every unfinished run as a clean success.
+    const { sdk } = createHarness({ get: (name) => ({ name }) });
+    const { runtime, started } = await startedRun(sdk);
+    await assert.rejects(
+      runtime.getExecLogs({ id: "s1" }, "sess-1", started.commandId),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxRunNotFinishedError);
+        assert.equal(error.sessionId, "sess-1");
+        return true;
+      },
+    );
+  });
+
+  it("refuses to report a lost run as a success", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const { runtime, started } = await startedRun(sdk);
+    guest.kill("/tmp/microsandbox-run/sess-1");
+    await assert.rejects(
+      runtime.getExecLogs({ id: "s1" }, "sess-1", started.commandId),
+      MicrosandboxRunLostError,
+    );
+  });
+
+  it("reports a zero exit as a zero exit", async () => {
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const { runtime, started } = await startedRun(sdk);
+    guest.finish("/tmp/microsandbox-run/sess-1", 0);
+    const result = await runtime.getExecLogs({ id: "s1" }, "sess-1", started.commandId);
+    assert.equal(result.exitCode, 0);
   });
 });
 
@@ -1204,42 +2282,121 @@ describe("getHomeDir", () => {
 });
 
 describe("lifecycle", () => {
-  it("start resumes the sandbox and reports it STARTED", async () => {
+  it("start resumes a sandbox this runtime owns and reports it STARTED", async () => {
     const { sdk, log } = createHarness({ get: (name) => ({ name, status: "stopped" }) });
-    const handle = await makeRuntime(sdk).start({ id: "s1", state: "STOPPED" });
+    const runtime = makeRuntime(sdk);
+    await runtime.getById("s1", { owned: true, states: null });
+    const handle = await runtime.start({ id: "s1", state: "STOPPED" });
     assert.equal(handle.state, "STARTED");
     assert.equal(called(log, "handle.start"), true);
   });
 
-  it("start on a vanished sandbox is an error, not a silent no-op", async () => {
+  it("start on a vanished owned sandbox is an error, not a silent no-op", async () => {
     const { sdk } = createHarness({ get: () => null });
-    await assert.rejects(makeRuntime(sdk).start({ id: "ghost" }), /no longer available/);
+    const runtime = makeRuntime(sdk);
+    await runtime.launch({ name: "ghost" });
+    await assert.rejects(runtime.start({ id: "ghost" }), /no longer available/);
   });
 
-  it("stop halts the sandbox", async () => {
+  it("never boots a sandbox this runtime does not own", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name, status: "stopped" }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.getById("borrowed", { states: null });
+    await runtime.start({ id: "borrowed" });
+    assert.equal(
+      called(log, "handle.start"),
+      false,
+      "a sandbox someone else chose to stop must stay stopped",
+    );
+  });
+
+  it("stop halts a sandbox this runtime owns", async () => {
     const { sdk, log } = createHarness({ get: (name) => ({ name }) });
-    await makeRuntime(sdk).stop({ id: "s1" });
+    const runtime = makeRuntime(sdk);
+    await runtime.launch({ name: "s1" });
+    await runtime.stop({ id: "s1" });
     assert.deepEqual(firstArgs(log, "handle.stop"), ["s1"]);
   });
 
-  it("stop on a vanished sandbox is idempotent", async () => {
+  it("never halts a sandbox this runtime does not own", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.getById("borrowed");
+    await runtime.stop({ id: "borrowed" });
+    assert.equal(called(log, "handle.stop"), false, "a warm lease is borrowed, not owned");
+  });
+
+  it("stop on a vanished owned sandbox is idempotent", async () => {
     const { sdk, log } = createHarness({ get: () => null });
-    await makeRuntime(sdk).stop({ id: "ghost" });
+    const runtime = makeRuntime(sdk);
+    await runtime.launch({ name: "ghost" });
+    await runtime.stop({ id: "ghost" });
     assert.equal(called(log, "handle.stop"), false);
   });
 });
 
 describe("destroy", () => {
-  it("kills and then removes, so the name is reusable", async () => {
+  const ownedRuntime = async (sdk: MicrosandboxSdk, name = "s1") => {
+    const runtime = makeRuntime(sdk);
+    await runtime.launch({ name });
+    return runtime;
+  };
+
+  it("kills and then removes a sandbox it launched, so the name is reusable", async () => {
     const { sdk, log } = createHarness({ get: (name) => ({ name }) });
-    await makeRuntime(sdk).destroy({ id: "s1" });
+    const runtime = await ownedRuntime(sdk);
+    await runtime.destroy({ id: "s1" });
     const order = names(log).filter((n) => n === "handle.kill" || n === "handle.remove");
     assert.deepEqual(order, ["handle.kill", "handle.remove"]);
   });
 
-  it("is a no-op for a sandbox that is already gone", async () => {
+  it("deletes nothing for a sandbox this runtime never claimed", async () => {
+    // The failure this prevents: a lease-reattach path resolves a sandbox by
+    // name and tears it down, deleting a microVM another worker is using.
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.getById("borrowed");
+    assert.ok(handle);
+    await runtime.destroy(handle);
+    assert.equal(called(log, "handle.kill"), false);
+    assert.equal(called(log, "handle.remove"), false);
+  });
+
+  it("deletes nothing for a handle this runtime has never seen", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    await makeRuntime(sdk).destroy({ id: "someone-elses-sandbox" });
+    assert.equal(called(log, "Sandbox.get"), false, "an unknown handle is not this runtime's to delete");
+    assert.equal(called(log, "handle.kill"), false);
+    assert.equal(called(log, "handle.remove"), false);
+  });
+
+  it("deletes a sandbox the caller explicitly claimed on attach", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.getById("adopted", { owned: true });
+    assert.ok(handle);
+    await runtime.destroy(handle);
+    assert.equal(called(log, "handle.kill"), true);
+    assert.equal(called(log, "handle.remove"), true);
+  });
+
+  it("keeps ownership of a launched sandbox across a later unclaimed attach", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.launch({ name: "s1" });
+    await runtime.getById("s1");
+    await runtime.destroy({ id: "s1" });
+    assert.equal(
+      called(log, "handle.kill"),
+      true,
+      "an attach must not demote a sandbox this runtime launched",
+    );
+  });
+
+  it("is a no-op for an owned sandbox that is already gone", async () => {
     const { sdk, log } = createHarness({ get: () => null });
-    await makeRuntime(sdk).destroy({ id: "ghost" });
+    const runtime = await ownedRuntime(sdk, "ghost");
+    await runtime.destroy({ id: "ghost" });
     assert.equal(called(log, "handle.kill"), false);
     assert.equal(called(log, "handle.remove"), false);
   });
@@ -1253,7 +2410,8 @@ describe("destroy", () => {
         },
       }),
     });
-    await makeRuntime(sdk).destroy({ id: "s1" });
+    const runtime = await ownedRuntime(sdk);
+    await runtime.destroy({ id: "s1" });
     assert.equal(
       called(log, "handle.remove"),
       true,
@@ -1270,12 +2428,32 @@ describe("destroy", () => {
         },
       }),
     });
-    await assert.rejects(makeRuntime(sdk).destroy({ id: "s1" }), /hypervisor wedged/);
+    const runtime = await ownedRuntime(sdk);
+    await assert.rejects(runtime.destroy({ id: "s1" }), /hypervisor wedged/);
     assert.equal(
       called(log, "handle.remove"),
       false,
       "removing the record of a sandbox that may still be running would orphan the microVM",
     );
+  });
+
+  it("keeps ownership after a failed teardown so the caller can retry it", async () => {
+    let failNext = true;
+    const { sdk, log } = createHarness({
+      get: (name) => ({
+        name,
+        onKill: async () => {
+          if (failNext) {
+            failNext = false;
+            throw sdkError("runtime", "hypervisor wedged");
+          }
+        },
+      }),
+    });
+    const runtime = await ownedRuntime(sdk);
+    await assert.rejects(runtime.destroy({ id: "s1" }), /hypervisor wedged/);
+    await runtime.destroy({ id: "s1" });
+    assert.equal(called(log, "handle.remove"), true, "the retry must still be allowed to delete");
   });
 
   it("tolerates a remove that races another destroy", async () => {
@@ -1287,7 +2465,8 @@ describe("destroy", () => {
         },
       }),
     });
-    await makeRuntime(sdk).destroy({ id: "s1" });
+    const runtime = await ownedRuntime(sdk);
+    await runtime.destroy({ id: "s1" });
   });
 
   it("drops the cached instance so a later call re-resolves by name", async () => {
@@ -1388,6 +2567,205 @@ describe("capabilities", () => {
 // load, so the suite stays green on an unsupported platform.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Guest run protocol, executed against a real POSIX shell.
+//
+// The adapter models the guest in every test above; these run the two shell
+// scripts themselves, under `/bin/sh`, on real files. No provider, no
+// credential, no sandbox — just the guarantees the async-run path is built on:
+// one admission per session, adoption of an identical resubmit, refusal of a
+// conflicting one, an exit code recorded even when the command exits the
+// shell, and a lost run that reads as lost instead of as still running.
+// ---------------------------------------------------------------------------
+
+const SHELL_SKIP = process.platform === "win32"
+  ? "POSIX shell protocol tests need /bin/sh"
+  : false;
+
+function sh(
+  script: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    execFile(
+      "/bin/sh",
+      ["-c", script, "msb-test", ...args],
+      { encoding: "utf8" },
+      (error, stdout, stderr) => {
+        const code = error && typeof (error as { code?: unknown }).code === "number"
+          ? (error as unknown as { code: number }).code
+          : 0;
+        resolve({ stdout, stderr, code });
+      },
+    );
+  });
+}
+
+async function waitForFile(path: string): Promise<string> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      return await readFile(path, "utf8");
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  assert.fail(`timed out waiting for ${path}`);
+}
+
+describe("guest run protocol (real /bin/sh)", { skip: SHELL_SKIP }, () => {
+  let root = "";
+
+  before(async () => {
+    root = await mkdtemp(join(tmpdir(), "msb-protocol-"));
+  });
+
+  after(async () => {
+    if (root) {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const admit = (command: string, session: string) => {
+    const dir = join(root, session);
+    return sh(MICROSANDBOX_RUN_ADMIT_SCRIPT, [command, dir, root, "/bin/sh"]);
+  };
+  const probe = (session: string) =>
+    sh(MICROSANDBOX_RUN_STATUS_SCRIPT, [join(root, session)]);
+
+  it("admits a run, records it, and captures combined output", async () => {
+    const admitted = await admit("printf out; printf err >&2", "captured");
+    assert.match(admitted.stdout.trim(), /^ADMITTED \d+$/);
+
+    const dir = join(root, "captured");
+    assert.equal(await waitForFile(join(dir, "exit")), "0");
+    assert.equal(await readFile(join(dir, "out"), "utf8"), "outerr");
+    assert.equal(await readFile(join(dir, "cmd"), "utf8"), "printf out; printf err >&2");
+    assert.equal(
+      (await probe("captured")).stdout.trim(),
+      "EXIT 0",
+      "a finished run reports its recorded code",
+    );
+  });
+
+  it("records an exit code even when the command exits the shell", async () => {
+    // `exit 7` inside the command would end the wrapper too if the command ran
+    // in the wrapper's own shell — and the exit file would never be written,
+    // leaving the caller polling forever.
+    await admit("printf hi; exit 7", "exits");
+    const dir = join(root, "exits");
+    assert.equal(await waitForFile(join(dir, "exit")), "7");
+    assert.equal(await readFile(join(dir, "out"), "utf8"), "hi");
+    assert.equal((await probe("exits")).stdout.trim(), "EXIT 7");
+  });
+
+  it("adopts an identical resubmit instead of starting a second process", async () => {
+    const counter = join(root, "counter");
+    const command = `printf x >> ${JSON.stringify(counter)}`;
+    const first = await admit(command, "adopt");
+    await waitForFile(join(root, "adopt", "exit"));
+
+    const second = await admit(command, "adopt");
+    assert.equal(second.stdout.trim(), first.stdout.trim().replace("ADMITTED", "CLAIMED"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(await readFile(counter, "utf8"), "x", "the command ran exactly once");
+  });
+
+  it("refuses a conflicting resubmit and overwrites nothing", async () => {
+    const marker = join(root, "conflict-marker");
+    await admit(`printf first > ${JSON.stringify(marker)}`, "conflict");
+    await waitForFile(join(root, "conflict", "exit"));
+
+    const conflicting = await admit(`printf second > ${JSON.stringify(marker)}`, "conflict");
+    assert.equal(conflicting.stdout.trim(), "CONFLICT");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(await readFile(marker, "utf8"), "first", "the second command never ran");
+    assert.equal(
+      await readFile(join(root, "conflict", "cmd"), "utf8"),
+      `printf first > ${JSON.stringify(marker)}`,
+      "the admitted command record is immutable",
+    );
+  });
+
+  it("reports a live run as running and a killed one as lost", async () => {
+    const admitted = await admit("sleep 30", "lost");
+    const pid = Number.parseInt(admitted.stdout.trim().split(" ")[1] ?? "", 10);
+    assert.ok(Number.isFinite(pid));
+    assert.equal((await probe("lost")).stdout.trim(), "RUNNING");
+
+    process.kill(pid, "SIGKILL");
+    const gone = () => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    await waitFor(gone, "the run process to die");
+    assert.equal(
+      (await probe("lost")).stdout.trim(),
+      "LOST process-gone",
+      "a run whose process is gone can never record an exit code",
+    );
+  });
+
+  it("adopts a resubmit of a command that ends in a newline", async () => {
+    // `existing=$(cat "$dir/cmd")` strips EVERY trailing newline, so comparing
+    // the recorded command that way makes a byte-identical resubmit look like
+    // a different command. The caller then gets a conflict for the one run it
+    // is actually entitled to adopt — the outcome-unknown retry the whole
+    // admission protocol exists to serve.
+    const command = "printf hi\n";
+    const first = await admit(command, "trailing-newline");
+    assert.match(first.stdout.trim(), /^ADMITTED \d+$/);
+    await waitForFile(join(root, "trailing-newline", "exit"));
+
+    const second = await admit(command, "trailing-newline");
+    assert.equal(
+      second.stdout.trim(),
+      first.stdout.trim().replace("ADMITTED", "CLAIMED"),
+      "a byte-identical resubmit is adopted, whatever bytes the command ends in",
+    );
+  });
+
+  it("still refuses a resubmit that differs only by a trailing newline", async () => {
+    // The must-not-fire half: the fix has to compare the exact bytes, not
+    // normalize both sides into agreeing.
+    await admit("printf a", "newline-differs");
+    await waitForFile(join(root, "newline-differs", "exit"));
+
+    const conflicting = await admit("printf a\n", "newline-differs");
+    assert.equal(conflicting.stdout.trim(), "CONFLICT");
+    assert.equal(
+      await readFile(join(root, "newline-differs", "cmd"), "utf8"),
+      "printf a",
+      "the admitted command record is immutable",
+    );
+  });
+
+  it("records a command that ends in a newline byte-exactly", async () => {
+    const command = "printf done\n";
+    await admit(command, "newline-record");
+    await waitForFile(join(root, "newline-record", "exit"));
+    assert.equal(await readFile(join(root, "newline-record", "cmd"), "utf8"), command);
+  });
+
+  it("reports a session that was never admitted as missing", async () => {
+    assert.equal((await probe("never-admitted")).stdout.trim(), "MISSING");
+  });
+
+  it("keeps a command with quotes, newlines and dollars byte-exact", async () => {
+    const command = "printf '%s' \"it's $HOME\n\"";
+    await admit(command, "quoting");
+    await waitForFile(join(root, "quoting", "exit"));
+    assert.equal(
+      await readFile(join(root, "quoting", "cmd"), "utf8"),
+      command,
+      "the command reaches the guest as its own bytes, never as interpolated script text",
+    );
+  });
+});
+
 type RealSdkModule = Record<string, unknown> & {
   Sandbox: Record<string, unknown>;
   SandboxStatuses: readonly string[];
@@ -1463,6 +2841,16 @@ describe("real-SDK contract", () => {
       "sandboxNotFound",
       "getById relies on this exact code to tell absent from broken",
     );
+  });
+
+  it("still declares the Node floor this adapter documents", async () => {
+    // The adapter tells callers the SDK needs Node >= 22 while this package
+    // itself supports Node >= 20. If the SDK moves that floor, the message the
+    // lazy import prints becomes wrong.
+    const manifest = JSON.parse(
+      await readFile(new URL("../../node_modules/microsandbox/package.json", import.meta.url), "utf8"),
+    ) as { engines?: { node?: string } };
+    assert.equal(manifest.engines?.node, ">= 22");
   });
 
   it("scopes and restores the default backend", { skip: REAL_SDK_SKIP }, async () => {

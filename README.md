@@ -22,6 +22,23 @@ npm install @agent-relay/sandbox
 Provider SDKs are peer dependencies: install the one you intend to use. A
 consumer that only runs local sandboxes does not need a remote provider SDK.
 
+### Provider constraints
+
+Each adapter inherits its provider SDK's requirements, and they are not all the
+same as this package's:
+
+| Adapter | Peer dependency | Requirements beyond this package's |
+| --- | --- | --- |
+| `DaytonaRuntime` | `@daytonaio/sdk` | — |
+| `E2BSandboxRuntime` | `e2b` | — |
+| `MicrosandboxRuntime` | `microsandbox` | **Node.js 22+**, a platform-specific native addon (macOS arm64, Linux x64/arm64, Windows x64/arm64), and — for its `local` backend — hardware virtualization: KVM on Linux, Apple Silicon on macOS, or WHP on Windows 10+ |
+| `LocalSandboxRuntime` | — | A reachable local sandbox service |
+
+The package itself keeps a Node 20 floor, because a consumer that never touches
+the microsandbox adapter never loads that SDK: it is imported lazily, at first
+use, and a load failure is reported with the constraint that most often
+explains it.
+
 ## Design
 
 Two pieces, deliberately kept apart:
@@ -77,7 +94,8 @@ npm run typecheck
 npm test           # node:test
 ```
 
-Requires Node.js 20 or newer.
+Requires Node.js 20 or newer. The microsandbox adapter's own tests need Node 22+
+to load the real SDK; without it, its SDK-contract checks skip rather than fail.
 
 ## Releasing
 
