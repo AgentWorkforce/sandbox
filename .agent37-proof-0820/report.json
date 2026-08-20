@@ -1,0 +1,20 @@
+{
+  "ok": false,
+  "error": "remote exit 1: sh: 1: cd: can't cd to /opt/agent37-proof\n",
+  "cleanupFailures": [],
+  "reportPath": "/Users/khaliqgant/Projects/AgentWorkforce/sandbox/.agent37-proof-0820/report.json",
+  "ledgerPath": "/Users/khaliqgant/Projects/AgentWorkforce/sandbox/.agent37-proof-0820/resource-ledger.jsonl",
+  "runId": "a37-20260820124257-7d3cee",
+  "metrics": {
+    "bare_create_ms": 12671,
+    "provider_ready_ms": "UNKNOWN",
+    "agent_relay_ready_ms": "UNKNOWN",
+    "bootstrap_gap_ms": "UNKNOWN",
+    "history_first_cloud_receipt_ms": "UNKNOWN",
+    "targeted_spawn_ready_ms": "UNKNOWN",
+    "repo_mount_read_ms": "UNKNOWN",
+    "history_drain_before_destroy_ms": "UNKNOWN",
+    "destroy_ms": "UNKNOWN",
+    "verified_gone_ms": "UNKNOWN"
+  }
+}
