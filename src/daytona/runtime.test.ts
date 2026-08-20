@@ -1611,6 +1611,54 @@ describe('DaytonaRuntime shared primitives', () => {
     await runtime.destroy(handle!);
     assert.deepEqual(deleted, ['sbx-replacement-rolled-back', 'sbx-original-retained']);
   });
+
+  it('must-fire: original cleanup failure rolls back a healthy replacement', async () => {
+    const stoppedSandbox = fakeSandbox({ id: 'sbx-original-cleanup-fails', state: 'STOPPED' });
+    const restartedButDead = fakeSandbox({
+      id: 'sbx-original-cleanup-fails',
+      state: 'STARTED',
+      commandError: new Error('502 exec daemon missing'),
+    });
+    const healthyReplacement = fakeSandbox({
+      id: 'sbx-healthy-but-rolled-back',
+      state: 'STARTED',
+    });
+    const deleteAttempts: string[] = [];
+    let getCalls = 0;
+    let originalDeleteAttempts = 0;
+    const runtime = new DaytonaRuntime({
+      defaultHomeDir: TEST_HOME_DIR,
+      daytona: {
+        get: async () => (++getCalls === 1 ? stoppedSandbox : restartedButDead),
+        start: async () => {},
+        create: async () => healthyReplacement,
+        delete: async (sandbox: { id: string }) => {
+          deleteAttempts.push(sandbox.id);
+          if (sandbox.id === stoppedSandbox.id && originalDeleteAttempts++ === 0) {
+            throw new Error('original delete transport failed');
+          }
+        },
+      } as never,
+    });
+    const handle = await runtime.getById(stoppedSandbox.id, { owned: true });
+
+    await assert.rejects(
+      () => runtime.start(handle!),
+      /replacement was rolled back because original cleanup failed/,
+    );
+    assert.deepEqual(deleteAttempts, [
+      'sbx-original-cleanup-fails',
+      'sbx-healthy-but-rolled-back',
+    ]);
+    assert.equal(handle!.id, 'sbx-original-cleanup-fails');
+
+    await runtime.destroy(handle!);
+    assert.deepEqual(deleteAttempts, [
+      'sbx-original-cleanup-fails',
+      'sbx-healthy-but-rolled-back',
+      'sbx-original-cleanup-fails',
+    ]);
+  });
 });
 
 function fakeSandbox(input: {
