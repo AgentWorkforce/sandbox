@@ -8,6 +8,13 @@ export type RunScriptResult = {
   stderr?: string;
   exitCode: number | null;
   cmdId?: string;
+  /**
+   * True when the provider capped captured output and `output` is therefore
+   * incomplete. Optional and additive: a provider that either never truncates
+   * or cannot tell simply omits it, and `undefined` means "not reported",
+   * never "complete".
+   */
+  truncated?: boolean;
 };
 
 export type AsyncRunStartResult = {

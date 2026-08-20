@@ -36,6 +36,12 @@ export interface ExecOptions {
 export interface ExecResult {
   output: string;
   exitCode: number;
+  /**
+   * True when the provider capped captured output and `output` is therefore
+   * incomplete. Optional and additive; `undefined` means the provider did not
+   * report truncation, not that the output is known to be complete.
+   */
+  truncated?: boolean;
 }
 
 export interface AsyncExecStartResult {
