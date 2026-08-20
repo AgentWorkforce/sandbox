@@ -8,6 +8,16 @@ export type RunScriptResult = {
   stderr?: string;
   exitCode: number | null;
   cmdId?: string;
+  /**
+   * True when `output` is a TAIL of the real output rather than all of it.
+   *
+   * Mirrors `ExecResult.truncated` deliberately: an adapter that bounds a log
+   * read reports the bound on both planes or on neither, because a caller that
+   * moves between them would otherwise see the same shortened log described
+   * two different ways. Present only when the adapter actually bounds the read
+   * — absent means complete, never "unknown".
+   */
+  truncated?: boolean;
 };
 
 export type AsyncRunStartResult = {

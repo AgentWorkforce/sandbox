@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -9,18 +10,26 @@ import { after, before, describe, it } from "node:test";
 import * as pkg from "../index.js";
 import {
   MicrosandboxBackendBusyError,
+  MicrosandboxBackendPoisonedError,
   MicrosandboxCreateTimeoutError,
+  MicrosandboxLogReadError,
   MicrosandboxLookupTimeoutError,
   MicrosandboxNameTooLongError,
   MicrosandboxPaginationError,
   MicrosandboxRunLostError,
   MicrosandboxRunNotFinishedError,
+  MicrosandboxRunTimeoutUnsupportedError,
   MicrosandboxRuntime,
   MicrosandboxSessionConflictError,
+  MicrosandboxStatusProbeError,
+  MicrosandboxUnknownOutcomeError,
   resolveSandboxRuntimeCapabilities,
 } from "../index.js";
 import {
+  __backendGateWaiterCountForTests,
+  __resetBackendGateForTests,
   MICROSANDBOX_RUN_ADMIT_SCRIPT,
+  MICROSANDBOX_RUN_LOG_SCRIPT,
   MICROSANDBOX_RUN_STATUS_SCRIPT,
 } from "./runtime.js";
 import type {
@@ -46,7 +55,17 @@ const CLOUD_BACKEND: MicrosandboxBackend = { kind: "cloud", apiKey: "k-test-not-
 
 type LogEntry = { fn: string; args: unknown[] };
 
-type ExecOutcome = { code?: number; stdout?: string; stderr?: string };
+type ExecOutcome = {
+  code?: number;
+  stdout?: string;
+  stderr?: string;
+  /**
+   * Model an SDK result that carries NO usable exit code. Real providers do
+   * this on a dropped or partially-read result, and it is the case the adapter
+   * used to paper over with `?? 0`.
+   */
+  unknownCode?: boolean;
+};
 
 type SandboxStatus = "running" | "stopped" | "crashed" | "draining";
 
@@ -73,6 +92,12 @@ type HarnessConfig = {
    * The last entry repeats once the list is exhausted.
    */
   rawPages?: unknown[];
+  /**
+   * Pages generated from the page index, for listings too long to enumerate —
+   * an endless one, or a cursor walk that revisits an earlier page. Takes
+   * precedence over `rawPages` and `pages`.
+   */
+  pageAt?: (index: number) => unknown;
   /** `Sandbox.get` resolution, by name. */
   get?: (name: string) => HandleSpec | null | Promise<HandleSpec | null>;
   /** Delay/hang injected into `Sandbox.get`. */
@@ -178,14 +203,22 @@ function createGuest() {
       if (script === MICROSANDBOX_RUN_STATUS_SCRIPT) {
         return status(argv[3] ?? "");
       }
-      const tailed = /^tail -c \d+ '(.*)'/.exec(script);
-      if (tailed) {
-        const path = tailed[1] ?? "";
+      if (script === MICROSANDBOX_RUN_LOG_SCRIPT) {
+        const path = argv[3] ?? "";
+        const cap = Number.parseInt(argv[4] ?? "0", 10);
         for (const [dir, run] of runs) {
           if (path === `${dir}/out`) {
-            return { stdout: run.output };
+            // `tail -c cap`: the LAST `cap` bytes, so the adapter sees more
+            // than its own limit exactly when the log is longer than it.
+            const bytes = Buffer.from(run.output, "utf8");
+            const tail = bytes.byteLength <= cap
+              ? bytes
+              : bytes.subarray(bytes.byteLength - cap);
+            return { stdout: tail.toString("utf8") };
           }
         }
+        // No such run directory: the log file is genuinely absent, which the
+        // script reports as success with no output.
         return { stdout: "" };
       }
       return {};
@@ -411,6 +444,11 @@ function createHarness(config: HarnessConfig = {}) {
         rec("Sandbox.listWith");
         configure(listBuilder as never);
         await config.listWith?.();
+        if (config.pageAt) {
+          const generated = config.pageAt(pageIndex);
+          pageIndex += 1;
+          return generated as never;
+        }
         if (config.rawPages) {
           const raw = config.rawPages[Math.min(pageIndex, config.rawPages.length - 1)];
           pageIndex += 1;
@@ -447,7 +485,7 @@ function createHarness(config: HarnessConfig = {}) {
 }
 
 function makeOutput(outcome: ExecOutcome) {
-  const code = outcome.code ?? 0;
+  const code = outcome.unknownCode ? (undefined as unknown as number) : outcome.code ?? 0;
   return {
     code,
     success: code === 0,
@@ -853,12 +891,76 @@ describe("backend gate (the scope is process-global)", () => {
     assert.equal((await queued).id, "local-1");
   });
 
+  it("deregisters every timed-out waiter instead of leaking it", async () => {
+    // THE LEAK IS INVISIBLE FROM OUTSIDE, which is why this test reaches for
+    // the queue length rather than for behaviour. A waiter that timed out
+    // reports the same typed `MicrosandboxBackendBusyError` whether or not it
+    // took itself off the queue, and the gate keeps working either way — so a
+    // purely behavioural test passes against the bug it is meant to catch.
+    // The only signal that discriminates is the size of the queue itself.
+    let creates = 0;
+    let finishFirstCreate!: () => void;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            finishFirstCreate = resolve;
+          });
+      },
+    });
+    __resetBackendGateForTests();
+    const cloud = makeRuntime(sdk, { backendQueueTimeoutMs: 20 });
+    const local = makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 5_000 });
+    try {
+      // A holder that never settles: the case the queue bound exists for, and
+      // the case in which no release ever comes to sweep the queue.
+      const wedged = cloud.launch({ name: "wedged" });
+      await waitFor(() => creates === 1, "the holder to enter the scope");
+
+      // While one caller is genuinely queued, the queue must show exactly one.
+      const parked = local.launch({ name: "parked" });
+      await waitFor(
+        () => __backendGateWaiterCountForTests() === 1,
+        "the local call to register as a waiter",
+      );
+
+      // Now drive eight waiters to their timeout against that wedged holder.
+      const shortLived = makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 20 });
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await assert.rejects(
+          shortLived.launch({ name: `q-${attempt}` }),
+          MicrosandboxBackendBusyError,
+        );
+      }
+
+      // THE ASSERTION THAT FAILS AGAINST THE BUG. With the timed-out waiters
+      // left behind, the queue holds the one live waiter plus all eight
+      // corpses; only deregistration brings it back to one.
+      assert.equal(
+        __backendGateWaiterCountForTests(),
+        1,
+        "eight timed-out waiters must have left the queue, leaving only the live one",
+      );
+
+      finishFirstCreate();
+      await wedged;
+      assert.equal((await parked).id, "parked");
+      assert.equal(
+        __backendGateWaiterCountForTests(),
+        0,
+        "a drained gate must hold no waiters at all",
+      );
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
   it("stays correct after repeated queue timeouts against a wedged scope", async () => {
-    // Every timed-out waiter must deregister itself. The waiter list is only
-    // spliced wholesale when a scope RELEASES, and the case this bound exists
-    // for is the one where no release ever comes — so a waiter left behind
-    // would accumulate without limit. Behaviourally: repeated timeouts must not
-    // corrupt the queue, and the gate must still work once the holder settles.
+    // The behavioural companion to the leak test above: repeated timeouts must
+    // not corrupt the queue, and the gate must still work once the holder
+    // settles.
     let creates = 0;
     let finishFirstCreate!: () => void;
     const { sdk } = createHarness({
@@ -1083,6 +1185,549 @@ describe("backend gate (the scope is process-global)", () => {
       new Promise((resolve) => setTimeout(() => resolve("wedged"), 250)),
     ]);
     assert.equal(outcome, "recovered", "a failed enter must not hold the gate shut");
+  });
+});
+
+describe("backend gate fairness (a queue that cannot be jumped)", () => {
+  // The gate's own documentation claimed this property before the code
+  // implemented it: "a newly arriving same-backend call joins only when nobody
+  // is already waiting". Without that condition, a same-backend call joins the
+  // OPEN scope no matter who is queued behind it, and a process with steady
+  // traffic on one backend never lets the other one run at all.
+
+  it("makes a same-backend call queue behind a waiter on another backend", async () => {
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstCreate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let creates = 0;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? firstCreate : Promise.resolve();
+      },
+    });
+    const cloud = makeRuntime(sdk);
+    const local = makeRuntime(sdk, { backend: "local" });
+
+    // Cloud holds the scope.
+    const holder = cloud.launch({ name: "cloud-holder" }).then(() => order.push("cloud-holder"));
+    await waitFor(() => creates === 1, "the first create to enter the scope");
+
+    // Local queues: a different backend cannot share the open scope.
+    const queued = local.launch({ name: "local-queued" }).then(() => order.push("local-queued"));
+    await waitFor(() => true, "the local call to reach the queue");
+    // Give the queued call a turn of the loop to actually register as a waiter.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // A SECOND cloud call now arrives. It wants the backend that is already
+    // open — the exact call that used to jump the queue.
+    const jumper = cloud.launch({ name: "cloud-jumper" }).then(() => order.push("cloud-jumper"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(creates, 1, "the late same-backend call must not have joined the open scope");
+
+    releaseFirst();
+    await Promise.all([holder, queued, jumper]);
+    assert.equal(
+      order.indexOf("local-queued") < order.indexOf("cloud-jumper"),
+      true,
+      `the earlier waiter must go first, got: ${order.join(" → ")}`,
+    );
+  });
+
+  it("does not starve the other backend under a steady same-backend stream", async () => {
+    // The discriminating shape: work on one backend keeps arriving while a
+    // call on the other is waiting. With queue-jumping, the waiter's own
+    // 30s budget expires and it fails; the point of FIFO is that it does not.
+    let gate!: () => void;
+    const firstCreate = new Promise<void>((resolve) => {
+      gate = resolve;
+    });
+    let creates = 0;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? firstCreate : Promise.resolve();
+      },
+    });
+    const cloud = makeRuntime(sdk, { backendQueueTimeoutMs: 2_000 });
+    const local = makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 2_000 });
+
+    const holder = cloud.launch({ name: "holder" });
+    await waitFor(() => creates === 1, "the holder to enter the scope");
+    const starved = local.launch({ name: "starved" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Twenty more cloud calls pile in while local waits.
+    const stream = Array.from({ length: 20 }, (_unused, index) =>
+      cloud.launch({ name: `stream-${index}` }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(creates, 1, "none of the stream may have joined past the waiter");
+
+    gate();
+    // Local gets through on its own merits, not on its timeout.
+    assert.equal((await starved).id, "starved");
+    await Promise.all([holder, ...stream]);
+  });
+
+  it("still lets same-backend calls share one scope when nobody is waiting", async () => {
+    // The guard against over-correcting: fairness must not have serialized the
+    // common case, which is a single-backend process.
+    let releaseBoth!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return held;
+      },
+    });
+    const cloud = makeRuntime(sdk);
+    const first = cloud.launch({ name: "a" });
+    await waitFor(() => creates === 1, "the first create");
+    const second = cloud.launch({ name: "b" });
+    await waitFor(() => creates === 2, "the second create to run concurrently in the same scope");
+    releaseBoth();
+    await Promise.all([first, second]);
+    // One scope entered, one exited: they shared it rather than taking turns.
+    assert.equal(
+      log.filter((entry) => entry.fn === "withDefaultBackend:enter").length,
+      1,
+      names(log).join(", "),
+    );
+  });
+});
+
+describe("backend gate handoff (FIFO that a scheduler cannot re-order)", () => {
+  it("admits queued callers in strict arrival order", async () => {
+    // THE DISCRIMINATING SHAPE. Waking every waiter at once and letting them
+    // re-race leaves the winner to microtask scheduling: all of them see a
+    // free gate, and the one that happens to be resumed first takes it. With
+    // three waiters on three DIFFERENT backends — so none of them can join
+    // another's scope — only a gate that hands over to one named waiter at a
+    // time produces arrival order every run.
+    const order: string[] = [];
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let creates = 0;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? holderCall : Promise.resolve();
+      },
+    });
+    __resetBackendGateForTests();
+    try {
+      const holder = makeRuntime(sdk).launch({ name: "holder" });
+      await waitFor(() => creates === 1, "the holder to enter the scope");
+
+      // Each on its own backend, so every one of them must open its own scope.
+      const first = makeRuntime(sdk, { backend: "local" })
+        .launch({ name: "first" })
+        .then(() => order.push("first"));
+      await waitFor(() => __backendGateWaiterCountForTests() === 1, "the first waiter to queue");
+      const second = makeRuntime(sdk, { backend: { profile: "p2" } })
+        .launch({ name: "second" })
+        .then(() => order.push("second"));
+      await waitFor(() => __backendGateWaiterCountForTests() === 2, "the second waiter to queue");
+      const third = makeRuntime(sdk, { backend: { profile: "p3" } })
+        .launch({ name: "third" })
+        .then(() => order.push("third"));
+      await waitFor(() => __backendGateWaiterCountForTests() === 3, "the third waiter to queue");
+
+      releaseHolder();
+      await Promise.all([holder, first, second, third]);
+      assert.deepEqual(
+        order,
+        ["first", "second", "third"],
+        `queued callers must run in arrival order, got: ${order.join(" → ")}`,
+      );
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("does not let a waking waiter be mistaken for an empty queue", async () => {
+    // THE TEST THAT SEPARATES A TICKET HANDOFF FROM WAKING EVERYONE. Emptying
+    // the queue to wake it — `splice(0)` — destroys the very fact the
+    // starvation guard reads: with the queue momentarily empty, the second
+    // same-backend waiter re-checks, sees "nobody is waiting", and joins the
+    // first one's scope. Handing the gate to ONE waiter leaves the rest
+    // queued, so the second opens its own scope in its own turn.
+    //
+    // Counting scope entries is what makes the difference observable: two
+    // separate turns produce two entries, a queue-jumping join produces one.
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? holderCall : Promise.resolve();
+      },
+    });
+    __resetBackendGateForTests();
+    try {
+      const holder = makeRuntime(sdk).launch({ name: "holder" });
+      await waitFor(() => creates === 1, "the holder to enter the scope");
+
+      // Two waiters that want the SAME backend as each other, both queued
+      // behind a holder on a different one.
+      const local = makeRuntime(sdk, { backend: "local" });
+      const first = local.launch({ name: "first" });
+      await waitFor(() => __backendGateWaiterCountForTests() === 1, "the first waiter to queue");
+      const second = local.launch({ name: "second" });
+      await waitFor(() => __backendGateWaiterCountForTests() === 2, "the second waiter to queue");
+
+      releaseHolder();
+      await Promise.all([holder, first, second]);
+
+      assert.equal(
+        log.filter((entry) => entry.fn === "withDefaultBackend:enter").length,
+        3,
+        "a queued waiter is not 'nobody waiting': each must take its own turn",
+      );
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("passes the turn on when the caller it was promised to has already timed out", async () => {
+    // The reservation is what makes the handoff ordered, so a waiter that
+    // times out in the same tick it is promoted must give the turn back. If it
+    // does not, the gate stays reserved for a caller that has left and nothing
+    // ever runs again.
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let creates = 0;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? holderCall : Promise.resolve();
+      },
+    });
+    __resetBackendGateForTests();
+    try {
+      const holder = makeRuntime(sdk).launch({ name: "holder" });
+      await waitFor(() => creates === 1, "the holder to enter the scope");
+
+      // A waiter whose budget expires while the holder is still wedged.
+      const doomed = assert.rejects(
+        makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 20 })
+          .launch({ name: "doomed" }),
+        MicrosandboxBackendBusyError,
+      );
+      // And one that is still there when the gate frees.
+      const survivor = makeRuntime(sdk, {
+        backend: { profile: "survivor" },
+        backendQueueTimeoutMs: 60_000,
+      }).launch({ name: "survivor" });
+      await waitFor(() => __backendGateWaiterCountForTests() >= 1, "the waiters to queue");
+      await doomed;
+
+      releaseHolder();
+      await holder;
+      // The gate was not left reserved for the caller that gave up.
+      assert.equal((await survivor).id, "survivor");
+      assert.equal(__backendGateWaiterCountForTests(), 0);
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+});
+
+describe("backend gate admission cancellation (a deadline that withdraws the request)", () => {
+  it("never issues a queued static once the overall deadline has expired", async () => {
+    // Racing a timer against the operation is not cancellation. The gate is a
+    // queue, so a lookup that gives up while queued is still queued — it can
+    // be admitted later and issue `listWith` against the process default long
+    // after the caller stopped waiting for the answer. The signal is what
+    // actually withdraws it.
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? holderCall : Promise.resolve();
+      },
+      pages: [{ sandboxes: [{ name: "warm", labels: { a: "b" } }] }],
+    });
+    __resetBackendGateForTests();
+    try {
+      const holder = makeRuntime(sdk).launch({ name: "holder" });
+      await waitFor(() => creates === 1, "the holder to enter the scope");
+
+      // Its whole budget expires while it is stuck behind the wedged holder.
+      await assert.rejects(
+        makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 60_000 })
+          .findAllByLabels({ a: "b" }, { timeoutMs: 30 }),
+        MicrosandboxLookupTimeoutError,
+      );
+      assert.equal(
+        __backendGateWaiterCountForTests(),
+        0,
+        "a cancelled lookup must leave the queue rather than stay admitted",
+      );
+
+      // THE ASSERTION THAT FAILS AGAINST THE BUG: releasing the gate must not
+      // let the abandoned lookup through afterwards.
+      releaseHolder();
+      await holder;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(
+        log.filter((entry) => entry.fn === "Sandbox.listWith"),
+        [],
+        "a lookup cancelled by its deadline must never reach the SDK",
+      );
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+});
+
+describe("backend gate poisoning (a restore that failed)", () => {
+  // `withDefaultBackend` sets one process-global slot and restores it on the
+  // way out. When the RESTORE is what failed, the slot holds an unknown value.
+  // Swallowing that — which is what the adapter used to do, because its
+  // rejection handler could not tell a failed entry from a failed exit — hands
+  // the gate to the next backend as though the previous one had been cleanly
+  // restored, and that call then runs against whatever the slot actually holds.
+
+  /** An SDK whose scope RUNS the callback and then fails to restore. */
+  function restoreFailingSdk(base: MicrosandboxSdk, error: Error): MicrosandboxSdk {
+    return {
+      Sandbox: base.Sandbox,
+      async withDefaultBackend(_backend, fn) {
+        await fn();
+        throw error;
+      },
+    };
+  }
+
+  it("propagates the restore failure instead of completing quietly", async () => {
+    const { sdk } = createHarness({ get: (name) => ({ name }) });
+    const failing = restoreFailingSdk(sdk, new Error("could not pop the backend scope"));
+    try {
+      await assert.rejects(
+        makeRuntime(failing).getById("s1"),
+        /could not pop the backend scope/,
+      );
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("refuses every later backend-dependent static, with a typed error", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const failing = restoreFailingSdk(sdk, new Error("restore exploded"));
+    try {
+      await assert.rejects(makeRuntime(failing).getById("s1"), /restore exploded/);
+
+      // A DIFFERENT runtime, on a DIFFERENT backend, sharing the same process
+      // — which is the whole reason the poison is module-scoped rather than
+      // per-instance. The damage is to the SDK's process-global slot.
+      const healthy = makeRuntime(sdk, { backend: "local" });
+      const before = log.length;
+      await assert.rejects(
+        healthy.getById("s2"),
+        (error: unknown) => {
+          assert.ok(error instanceof MicrosandboxBackendPoisonedError);
+          assert.match(error.message, /restore exploded/);
+          return true;
+        },
+      );
+      // And it refused WITHOUT issuing the call: no static reached the SDK.
+      assert.deepEqual(log.slice(before), [], "a poisoned gate must not call the SDK at all");
+
+      await assert.rejects(healthy.launch({ name: "x" }), MicrosandboxBackendPoisonedError);
+      await assert.rejects(healthy.findAllByLabels({ a: "b" }), MicrosandboxBackendPoisonedError);
+      await assert.rejects(healthy.countByLabels({ a: "b" }), MicrosandboxBackendPoisonedError);
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("frees a queued waiter immediately rather than making it wait out its budget", async () => {
+    // Poisoning while somebody is queued must convert their wait into a typed
+    // refusal now, not leave them parked until the queue timeout.
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let gets = 0;
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      onGet: () => {
+        gets += 1;
+        return gets === 1 ? holderCall : Promise.resolve();
+      },
+    });
+    const failing = restoreFailingSdk(sdk, new Error("restore failed under load"));
+    try {
+      const holder = assert.rejects(makeRuntime(failing).getById("held"), /restore failed under load/);
+      await waitFor(() => gets === 1, "the holder to enter the scope");
+      // A different backend queues behind it, with a budget far longer than
+      // this test is willing to wait.
+      const queued = makeRuntime(failing, {
+        backend: "local",
+        backendQueueTimeoutMs: 60_000,
+      }).getById("queued");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      releaseHolder();
+      await holder;
+      await assert.rejects(queued, MicrosandboxBackendPoisonedError);
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("poisons the gate even when the restore rejected with no value at all", async () => {
+    // THE SENTINEL BUG. Recording the rejection reason and treating "no reason
+    // recorded" as "not poisoned" collapses on exactly the rejections that
+    // carry nothing — `Promise.reject()`, `reject(null)`. Those destroy the
+    // process default just as thoroughly as a rejection with an `Error`, and a
+    // gate that reads its own poison out of the cause silently reopens.
+    for (const reason of [null, undefined]) {
+      const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+      const valueless: MicrosandboxSdk = {
+        Sandbox: sdk.Sandbox,
+        async withDefaultBackend(_backend, fn) {
+          await fn();
+          throw reason;
+        },
+      };
+      __resetBackendGateForTests();
+      try {
+        // The participant that closed the scope is told, even though there is
+        // nothing to tell it beyond the fact of the failure.
+        await assert.rejects(makeRuntime(valueless).getById("s1"));
+
+        const healthy = makeRuntime(sdk, { backend: "local" });
+        const before = log.length;
+        await assert.rejects(healthy.getById("s2"), MicrosandboxBackendPoisonedError);
+        assert.deepEqual(
+          log.slice(before),
+          [],
+          `a gate poisoned by a ${String(reason)} rejection must not call the SDK`,
+        );
+      } finally {
+        __resetBackendGateForTests();
+      }
+    }
+  });
+
+  it("tells every participant in a shared scope that the restore failed", async () => {
+    // Same-backend callers share ONE scope, so they share its restore. The
+    // participant that happens to finish first has historically been allowed
+    // to return success and walk away — but the scope it ran in went on to
+    // fail its restore, so it was told the call completed cleanly when the
+    // process default it ran against is now unknown. Both must hear it.
+    let releaseEarly!: () => void;
+    let releaseLate!: () => void;
+    const earlyCall = new Promise<void>((resolve) => {
+      releaseEarly = resolve;
+    });
+    const lateCall = new Promise<void>((resolve) => {
+      releaseLate = resolve;
+    });
+    let gets = 0;
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      onGet: () => {
+        gets += 1;
+        // Both callers are held inside the SAME scope until the test lets them
+        // out, one at a time — which is the only way to get a genuine early
+        // leaver rather than two scopes opened back to back.
+        return gets === 1 ? earlyCall : lateCall;
+      },
+    });
+    const failing: MicrosandboxSdk = {
+      Sandbox: sdk.Sandbox,
+      async withDefaultBackend(_backend, fn) {
+        await fn();
+        throw new Error("restore failed for the shared scope");
+      },
+    };
+    __resetBackendGateForTests();
+    try {
+      const runtime = makeRuntime(failing);
+      // Rejection handlers are attached NOW: these settle while the test is
+      // still awaiting other things, and an unhandled rejection in between
+      // would be reported against whichever test happens to be running.
+      const early = runtime.getById("early").then(() => "resolved" as const, (error: unknown) => error);
+      await waitFor(() => gets === 1, "the first caller to enter the scope");
+      const late = runtime.getById("late").then(() => "resolved" as const, (error: unknown) => error);
+      await waitFor(() => gets === 2, "the second caller to join the same scope");
+
+      // The early leaver finishes its own call first, while the scope stays
+      // open for the caller still inside it.
+      releaseEarly();
+      releaseLate();
+
+      // THE ASSERTION THAT FAILS AGAINST THE BUG: the early leaver used to
+      // resolve here, reporting a clean success from a scope whose restore
+      // failed.
+      const earlyOutcome = await early;
+      assert.notEqual(
+        earlyOutcome,
+        "resolved",
+        "the early leaver must not report success from a scope that failed to restore",
+      );
+      assert.match(String((earlyOutcome as Error).message), /restore failed for the shared scope/);
+      const lateOutcome = await late;
+      assert.notEqual(lateOutcome, "resolved");
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("leaves an already-resolved sandbox instance usable", async () => {
+    // The SDK binds each sandbox to the backend it was resolved on ("backend
+    // retained by this sandbox"), so instance calls read no global state. The
+    // poison must not spread to them — refusing work that is provably safe is
+    // its own kind of wrong answer.
+    const { sdk } = createHarness({ get: (name) => ({ name }), exec: () => ({ code: 0, stdout: "hi" }) });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.launch({ name: "bound" });
+    const failing = restoreFailingSdk(sdk, new Error("restore failed later"));
+    try {
+      await assert.rejects(makeRuntime(failing).getById("other"), /restore failed later/);
+      // The instance resolved BEFORE the poison still execs.
+      const result = await runtime.exec(handle, "echo hi");
+      assert.deepEqual(result, { output: "hi", exitCode: 0 });
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
+  it("does not poison the gate when the scope failed to open in the first place", async () => {
+    // The other half of the distinction. A rejection BEFORE the callback ran
+    // means the process default was never changed, so the gate is still
+    // trustworthy — and an existing test already proves the runtime stays
+    // usable after one. This asserts the poison specifically stays clear.
+    const { sdk } = createHarness({ get: (name) => ({ name }) });
+    const neverEnters: MicrosandboxSdk = {
+      Sandbox: sdk.Sandbox,
+      async withDefaultBackend() {
+        throw new Error("could not push the backend scope");
+      },
+    };
+    await assert.rejects(makeRuntime(neverEnters).getById("s1"), /could not push/);
+    // Same process, healthy SDK: works, and is NOT a poisoned-gate error.
+    assert.equal((await makeRuntime(sdk).getById("s1"))?.id, "s1");
   });
 });
 
@@ -1700,6 +2345,206 @@ describe("pagination fails closed", () => {
   });
 });
 
+describe("pagination cycles, bounds and unusable entries", () => {
+  const started = (name: string) => ({ name, status: "running" as const });
+
+  it("refuses a cursor walk that revisits a page it already served", async () => {
+    // A → B → A. Every individual step ADVANCES, so comparing each cursor only
+    // against the one just used sees progress forever while re-serving the same
+    // two pages: the drain ends on the safety bound at best, and duplicates
+    // every sandbox it collected on the way.
+    const { sdk } = createHarness({
+      pageAt: (index) => ({
+        sandboxes: [started(`s-${index}`)],
+        nextCursor: index % 2 === 0 ? "cursor-b" : "cursor-a",
+      }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxPaginationError);
+        assert.match(error.message, /already served|cycling/);
+        return true;
+      },
+    );
+  });
+
+  it("refuses a three-step cycle too, not just an immediate repeat", async () => {
+    const walk = ["c1", "c2", "c3", "c1"];
+    const { sdk } = createHarness({
+      pageAt: (index) => ({
+        sandboxes: [started(`s-${index}`)],
+        ...(index < walk.length ? { nextCursor: walk[index] } : {}),
+      }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("throws at the page bound instead of returning what it collected", async () => {
+    // The old behaviour returned the collected handles, which is INDISTINGUISH-
+    // ABLE from a complete listing: the caller under-counts a quota, or decides
+    // nothing warm exists, from a drain that simply gave up.
+    let pagesServed = 0;
+    const { sdk } = createHarness({
+      pageAt: (index) => {
+        pagesServed += 1;
+        return { sandboxes: [started(`s-${index}`)], nextCursor: `cursor-${index}` };
+      },
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }, { timeoutMs: 60_000 }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxPaginationError);
+        assert.equal(error.pages, 1_000);
+        assert.match(error.message, /safety bound/);
+        assert.match(error.message, /no partial result/);
+        return true;
+      },
+    );
+    assert.equal(pagesServed, 1_000, "the bound is 1000 pages, and it is a failure rather than a stop");
+  });
+
+  it("fails a count at the bound too, rather than under-reporting it", async () => {
+    const { sdk } = createHarness({
+      pageAt: (index) => ({ sandboxes: [started(`s-${index}`)], nextCursor: `c-${index}` }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).countByLabels({ role: "worker" }, { timeoutMs: 60_000 }),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("refuses a page entry with no usable name", async () => {
+    // An array of unusable entries is exactly as unreadable as a missing array,
+    // and it fails the same silent way: every entry is dropped by the state
+    // filter and the caller is told there is nothing warm.
+    const { sdk } = createHarness({
+      rawPages: [{ sandboxes: [{ name: "", status: "running" }] }],
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxPaginationError);
+        assert.match(error.message, /no usable sandbox name/);
+        return true;
+      },
+    );
+  });
+
+  it("refuses a page entry whose name is whitespace", async () => {
+    const { sdk } = createHarness({
+      rawPages: [{ sandboxes: [{ name: "   ", status: "running" }] }],
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("refuses a page entry with no usable status", async () => {
+    // Without a status the state filter cannot judge it, and the entry would be
+    // silently dropped as "not started".
+    const { sdk } = createHarness({
+      rawPages: [{ sandboxes: [{ name: "s-1" }] }],
+    });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxPaginationError);
+        assert.match(error.message, /without a usable status/);
+        return true;
+      },
+    );
+  });
+
+  it("refuses an entry that is not an object at all", async () => {
+    const { sdk } = createHarness({ rawPages: [{ sandboxes: ["s-1", null] }] });
+    await assert.rejects(
+      makeRuntime(sdk).findAllByLabels({ role: "worker" }),
+      MicrosandboxPaginationError,
+    );
+  });
+
+  it("still accepts a well-formed page, so the validation is not just a wall", async () => {
+    const { sdk } = createHarness({
+      rawPages: [{ sandboxes: [{ name: "s-1", status: "running" }] }],
+    });
+    const found = await makeRuntime(sdk).findAllByLabels({ role: "worker" });
+    assert.deepEqual(found.map((handle) => handle.id), ["s-1"]);
+  });
+
+  it("accepts a status outside the SDK vocabulary rather than rejecting it", async () => {
+    // "Usable" means present and readable, not a member of a closed set: a
+    // provider that adds a status must not break the drain, it must just not
+    // match the STARTED filter.
+    const { sdk } = createHarness({
+      rawPages: [{ sandboxes: [{ name: "s-1", status: "hibernating" }] }],
+    });
+    const found = await makeRuntime(sdk).findAllByLabels({ role: "worker" }, { states: null });
+    assert.deepEqual(found.map((handle) => handle.state), ["STOPPED"]);
+  });
+});
+
+describe("zero and negative lookup bounds", () => {
+  const started = (name: string) => ({ name, status: "running" as const });
+
+  it("answers a zero limit with nothing, and without a call", async () => {
+    // It used to return ONE result: the cap was checked only after an entry had
+    // already been collected, so `limit: 0` meant "at least one".
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [started("s-1"), started("s-2")] }] });
+    assert.deepEqual(await makeRuntime(sdk).findAllByLabels({ a: "b" }, { limit: 0 }), []);
+    assert.equal(called(log, "Sandbox.listWith"), false, names(log).join(", "));
+  });
+
+  it("answers a negative limit the same way", async () => {
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [started("s-1")] }] });
+    assert.deepEqual(await makeRuntime(sdk).findAllByLabels({ a: "b" }, { limit: -5 }), []);
+    assert.equal(called(log, "Sandbox.listWith"), false);
+  });
+
+  it("floors a fractional limit rather than passing it through", async () => {
+    const { sdk, log } = createHarness({
+      pages: [{ sandboxes: [started("s-1"), started("s-2"), started("s-3")] }],
+    });
+    const found = await makeRuntime(sdk).findAllByLabels({ a: "b" }, { limit: 2.7 });
+    assert.equal(found.length, 2);
+    assert.deepEqual(firstArgs(log, "list.limit"), [2]);
+  });
+
+  it("answers a negative maxCount with zero, and without a call", async () => {
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [started("s-1")] }] });
+    assert.equal(await makeRuntime(sdk).countByLabels({ a: "b" }, { maxCount: -1 }), 0);
+    assert.equal(called(log, "Sandbox.listWith"), false);
+  });
+
+  it("does not send a zero page size to the provider", async () => {
+    // Zero is not a page size, and the two plausible readings of it —
+    // "everything" and "nothing" — are opposite, so it is not the adapter's to
+    // guess. The configured default is sent instead.
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [started("s-1")] }] });
+    await makeRuntime(sdk, { listPageSize: 42 }).findAllByLabels({ a: "b" }, { pageSize: 0 });
+    assert.deepEqual(firstArgs(log, "list.limit"), [42]);
+  });
+
+  it("does not send a negative page size either", async () => {
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [started("s-1")] }] });
+    await makeRuntime(sdk, { listPageSize: 42 }).findAllByLabels({ a: "b" }, { pageSize: -3 });
+    assert.deepEqual(firstArgs(log, "list.limit"), [42]);
+  });
+
+  it("keeps a zero limit from becoming a zero page size on findByLabels", async () => {
+    // `findByLabels` caps at one regardless, so a zero `limit` here is only a
+    // request size — and must not be sent as one.
+    const { sdk, log } = createHarness({ pages: [{ sandboxes: [started("s-1")] }] });
+    const found = await makeRuntime(sdk, { listPageSize: 7 }).findByLabels({ a: "b" }, { limit: 0 });
+    assert.equal(found?.id, "s-1");
+    assert.deepEqual(firstArgs(log, "list.limit"), [7]);
+  });
+});
+
 describe("limit / pageSize parity with the other runtimes", () => {
   // Daytona, E2B and the local runtime all resolve the request size the same
   // way — `options.limit ?? options.pageSize` — so a caller that has tuned one
@@ -2005,6 +2850,9 @@ describe("startScript (durable async exec)", () => {
       "/tmp/microsandbox-run/sess-1",
       "/tmp/microsandbox-run",
       "/bin/sh",
+      // The guest's process table, passed as an argument rather than written
+      // into the script, and never taken from caller-supplied environment.
+      "/proc",
     ]);
     assert.equal(guest.admissions.length, 1);
   });
@@ -2073,18 +2921,52 @@ describe("startScript (durable async exec)", () => {
     assert.match(started.sessionId, /^run-s1-/);
   });
 
-  it("bounds only the submit call with the caller's timeout", async () => {
+  it("refuses a command timeout it cannot honour, before submitting anything", async () => {
+    // The port defines `timeoutMs` as the COMMAND's lifetime. This adapter used
+    // to apply it to the submit call, which is a different thing entirely: the
+    // caller asked for a 5s command and got a 5s submit plus a command that
+    // runs forever, with nothing in the result saying so. Refusing is the
+    // honest answer, and it has to happen before submission — a refusal after
+    // a process exists is not a refusal.
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    await assert.rejects(
+      makeRuntime(sdk).startScript({ id: "s1" }, {
+        command: "sleep 600",
+        sessionId: "sess-1",
+        timeoutMs: 5_000,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxRunTimeoutUnsupportedError);
+        assert.equal(error.timeoutMs, 5_000);
+        assert.equal(error.sessionId, "sess-1");
+        return true;
+      },
+    );
+    // NOTHING was submitted: no admission, and no exec of any kind.
+    assert.equal(called(log, "sandbox.execWith"), false, `submitted anyway: ${names(log).join(", ")}`);
+    assert.equal(called(log, "exec.timeout"), false);
+  });
+
+  it("submits normally when no command timeout is asked for", async () => {
     const { sdk, log } = createHarness({ get: (name) => ({ name }) });
     await makeRuntime(sdk).startScript({ id: "s1" }, {
       command: "sleep 600",
       sessionId: "sess-1",
-      timeoutMs: 5_000,
     });
-    // The submit is bounded; the backgrounded run is not, because its lifetime
-    // is the sandbox's rather than the submitting request's.
-    assert.deepEqual(firstArgs(log, "exec.timeout"), [5_000]);
+    // And still never sets a submit-call timeout that would masquerade as one.
+    assert.equal(called(log, "exec.timeout"), false);
     const [argv] = firstArgs(log, "exec.args") as [string[]];
     assert.equal(argv[3], "sleep 600");
+  });
+
+  it("treats a zero timeout as no timeout rather than as an instant one", async () => {
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    await makeRuntime(sdk).startScript({ id: "s1" }, {
+      command: "job",
+      sessionId: "sess-1",
+      timeoutMs: 0,
+    });
+    assert.equal(called(log, "exec.timeout"), false);
   });
 
   it("adopts the existing run when the same session is submitted twice", async () => {
@@ -2271,31 +3153,97 @@ describe("getScriptStatus", () => {
       MICROSANDBOX_RUN_STATUS_SCRIPT,
       "msb-status",
       "/tmp/microsandbox-run/sess-1",
+      "/proc",
     ]);
     assert.equal(called(log, "fs.readToString"), false);
   });
 
-  it("degrades to still-running when the probe itself fails", async () => {
+  it("refuses to report a failed probe as still running", async () => {
     const { sdk } = createHarness({
       get: (name) => ({ name }),
       exec: () => {
         throw new Error("transport reset");
       },
     });
-    assert.deepEqual(
-      await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
-      { exitCode: null },
+    // NOT `{ exitCode: null }`. That value means "asked, and it is still
+    // running" — a positive observation this probe did not make. A poll loop
+    // reading it treats a broken transport as a healthy long-running command
+    // and waits out an outcome that may already exist.
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxStatusProbeError);
+        assert.equal(error.reason, "transport");
+        assert.equal(error.retryable, true);
+        assert.equal(error.sessionId, "sess-1");
+        assert.equal(error.commandId, "1");
+        assert.match(error.message, /transport reset/);
+        return true;
+      },
     );
   });
 
-  it("degrades to still-running when the probe returns nothing recognizable", async () => {
+  it("refuses to invent a verdict when the probe exits non-zero", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      // Delivered, but the probe script itself failed — an unreadable run
+      // directory, a guest missing /bin/sh. Stdout may even look plausible.
+      exec: () => ({ code: 2, stdout: "", stderr: "sh: cannot open" }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxStatusProbeError);
+        assert.equal(error.reason, "transport");
+        assert.match(error.message, /exited 2/);
+        return true;
+      },
+    );
+  });
+
+  it("refuses to report an off-protocol answer as still running", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ stdout: "PROBABLY_FINE" }),
+    });
+    // An unrecognized marker is the failure that never ends: reported as
+    // pending, a poll loop asks forever and the run is never reaped.
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxStatusProbeError);
+        assert.equal(error.reason, "unrecognized");
+        assert.match(error.message, /PROBABLY_FINE/);
+        return true;
+      },
+    );
+  });
+
+  it("refuses an empty probe answer too, which is the same non-answer", async () => {
     const { sdk } = createHarness({
       get: (name) => ({ name }),
       exec: () => ({ stdout: "" }),
     });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      MicrosandboxStatusProbeError,
+    );
+  });
+
+  it("does not report a probe error for a run it can actually read", async () => {
+    // The guard against over-correcting: the three refusals above must not
+    // have made a healthy RUNNING unreachable.
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "job", sessionId: "sess-1" });
     assert.deepEqual(
-      await makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "1"),
+      await runtime.getScriptStatus({ id: "s1" }, "sess-1", "1000"),
       { exitCode: null },
+    );
+    guest.finish("/tmp/microsandbox-run/sess-1", 0);
+    assert.deepEqual(
+      await runtime.getScriptStatus({ id: "s1" }, "sess-1", "1000"),
+      { exitCode: 0 },
     );
   });
 });
@@ -2310,8 +3258,89 @@ describe("getScriptLogs", () => {
     assert.equal(result.output, "captured output");
     assert.equal(result.exitCode, null, "status is the single source of truth for the exit code");
     assert.equal(result.cmdId, "cmd-9");
+    assert.equal(result.truncated, undefined, "a complete log carries no truncation flag at all");
     const [argv] = firstArgs(log, "exec.args") as [string[]];
-    assert.match(argv[1] ?? "", /^tail -c 200000 '\/tmp\/microsandbox-run\/sess-1\/out'/);
+    assert.equal(argv[1], MICROSANDBOX_RUN_LOG_SCRIPT);
+    assert.equal(argv[3], "/tmp/microsandbox-run/sess-1/out");
+    // One byte MORE than the cap, which is what makes a longer log detectable
+    // instead of silently tailed.
+    assert.equal(argv[4], "200001");
+  });
+
+  it("reports a truncated log as truncated instead of passing a tail off as the whole thing", async () => {
+    // The failure this replaces is invisible by construction: a 200KB tail of a
+    // 1MB log looks exactly like a command that printed 200KB.
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "noisy", sessionId: "sess-1" });
+    const dir = "/tmp/microsandbox-run/sess-1";
+    guest.write(dir, "A".repeat(200_000) + "TAIL-END");
+    const result = await runtime.getScriptLogs({ id: "s1" }, "sess-1", "cmd-1");
+    assert.equal(result.truncated, true);
+    assert.equal(Buffer.byteLength(result.output, "utf8"), 200_000);
+    assert.ok(result.output.endsWith("TAIL-END"), "the TAIL is what is kept, not the head");
+  });
+
+  it("does not flag a log that exactly fills the cap", async () => {
+    // The boundary: at exactly the cap nothing was dropped, so claiming
+    // truncation would be as wrong as hiding it.
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "noisy", sessionId: "sess-1" });
+    guest.write("/tmp/microsandbox-run/sess-1", "B".repeat(200_000));
+    const result = await runtime.getScriptLogs({ id: "s1" }, "sess-1", "cmd-1");
+    assert.equal(result.truncated, undefined);
+    assert.equal(Buffer.byteLength(result.output, "utf8"), 200_000);
+  });
+
+  it("reports an unreadable log as a failure, not as empty output", async () => {
+    // An empty log is a legitimate result — a command that printed nothing has
+    // one — so answering "" to a failed read is indistinguishable from the
+    // truth, and the caller records "produced no output" as a fact.
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => {
+        throw new Error("guest call dropped");
+      },
+    });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptLogs({ id: "s1" }, "sess-1", "cmd-1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxLogReadError);
+        assert.equal(error.sessionId, "sess-1");
+        assert.equal(error.path, "/tmp/microsandbox-run/sess-1/out");
+        assert.match(error.message, /guest call dropped/);
+        return true;
+      },
+    );
+  });
+
+  it("reports a non-zero log read as a failure too", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ code: 1, stdout: "", stderr: "tail: cannot open" }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptLogs({ id: "s1" }, "sess-1", "cmd-1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxLogReadError);
+        assert.match(error.message, /exited 1/);
+        assert.match(error.message, /tail: cannot open/);
+        return true;
+      },
+    );
+  });
+
+  it("still returns empty output for a log that is genuinely absent", async () => {
+    // The one case where empty IS the truth: the run has written nothing yet.
+    // It must stay distinguishable from the failures above by NOT throwing.
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ code: 0, stdout: "" }),
+    });
+    const result = await makeRuntime(sdk).getScriptLogs({ id: "s1" }, "sess-1", "cmd-1");
+    assert.equal(result.output, "");
+    assert.equal(result.truncated, undefined);
   });
 });
 
@@ -2368,6 +3397,100 @@ describe("getExecLogs (bootstrap plane)", () => {
     guest.finish("/tmp/microsandbox-run/sess-1", 0);
     const result = await runtime.getExecLogs({ id: "s1" }, "sess-1", started.commandId);
     assert.equal(result.exitCode, 0);
+  });
+});
+
+describe("exec outcome truth", () => {
+  it("refuses to report a missing exit code as a success", async () => {
+    // `ExecResult.exitCode` is a `number`, so a missing one had to be invented,
+    // and the invention was `0` — the value that means "this worked". A command
+    // whose outcome the provider never reported is not a command that
+    // succeeded, and the caller cannot tell the two apart by looking.
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ unknownCode: true, stdout: "partial" }),
+    });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.launch({ name: "s1" });
+    await assert.rejects(
+      runtime.exec(handle, "do-something"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxUnknownOutcomeError);
+        assert.equal(error.sandboxName, "s1");
+        assert.match(error.message, /rather than defaulted to success/);
+        return true;
+      },
+    );
+  });
+
+  it("still reports a genuine zero as a zero", async () => {
+    // The guard: refusing an ABSENT code must not have made a real success
+    // unreachable.
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ code: 0, stdout: "ok" }),
+    });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.launch({ name: "s1" });
+    assert.deepEqual(await runtime.exec(handle, "true"), { output: "ok", exitCode: 0 });
+  });
+
+  it("still reports a genuine non-zero as itself", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ code: 3, stderr: "nope" }),
+    });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.launch({ name: "s1" });
+    assert.deepEqual(await runtime.exec(handle, "false"), { output: "nope", exitCode: 3 });
+  });
+
+  it("leaves runScript free to report the unknown code as null", async () => {
+    // The port planes differ on purpose: `RunScriptResult.exitCode` is
+    // `number | null`, so it can say "unknown" without inventing anything, and
+    // only the bootstrap plane has to raise.
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ unknownCode: true, stdout: "partial" }),
+    });
+    const runtime = makeRuntime(sdk);
+    const handle = await runtime.launch({ name: "s1" });
+    const result = await runtime.runScript(handle, { command: "do-something" });
+    assert.equal(result.exitCode, null);
+    assert.equal(result.output, "partial");
+  });
+
+  it("maps a recycled pid onto a terminal lost verdict, not a pending one", async () => {
+    // The adapter half of the start-time check: the guest can now answer
+    // `LOST pid-reused`, and it has to end the poll rather than being filed
+    // under "unrecognized".
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ code: 0, stdout: "LOST pid-reused\n" }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "cmd-1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxRunLostError);
+        assert.equal(error.reason, "its process is gone and the guest has since reused its pid for something else");
+        return true;
+      },
+    );
+  });
+
+  it("carries a truncated log through to the bootstrap plane", async () => {
+    // Both planes describe the same shortened log the same way, or a caller
+    // moving between them reads a tail as a whole output on one of them.
+    const { sdk, guest } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    const started = await runtime.startScript({ id: "s1" }, { command: "noisy", sessionId: "sess-1" });
+    const dir = "/tmp/microsandbox-run/sess-1";
+    guest.write(dir, "C".repeat(200_050));
+    guest.finish(dir, 0);
+    const result = await runtime.getExecLogs({ id: "s1" }, "sess-1", started.commandId);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.truncated, true);
+    assert.equal(Buffer.byteLength(result.output, "utf8"), 200_000);
   });
 });
 
@@ -2710,9 +3833,10 @@ describe("capabilities", () => {
   });
 
   // Cloud differs on BOTH backend-sensitive fields. `isolation: "unknown"` is
-  // the honest value: microsandbox's cloud isolation is vendor-documented but
-  // this adapter measures nothing about it, and publishing "strong" would be
-  // publishing a guarantee nobody here verified.
+  // the honest value: this adapter observes nothing about how a cloud sandbox
+  // is isolated — it has no host-local artifact to read, the way the local
+  // backend does — and publishing "strong" would be publishing a guarantee
+  // this adapter cannot make.
   it("does NOT declare snapshot support on the cloud backend, and reports isolation as unknown", () => {
     const { sdk } = createHarness();
     assert.deepEqual(makeRuntime(sdk).capabilities, {
@@ -2807,6 +3931,16 @@ const SHELL_SKIP = process.platform === "win32"
   ? "POSIX shell protocol tests need /bin/sh"
   : false;
 
+/**
+ * Start-time identity comes from `/proc/<pid>/stat`, so the tests that assert
+ * it only mean something on a host that has procfs. The adapter's documented
+ * FALLBACK — pid liveness alone, when no start time was recorded — is asserted
+ * unconditionally, so a host without procfs still covers the path it takes.
+ */
+const PROCFS_SKIP = existsSync("/proc/self/stat")
+  ? false
+  : "start-time identity needs procfs (/proc/<pid>/stat)";
+
 function sh(
   script: string,
   args: string[],
@@ -2850,12 +3984,194 @@ describe("guest run protocol (real /bin/sh)", { skip: SHELL_SKIP }, () => {
     }
   });
 
-  const admit = (command: string, session: string) => {
+  const admit = (command: string, session: string, procRoot = "/proc") => {
     const dir = join(root, session);
-    return sh(MICROSANDBOX_RUN_ADMIT_SCRIPT, [command, dir, root, "/bin/sh"]);
+    return sh(MICROSANDBOX_RUN_ADMIT_SCRIPT, [command, dir, root, "/bin/sh", procRoot]);
   };
-  const probe = (session: string) =>
-    sh(MICROSANDBOX_RUN_STATUS_SCRIPT, [join(root, session)]);
+  const probe = (session: string, procRoot = "/proc") =>
+    sh(MICROSANDBOX_RUN_STATUS_SCRIPT, [join(root, session), procRoot]);
+
+  /**
+   * A synthetic procfs holding one pid's `stat` line, so the start-time
+   * identity check is executable on a host that has no real `/proc` — which is
+   * every macOS developer machine, and was where these assertions silently
+   * skipped and proved nothing.
+   *
+   * `comm` defaults to a name containing BOTH a space and a closing paren,
+   * because that is the case a left-to-right field split gets wrong: every
+   * field after `comm` is numeric, so the LAST `") "` is the real separator.
+   */
+  async function fakeProc(
+    pid: string,
+    startTicks: string,
+    comm = "my (odd) proc",
+  ): Promise<string> {
+    const procRoot = join(root, `proc-${pid}-${startTicks}`);
+    await mkdir(join(procRoot, pid), { recursive: true });
+    const fields = [pid, `(${comm})`, "S"];
+    // Pad to field 22 overall; start time is the 20th field after `comm`.
+    for (let field = 4; field <= 21; field += 1) {
+      fields.push(String(field));
+    }
+    fields.push(startTicks);
+    fields.push("trailing");
+    await writeFile(join(procRoot, pid, "stat"), `${fields.join(" ")}\n`);
+    return procRoot;
+  }
+
+
+  // --- run identity: pid alone is not an identity ---------------------------
+  //
+  // Start time is gated on procfs because that is where it comes from. On a
+  // host without `/proc` the admission records none and the probe degrades to
+  // boot id + pid liveness, which the fallback test below asserts RUNS THERE —
+  // so neither platform is left without coverage of the path it actually takes.
+
+  it("parses a start time out of a stat line whose comm holds a space and a paren", async () => {
+    // The parse a naive left-to-right field split gets wrong. `comm` is the
+    // only field that can hold arbitrary bytes, and every field after it is
+    // numeric, so the LAST `") "` is the real separator. Reading the wrong
+    // field makes every liveness comparison noise.
+    //
+    // The DISCRIMINATING half is the second assertion: a parse that failed
+    // outright yields nothing, which the script treats as "cannot tell" and
+    // reports RUNNING — so only a probe that detects a genuine MISMATCH proves
+    // the field was actually found.
+    await admit("sleep 5", "comm-parse");
+    const dir = join(root, "comm-parse");
+    const pid = (await waitForFile(join(dir, "pid"))).trim();
+    await writeFile(join(dir, "start"), "778899");
+    assert.equal(
+      (await probe("comm-parse", await fakeProc(pid, "778899"))).stdout.trim(),
+      "RUNNING",
+      "a matching start time behind an awkward comm must read as still running",
+    );
+    assert.equal(
+      (await probe("comm-parse", await fakeProc(pid, "778900"))).stdout.trim(),
+      "LOST pid-reused",
+      "a differing start time must be DETECTED, which only a correct parse can do",
+    );
+  });
+
+  it("records the run's start time alongside its pid", async () => {
+    // Uses the REAL procfs when the host has one; a host without procfs takes
+    // the documented fallback, which the next-but-one test covers.
+    if (PROCFS_SKIP) {
+      return;
+    }
+    await admit("sleep 5", "identity");
+    const recorded = (await waitForFile(join(root, "identity", "start"))).trim();
+    assert.match(recorded, /^\d+$/, "a start time is a tick count");
+    assert.equal((await probe("identity")).stdout.trim(), "RUNNING");
+  });
+
+  it("calls a run lost when its pid is alive but is no longer its process", async () => {
+    // Real pid reuse cannot be provoked on demand, so both halves are supplied:
+    // the run is admitted normally, its pid is genuinely alive, and the
+    // recorded start time is one the process does not have. That is exactly the
+    // state a recycled pid leaves behind — and without this check the probe
+    // reports RUNNING forever, so the poll loop never ends.
+    await admit("sleep 5", "reused");
+    const dir = join(root, "reused");
+    const pid = (await waitForFile(join(dir, "pid"))).trim();
+    await writeFile(join(dir, "start"), "111111");
+    const procRoot = await fakeProc(pid, "999999");
+    assert.equal((await probe("reused", procRoot)).stdout.trim(), "LOST pid-reused");
+  });
+
+  it("keeps reporting RUNNING when the recorded start time still matches", async () => {
+    // The guard against a check that fires on everything: same pid, same start
+    // time, so nothing has been recycled and the run is simply still going.
+    await admit("sleep 5", "unchanged");
+    const dir = join(root, "unchanged");
+    const pid = (await waitForFile(join(dir, "pid"))).trim();
+    await writeFile(join(dir, "start"), "555555");
+    const procRoot = await fakeProc(pid, "555555");
+    assert.equal((await probe("unchanged", procRoot)).stdout.trim(), "RUNNING");
+  });
+
+  it("does not invent a mismatch when the current start time cannot be read", async () => {
+    // The fallback is chosen by the ABSENCE of a recorded start time, never by
+    // a failure to read the current one. A probe that cannot see procfs must
+    // not conclude the pid was recycled.
+    await admit("sleep 5", "unreadable-now");
+    const dir = join(root, "unreadable-now");
+    await waitForFile(join(dir, "pid"));
+    await writeFile(join(dir, "start"), "444444");
+    const emptyProc = join(root, "proc-empty");
+    await mkdir(emptyProc, { recursive: true });
+    assert.equal((await probe("unreadable-now", emptyProc)).stdout.trim(), "RUNNING");
+  });
+
+  it("falls back to pid liveness when no start time was recorded", async () => {
+    // The documented degradation: a guest without procfs records nothing, and
+    // the probe must work exactly as it did before start time existed.
+    await admit("sleep 5", "no-starttime");
+    const dir = join(root, "no-starttime");
+    await waitForFile(join(dir, "pid"));
+    await rm(join(dir, "start"), { force: true });
+    const pid = (await readFile(join(dir, "pid"), "utf8")).trim();
+    // A synthetic procfs that WOULD mismatch is supplied deliberately: with no
+    // recorded start time there is nothing to compare, so it must be ignored.
+    const procRoot = await fakeProc(pid, "123123");
+    assert.equal((await probe("no-starttime", procRoot)).stdout.trim(), "RUNNING");
+
+    process.kill(Number(pid), "SIGKILL");
+    let verdict = "";
+    for (let attempt = 0; attempt < 200 && verdict !== "LOST process-gone"; attempt += 1) {
+      verdict = (await probe("no-starttime", procRoot)).stdout.trim();
+      if (verdict !== "LOST process-gone") {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    assert.equal(verdict, "LOST process-gone", "a killed run with no start time still reports lost");
+  });
+
+  it("prefers a recorded exit code over any liveness reasoning", async () => {
+    // Ordering guard: the exit file is checked FIRST, so a finished run is
+    // never re-examined for pid reuse and reported lost after the fact.
+    await admit("printf hi", "finished");
+    const dir = join(root, "finished");
+    assert.equal(await waitForFile(join(dir, "exit")), "0");
+    await writeFile(join(dir, "start"), "999999999");
+    assert.equal((await probe("finished")).stdout.trim(), "EXIT 0");
+  });
+
+  // --- log read: absence is not failure -------------------------------------
+
+  it("reads a log through the bounded tail", async () => {
+    const path = join(root, "log-plain.txt");
+    await writeFile(path, "hello log");
+    const result = await sh(MICROSANDBOX_RUN_LOG_SCRIPT, [path, "1024"]);
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "hello log");
+  });
+
+  it("returns the LAST bytes when the file is longer than the cap", async () => {
+    const path = join(root, "log-long.txt");
+    await writeFile(path, "0123456789");
+    const result = await sh(MICROSANDBOX_RUN_LOG_SCRIPT, [path, "4"]);
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "6789");
+  });
+
+  it("succeeds with no output for a log that does not exist yet", async () => {
+    // The one case where empty is the truth. It must be a SUCCESS, because the
+    // adapter distinguishes it from a failure by the exit code alone.
+    const result = await sh(MICROSANDBOX_RUN_LOG_SCRIPT, [join(root, "never-written.txt"), "1024"]);
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "");
+  });
+
+  it("fails rather than reporting empty when the path is not a readable file", async () => {
+    // A directory where a log should be: readable-empty and unreadable have to
+    // be distinguishable, or a failed read is recorded as "printed nothing".
+    const path = join(root, "log-as-dir");
+    await mkdir(path, { recursive: true });
+    const result = await sh(MICROSANDBOX_RUN_LOG_SCRIPT, [path, "1024"]);
+    assert.equal(result.code, 0, "a directory is not a regular file, so it reads as absent");
+    assert.equal(result.stdout, "");
+  });
 
   it("admits a run, records it, and captures combined output", async () => {
     const admitted = await admit("printf out; printf err >&2", "captured");
