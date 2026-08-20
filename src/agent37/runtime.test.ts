@@ -20,7 +20,12 @@ import {
   isRetryableAgent37Code,
   resolveSandboxRuntimeCapabilities,
 } from "../index.js";
-import type { Agent37Instance, RuntimeHandle } from "../index.js";
+import type {
+  Agent37Instance,
+  LaunchOptions,
+  RuntimeHandle,
+  SandboxRuntime,
+} from "../index.js";
 
 // Both are required arguments precisely because neither has a correct default.
 const TEST_BASE_URL = "https://control.example.invalid";
@@ -1078,6 +1083,8 @@ describe("Agent37 malformed 2xx responses", () => {
       { id: "", status: "running" },
       { id: "ab12cd34ef" },
       { id: "ab12cd34ef", status: "" },
+      { id: "   ", status: "running" },
+      { id: "ab12cd34ef", status: "\t\n" },
       { id: 7, status: "running" },
       null,
     ]) {
@@ -1197,16 +1204,48 @@ describe("Agent37 create timeout", () => {
     );
   });
 
-  it("keeps createTimeoutSeconds off the public launch options type", async () => {
+  it("rejects the option arriving through the shared LaunchOptions type, not a compile error", async () => {
+    // The honest statement of the guarantee. `createTimeoutSeconds` is part of
+    // the shared cross-provider LaunchOptions (src/types.ts) because Daytona,
+    // e2b, and local all implement it, so it typechecks against Agent37 too and
+    // NO compile error is available to stop it.
+    //
+    // The `LaunchOptions` annotation below documents that path; it does not
+    // police it. tsconfig.json excludes src/**/*.test.ts, so no test file in
+    // this repo is typechecked — tsx strips these annotations without checking
+    // them. What this test actually proves is the runtime behaviour, which is
+    // the only thing enforcing the refusal, and which is exactly why the
+    // refusal had to be a runtime one.
+    const shared: LaunchOptions = {
+      labels: { purpose: "test-purpose" },
+      createTimeoutSeconds: 120,
+    };
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+
+    await assert.rejects(
+      () => makeRuntime(h).launch(shared),
+      Agent37CreateTimeoutUnsupportedError,
+      "the shared option must be refused at runtime; no compile error stops it",
+    );
+    assert.equal(h.requests.length, 0);
+  });
+
+  it("reaches the same refusal through a caller holding only the port interface", async () => {
+    // Parameter bivariance means narrowing Agent37's own signature would not
+    // stop this path, which is why the refusal is a runtime one.
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+    const port: SandboxRuntime = makeRuntime(h);
+
+    await assert.rejects(
+      () => port.launch({ labels: { purpose: "test-purpose" }, createTimeoutSeconds: 5 }),
+      Agent37CreateTimeoutUnsupportedError,
+    );
+    assert.equal(h.requests.length, 0);
+  });
+
+  it("attaches no timeout to the create request anywhere in the source", async () => {
     const dir = fileURLToPath(new URL(".", import.meta.url));
     const code = withoutComments(await readFile(join(dir, "runtime.ts"), "utf8"));
-    const optionsBlock = /export type Agent37LaunchOptions = \{[\s\S]*?\n\};/.exec(code);
-    assert.ok(optionsBlock, "Agent37LaunchOptions must still be declared");
-    assert.ok(
-      !optionsBlock[0].includes("createTimeoutSeconds"),
-      "createTimeoutSeconds must not be a declared launch option: see the HOLD note",
-    );
-    // And the create call must carry no timeout, however it is spelled.
     const launchCall = /"POST", "\/v1\/instances", \{[\s\S]*?\}\);/.exec(code);
     assert.ok(launchCall, "the create call must still be findable");
     assert.ok(
