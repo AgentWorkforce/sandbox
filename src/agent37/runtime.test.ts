@@ -1486,6 +1486,38 @@ describe("Agent37Client", () => {
     assert.deepEqual(await client.hosting("POST", "/v1/instances/x/stop"), {});
   });
 
+  it("rejects a non-finite maxAttempts so the retry loop cannot spin forever", () => {
+    const h = harness(() => ({ json: {} }));
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      assert.throws(
+        () =>
+          new Agent37Client({
+            apiKey: TEST_KEY,
+            baseUrl: TEST_BASE_URL,
+            fetch: h.fetch,
+            maxAttempts: bad,
+          }),
+        /maxAttempts must be a finite number/,
+      );
+    }
+  });
+
+  it("rejects a non-finite or negative retryBaseDelayMs", () => {
+    const h = harness(() => ({ json: {} }));
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      assert.throws(
+        () =>
+          new Agent37Client({
+            apiKey: TEST_KEY,
+            baseUrl: TEST_BASE_URL,
+            fetch: h.fetch,
+            retryBaseDelayMs: bad,
+          }),
+        /retryBaseDelayMs must be a finite, non-negative number/,
+      );
+    }
+  });
+
   it("classifies the documented retryable codes and nothing else", () => {
     for (const code of [
       "no_capacity",

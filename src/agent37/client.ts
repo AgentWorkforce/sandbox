@@ -167,8 +167,24 @@ export class Agent37Client {
     if (typeof this.fetchImpl !== "function") {
       throw new Error("Agent37Client requires a fetch implementation (none found on globalThis)");
     }
-    this.maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
-    this.retryBaseDelayMs = options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+    // Non-finite maxAttempts (NaN, ±Infinity) would poison the retry loop:
+    // `attempt >= NaN` is always false, so the throw guard never fires and the
+    // loop retries a retryable failure forever. Reject explicitly rather than
+    // silently coercing.
+    const requestedAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    if (!Number.isFinite(requestedAttempts)) {
+      throw new Error(
+        `Agent37Client maxAttempts must be a finite number; got ${String(options.maxAttempts)}`,
+      );
+    }
+    this.maxAttempts = Math.max(1, Math.floor(requestedAttempts));
+    const requestedRetryBase = options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+    if (!Number.isFinite(requestedRetryBase) || requestedRetryBase < 0) {
+      throw new Error(
+        `Agent37Client retryBaseDelayMs must be a finite, non-negative number; got ${String(options.retryBaseDelayMs)}`,
+      );
+    }
+    this.retryBaseDelayMs = requestedRetryBase;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
