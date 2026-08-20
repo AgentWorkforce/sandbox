@@ -10,9 +10,11 @@ import * as pkg from "../index.js";
 import {
   Agent37ApiError,
   Agent37Client,
+  Agent37CommandTimeoutUnsupportedError,
   Agent37EnvValidationError,
   Agent37ForeignHandleError,
   Agent37Runtime,
+  Agent37UnknownExitCodeError,
   isRetryableAgent37Code,
   resolveSandboxRuntimeCapabilities,
 } from "../index.js";
@@ -123,6 +125,11 @@ function execCommand(request: RecordedRequest): string {
   return parsed.command as string;
 }
 
+/** Strip comments so a source scan reads code, not the prose explaining it. */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
 /** Recover the payload of `printf %s '<b64>' | base64 -d > '<path>'`. */
 function decodeWrittenFile(command: string, path: string): string {
   const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -142,6 +149,8 @@ describe("public barrel", () => {
     assert.equal(typeof pkg.Agent37ApiError, "function");
     assert.equal(typeof pkg.Agent37EnvValidationError, "function");
     assert.equal(typeof pkg.Agent37ForeignHandleError, "function");
+    assert.equal(typeof pkg.Agent37UnknownExitCodeError, "function");
+    assert.equal(typeof pkg.Agent37CommandTimeoutUnsupportedError, "function");
     assert.equal(typeof pkg.isRetryableAgent37Code, "function");
   });
 });
@@ -263,6 +272,26 @@ describe("Agent37Runtime configuration", () => {
       else process.env.AGENT37_API_KEY = previousKey;
       if (previousUrl === undefined) delete process.env.AGENT37_API_URL;
       else process.env.AGENT37_API_URL = previousUrl;
+    }
+  });
+
+  it("keeps the async emulation and the hosted-agent plane out of the source", async () => {
+    // Comments still *describe* why the nohup+/tmp emulation was removed, so the
+    // scan runs over code only. A regression here would be a silent return of
+    // the exact construct that could not survive an instance restart.
+    const dir = fileURLToPath(new URL(".", import.meta.url));
+    for (const file of ["client.ts", "runtime.ts"]) {
+      const code = withoutComments(await readFile(join(dir, file), "utf8"));
+      for (const [pattern, why] of [
+        [/nohup/, "the nohup background emulation cannot survive a restart"],
+        [/\/tmp\/agent37-run/, "the /tmp run-state root went with the async emulation"],
+        [
+          /\/v1\/responses/,
+          "hosted-agent responses are a separate plane, excluded from the sandbox-command adapter",
+        ],
+      ] as const) {
+        assert.ok(!pattern.test(code), `${file} must not reference ${pattern}: ${why}`);
+      }
     }
   });
 
@@ -556,109 +585,172 @@ describe("Agent37Runtime.launch", () => {
 
 // --- ownership enforcement ------------------------------------------------
 
-describe("Agent37Runtime ownership enforcement", () => {
-  it("refuses to destroy a foreign instance not launched by this runtime", async () => {
+// Ownership is *caller-declared attachment*, not in-process provenance. `launch`
+// owns what it created; every other resolver hands back an attached (unowned)
+// handle unless the caller says `owned: true`. That is what lets a process that
+// crashed and restarted reclaim the right to delete its own instance — a
+// provenance-only set could never express it.
+describe("Agent37Runtime ownership", () => {
+  it("refuses to start, stop, or destroy a handle it was never told about", async () => {
     const h = harness(() => ({ json: {} }));
-    await assert.rejects(
-      makeRuntime(h).destroy(RUNNING_HANDLE),
-      (error: unknown) => {
+    const runtime = makeRuntime(h);
+    for (const [name, operation] of [
+      ["start", () => runtime.start(RUNNING_HANDLE)],
+      ["stop", () => runtime.stop(RUNNING_HANDLE)],
+      ["destroy", () => runtime.destroy(RUNNING_HANDLE)],
+    ] as const) {
+      await assert.rejects(operation(), (error: unknown) => {
         assert.ok(
           error instanceof Agent37ForeignHandleError,
-          `expected Agent37ForeignHandleError, got ${String(error)}`,
+          `${name}: expected Agent37ForeignHandleError, got ${String(error)}`,
         );
-        assert.match(error.message, /foreign/);
         assert.match(error.message, /ab12cd34ef/);
         return true;
-      },
-    );
-    assert.equal(h.requests.length, 0, "must not send any request for a foreign handle");
+      });
+    }
+    assert.equal(h.requests.length, 0, "an unknown handle must not reach the hosting plane");
   });
 
-  it("refuses to start a foreign instance", async () => {
-    const h = harness(() => ({ json: {} }));
-    await assert.rejects(makeRuntime(h).start(RUNNING_HANDLE), Agent37ForeignHandleError);
-    assert.equal(h.requests.length, 0, "must not send any request for a foreign handle");
-  });
-
-  it("refuses to stop a foreign instance", async () => {
-    const h = harness(() => ({ json: {} }));
-    await assert.rejects(makeRuntime(h).stop(RUNNING_HANDLE), Agent37ForeignHandleError);
-    assert.equal(h.requests.length, 0, "must not send any request for a foreign handle");
-  });
-
-  it("allows destroy on an instance launched by this runtime", async () => {
-    const launched = instanceObject({ id: "owned_instance" });
+  it("mutates and deletes an instance it launched", async () => {
+    const launched = instanceObject({ id: "owned_inst" });
     const h = harness((request) =>
       request.method === "POST" && request.url.endsWith("/v1/instances")
         ? { status: 201, json: launched }
-        : { json: {} },
+        : { json: { id: "owned_inst", status: "running" } },
     );
     const runtime = makeRuntime(h);
     const handle = await runtime.launch();
-    assert.equal(handle.id, "owned_instance");
-    await runtime.destroy(handle);
-    const deleteRequest = h.requests.find(
-      (r) => r.method === "DELETE" && r.url.includes("owned_instance"),
-    );
-    assert.ok(deleteRequest, "DELETE request must have been sent for the owned instance");
-  });
-
-  it("allows start and stop on an instance launched by this runtime", async () => {
-    const launched = instanceObject({ id: "owned_instance" });
-    const h = harness((request) =>
-      request.method === "POST" && request.url.endsWith("/v1/instances")
-        ? { status: 201, json: launched }
-        : { json: { id: "owned_instance", status: "running" } },
-    );
-    const runtime = makeRuntime(h);
-    const handle = await runtime.launch();
-    const started = await runtime.start(handle);
-    assert.equal(started.state, "STARTED");
+    assert.equal((await runtime.start(handle)).state, "STARTED");
     await runtime.stop(handle);
-    const stopRequest = h.requests.find(
-      (r) => r.method === "POST" && r.url.includes("owned_instance/stop"),
-    );
-    assert.ok(stopRequest, "POST /stop must have been sent for the owned instance");
-  });
-
-  it("findAllByLabels with owned: true returns only instances launched by this runtime", async () => {
-    const ownedInstance = instanceObject({ id: "owned_id" });
-    const foreignInstance = instanceObject({ id: "foreign_id" });
-    const h = harness((request) =>
-      request.method === "POST" && request.url.endsWith("/v1/instances")
-        ? { status: 201, json: ownedInstance }
-        : { json: { data: [ownedInstance, foreignInstance] } },
-    );
-    const runtime = makeRuntime(h);
-    await runtime.launch();
-    const ownedHandles = await runtime.findAllByLabels({}, { owned: true });
+    await runtime.destroy(handle);
     assert.deepEqual(
-      ownedHandles.map((handle) => handle.id),
-      ["owned_id"],
-      "owned: true must exclude foreign instances",
+      h.requests.slice(1).map((r) => `${r.method} ${r.url.slice(TEST_BASE_URL.length)}`),
+      [
+        "POST /v1/instances/owned_inst/start",
+        "POST /v1/instances/owned_inst/stop",
+        "DELETE /v1/instances/owned_inst",
+      ],
     );
-    const allHandles = await runtime.findAllByLabels({}, { owned: false });
-    assert.equal(allHandles.length, 2, "owned: false (default) returns all matching instances");
   });
 
-  it("getById with owned: true returns null for an instance not launched by this runtime", async () => {
+  it("does NOT mutate an instance it merely attached to", async () => {
     const h = harness(() => ({ json: instanceObject() }));
-    const handle = await makeRuntime(h).getById("ab12cd34ef", { owned: true });
-    assert.equal(handle, null, "foreign instance must not be returned when owned: true");
-    assert.equal(h.requests.length, 0, "must short-circuit without a network round trip");
+    const runtime = makeRuntime(h);
+    const attached = await runtime.getById("ab12cd34ef");
+    assert.ok(attached, "an unowned lookup still resolves; ownership is not a search filter");
+    const afterLookup = h.requests.length;
+
+    await runtime.stop(attached);
+    const started = await runtime.start(attached);
+    assert.equal(started.state, attached.state, "start must not invent a state change");
+    await runtime.destroy(attached);
+
+    assert.equal(
+      h.requests.length,
+      afterLookup,
+      "an attached instance is caller-managed: no start, stop, or DELETE is ever issued",
+    );
   });
 
-  it("getById with owned: true returns an instance that was launched by this runtime", async () => {
-    const launched = instanceObject({ id: "owned_id" });
+  it("reclaims delete rights across a restart when the caller declares ownership", async () => {
+    // A brand-new runtime, exactly as after a crash: it launched nothing, but
+    // the caller knows this id is its own and says so. A provenance-only set
+    // would make this instance permanently undeletable.
     const h = harness((request) =>
-      request.method === "POST"
-        ? { status: 201, json: launched }
-        : { json: launched },
+      request.method === "DELETE" ? { json: { deleted: true } } : { json: instanceObject() },
     );
     const runtime = makeRuntime(h);
-    await runtime.launch();
-    const handle = await runtime.getById("owned_id", { owned: true });
-    assert.equal(handle?.id, "owned_id");
+    const handle = await runtime.getById("ab12cd34ef", { owned: true });
+    assert.ok(handle, "owned: true must resolve the instance, not filter it away");
+    await runtime.destroy(handle);
+    assert.equal((h.requests[1] as RecordedRequest).method, "DELETE");
+  });
+
+  it("adopts ownership through label lookup only when the caller asks for it", async () => {
+    const h = harness((request) =>
+      request.method === "DELETE"
+        ? { json: { deleted: true } }
+        : { json: { data: [instanceObject()] } },
+    );
+    const runtime = makeRuntime(h);
+
+    const [attached] = await runtime.findAllByLabels({ purpose: "test-purpose" });
+    assert.ok(attached, "a default lookup still returns matches");
+    await runtime.destroy(attached);
+    assert.equal(h.requests.length, 1, "an attached match is never deleted");
+
+    const [owned] = await runtime.findAllByLabels({ purpose: "test-purpose" }, { owned: true });
+    assert.ok(owned);
+    await runtime.destroy(owned);
+    assert.equal((h.requests[2] as RecordedRequest).method, "DELETE");
+  });
+
+  it("does NOT let a later read-only lookup strip ownership the caller declared", async () => {
+    const h = harness((request) =>
+      request.method === "DELETE"
+        ? { json: { deleted: true } }
+        : request.url.endsWith("/v1/instances")
+          ? { json: { data: [instanceObject()] } }
+          : { json: instanceObject() },
+    );
+    const runtime = makeRuntime(h);
+    const owned = await runtime.getById("ab12cd34ef", { owned: true });
+    assert.ok(owned);
+    await runtime.findAllByLabels({ purpose: "test-purpose" }); // unowned re-listing
+    await runtime.destroy(owned);
+    assert.equal(
+      (h.requests.at(-1) as RecordedRequest).method,
+      "DELETE",
+      "ownership is monotonic per id; a plain listing must not revoke it",
+    );
+  });
+
+  it("keeps ownership when a delete fails, so teardown stays retryable", async () => {
+    let deletes = 0;
+    const h = harness((request) => {
+      if (request.method !== "DELETE") {
+        return { status: 201, json: instanceObject() };
+      }
+      deletes += 1;
+      return deletes === 1
+        ? { status: 500, json: { error: { code: "internal" } } }
+        : { json: { deleted: true } };
+    });
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch();
+    await assert.rejects(runtime.destroy(handle), /internal/);
+    await runtime.destroy(handle);
+    assert.equal(deletes, 2, "a failed delete must leave the registration intact for a retry");
+  });
+
+  it("drops the registration once the instance is gone, in both terminal cases", async () => {
+    for (const terminal of [
+      { json: { deleted: true } },
+      { status: 404, json: { error: { code: "not_found" } } },
+    ]) {
+      const h = harness((request) =>
+        request.method === "DELETE" ? terminal : { status: 201, json: instanceObject() },
+      );
+      const runtime = makeRuntime(h);
+      const handle = await runtime.launch();
+      await runtime.destroy(handle);
+      await assert.rejects(
+        runtime.destroy(handle),
+        Agent37ForeignHandleError,
+        "a torn-down id is no longer known, so a repeat destroy is refused, not re-sent",
+      );
+      assert.equal(h.requests.length, 2);
+    }
+  });
+
+  it("does NOT swallow a non-404 delete failure", async () => {
+    const h = harness((request) =>
+      request.method === "DELETE"
+        ? { status: 500, json: { error: { code: "internal" } } }
+        : { status: 201, json: instanceObject() },
+    );
+    const runtime = makeRuntime(h);
+    await assert.rejects(runtime.destroy(await runtime.launch()), /internal/);
   });
 });
 
@@ -828,12 +920,26 @@ describe("Agent37Runtime.runScript", () => {
     });
   });
 
-  it("exposes truncated: true when the provider caps output at 512 KB", async () => {
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "big output", truncated: true } }));
-    const result = (await makeRuntime(h).runScript(RUNNING_HANDLE, { command: "x" })) as {
-      truncated?: boolean;
-    };
-    assert.equal(result.truncated, true, "truncated must be surfaced so callers know output is incomplete");
+  it("surfaces the 512 KB-per-stream truncation on BOTH planes, with no cast", async () => {
+    const capped = "x".repeat(512 * 1024);
+    const h = harness(() => ({ json: { exit_code: 0, stdout: capped, truncated: true } }));
+    const runtime = makeRuntime(h);
+
+    // No `as { truncated?: boolean }` anywhere here on purpose: `truncated` has
+    // to be part of the declared result types, or a caller cannot see it.
+    const script = await runtime.runScript(RUNNING_HANDLE, { command: "cat big" });
+    assert.equal(script.truncated, true);
+    assert.equal(script.output.length, capped.length, "the captured bytes are still returned");
+
+    const result = await runtime.exec(RUNNING_HANDLE, "cat big");
+    assert.equal(result.truncated, true, "exec must not discard the truncation flag");
+  });
+
+  it("omits truncated entirely when the provider reports complete output", async () => {
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "ok", truncated: false } }));
+    const runtime = makeRuntime(h);
+    assert.equal((await runtime.runScript(RUNNING_HANDLE, { command: "x" })).truncated, undefined);
+    assert.equal((await runtime.exec(RUNNING_HANDLE, "x")).truncated, undefined);
   });
 
   it("maps a missing exit_code to null (unknown outcome, not a success)", async () => {
@@ -842,27 +948,16 @@ describe("Agent37Runtime.runScript", () => {
     assert.equal(result.exitCode, null, "an omitted exit_code is an unknown outcome");
   });
 
-  it("exec throws on a missing exit_code rather than projecting it to 0", async () => {
+  it("exec throws a typed error on a missing exit_code rather than projecting it to 0", async () => {
     const h = harness(() => ({ json: { stdout: "hi" } }));
-    await assert.rejects(
-      makeRuntime(h).exec(RUNNING_HANDLE, "x"),
-      /unknown outcome|exit_code/,
-      "an unknown exec outcome must not be reported as success",
-    );
-  });
-
-  it("timeoutMs on exec bounds the HTTP call, not the command inside the instance", async () => {
-    // The provider caps commands at 280s and signals that via provisioning_failed.
-    // A caller passing timeoutMs: 5000 aborts the HTTP request after 5s but the
-    // command keeps running inside the instance. This test verifies the signal
-    // is set on the request (HTTP timeout) rather than sent to the command.
-    const h = harness(() => ({ json: { exit_code: 0, stdout: "" } }));
-    await makeRuntime(h).exec(RUNNING_HANDLE, "fast-cmd", { timeoutMs: 5000 });
-    assert.equal(
-      (h.requests[0] as RecordedRequest).hasSignal,
-      true,
-      "timeoutMs must set an AbortSignal on the HTTP request",
-    );
+    await assert.rejects(makeRuntime(h).exec(RUNNING_HANDLE, "x"), (error: unknown) => {
+      assert.ok(
+        error instanceof Agent37UnknownExitCodeError,
+        `expected Agent37UnknownExitCodeError, got ${String(error)}`,
+      );
+      assert.match(error.message, /ab12cd34ef/);
+      return true;
+    });
   });
 
   it("rejects invalid env names before they can reach a shell", async () => {
@@ -875,6 +970,67 @@ describe("Agent37Runtime.runScript", () => {
       Agent37EnvValidationError,
     );
     assert.equal(h.requests.length, 0);
+  });
+});
+
+// --- command lifetime -----------------------------------------------------
+
+// `timeoutMs` on the port means *command lifetime*: after it elapses the command
+// is no longer running. Agent37's exec takes no timeout, and aborting the HTTP
+// request leaves the command running inside the instance — so an AbortSignal is
+// not that guarantee, it only hides the fact that nothing was cancelled. The
+// one lifetime bound Agent37 genuinely enforces is its own 280-second cap.
+describe("Agent37 command lifetime", () => {
+  it("refuses a timeoutMs it cannot honour, before the command is ever submitted", async () => {
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "" } }));
+    const runtime = makeRuntime(h);
+    await assert.rejects(
+      runtime.runScript(RUNNING_HANDLE, { command: "sleep 600", timeoutMs: 120_000 }),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof Agent37CommandTimeoutUnsupportedError,
+          `expected Agent37CommandTimeoutUnsupportedError, got ${String(error)}`,
+        );
+        assert.match(error.message, /280/, "the error must name the cap the caller has to live with");
+        assert.match(error.message, /requestTimeoutMs/, "and point at the option that does work");
+        return true;
+      },
+    );
+    await assert.rejects(
+      runtime.exec(RUNNING_HANDLE, "sleep 600", { timeoutMs: 1_000 }),
+      Agent37CommandTimeoutUnsupportedError,
+    );
+    assert.equal(h.requests.length, 0, "a timeout that cannot be honoured must not run the command");
+  });
+
+  it("accepts a timeoutMs the 280s cap already satisfies, and does NOT abort the request", async () => {
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "" } }));
+    await makeRuntime(h).runScript(RUNNING_HANDLE, { command: "x", timeoutMs: 280_000 });
+    assert.equal(h.requests.length, 1);
+    assert.equal(
+      (h.requests[0] as RecordedRequest).hasSignal,
+      false,
+      "the provider cap does the bounding; an HTTP abort would not stop the command",
+    );
+  });
+
+  it("bounds only the HTTP wait under requestTimeoutMs, which is a separate budget", async () => {
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "" } }));
+    const runtime = makeRuntime(h);
+    await runtime.runScript(RUNNING_HANDLE, { command: "x", requestTimeoutMs: 5_000 });
+    assert.equal((h.requests[0] as RecordedRequest).hasSignal, true);
+    await runtime.runScript(RUNNING_HANDLE, { command: "x" });
+    assert.equal(
+      (h.requests[1] as RecordedRequest).hasSignal,
+      false,
+      "no request budget means no abort signal",
+    );
+  });
+
+  it("does NOT retry the cap failure, which would run the caller's command twice", async () => {
+    const h = harness(() => ({ status: 502, json: { error: { code: "provisioning_failed" } } }));
+    await assert.rejects(makeRuntime(h).exec(RUNNING_HANDLE, "sleep 600"), /provisioning_failed/);
+    assert.equal(h.requests.length, 1, "one submitted command must never become two");
   });
 });
 

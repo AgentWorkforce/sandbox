@@ -73,12 +73,20 @@ export type {
   E2BUploadBundleOptions,
 } from "./e2b/runtime.js";
 
-export { Agent37Runtime, Agent37EnvValidationError, Agent37ForeignHandleError } from "./agent37/runtime.js";
+export {
+  AGENT37_COMMAND_CAP_MS,
+  Agent37CommandTimeoutUnsupportedError,
+  Agent37EnvValidationError,
+  Agent37ForeignHandleError,
+  Agent37Runtime,
+  Agent37UnknownExitCodeError,
+} from "./agent37/runtime.js";
 export type {
   Agent37BundleFile,
   Agent37Budget,
   Agent37ContainerLogs,
   Agent37CountOptions,
+  Agent37ExecOptions,
   Agent37Instance,
   Agent37InstanceStatus,
   Agent37LaunchOptions,

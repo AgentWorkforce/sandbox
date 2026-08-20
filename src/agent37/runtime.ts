@@ -35,8 +35,13 @@ import type { Agent37ClientOptions, Agent37Fetch } from "./client.js";
 //    through `sh -c`. No cwd, no env, no timeout, no async mode. Working
 //    directory and environment are composed into the script.
 //  - Commands are capped at 280 seconds by the provider; exceeding the cap
-//    fails the call with `provisioning_failed` (502). `timeoutMs` on exec and
-//    runScript bounds the *HTTP call*, not the command inside the instance.
+//    fails the call with `provisioning_failed` (502). That cap is the ONLY
+//    command lifetime this adapter can enforce: `exec` takes no timeout, and
+//    aborting the HTTP request abandons the response while the command runs on.
+//    So `timeoutMs` — which the port defines as command lifetime — is honoured
+//    only when the cap already satisfies it, and refused otherwise rather than
+//    downgraded into an `AbortSignal` that cancels nothing. `requestTimeoutMs`
+//    is the separate, honestly named budget for how long this client waits.
 //  - Command output is capped at 512 KB per stream. When output is truncated,
 //    the response carries `truncated: true`; this field is passed through in
 //    RunScriptResult so callers can detect incomplete output.
@@ -198,10 +203,26 @@ export type Agent37LaunchOptions = {
 
 export type Agent37RunScriptOptions = {
   command: string;
+  /**
+   * Command lifetime, per the port's contract: once it elapses the command is
+   * no longer running. Agent37 can only satisfy this via its own
+   * {@link AGENT37_COMMAND_CAP_MS} cap, so a shorter value is rejected with
+   * {@link Agent37CommandTimeoutUnsupportedError} rather than silently
+   * downgraded to an HTTP abort that would not stop anything.
+   */
   timeoutMs?: number;
+  /**
+   * How long this client waits for the HTTP response, and nothing more. On
+   * expiry the request is abandoned and **the command keeps running inside the
+   * instance** — this is a budget for the caller, not a cancellation.
+   */
+  requestTimeoutMs?: number;
   env?: Record<string, string>;
   cwd?: string;
 };
+
+/** `ExecOptions` plus the request budget that has no bootstrap-plane equivalent. */
+export type Agent37ExecOptions = ExecOptions & { requestTimeoutMs?: number };
 
 export type Agent37BundleFile = {
   source: string | Buffer;
@@ -212,6 +233,13 @@ export type Agent37UploadBundleOptions = {
   files: Array<Agent37BundleFile>;
 };
 
+/**
+ * The provider's hard ceiling on a single command, in milliseconds. Every
+ * command is bounded by this whether the caller asks for it or not, which is
+ * what makes a `timeoutMs` of at least this value honestly satisfiable.
+ */
+export const AGENT37_COMMAND_CAP_MS = 280_000;
+
 /** Raised when `env` would be rejected by the provider's own create validation. */
 export class Agent37EnvValidationError extends Error {
   constructor(message: string) {
@@ -221,21 +249,75 @@ export class Agent37EnvValidationError extends Error {
 }
 
 /**
- * Raised when a mutation (start / stop / destroy) is attempted on an instance
- * that was not launched by this runtime.
+ * Raised when start / stop / destroy is handed an instance this runtime knows
+ * nothing about.
  *
- * Only instances whose IDs appear in this runtime's `launchedIds` set may be
- * mutated. Handles obtained through `getById` or label lookup identify foreign
- * instances and are intentionally read-only by default, so a crash-recovery
- * reattach cannot accidentally delete something it does not own.
+ * Ownership here is *caller-declared attachment*, not in-process provenance:
+ * `launch` owns what it creates, and `getById` / `findAllByLabels` attach as
+ * unowned unless the caller passes `owned: true`. An instance that was never
+ * resolved through any of those is refused outright rather than mutated on a
+ * guess.
+ *
+ * This is deliberately louder than the Daytona adapter, which silently returns
+ * for an unregistered handle. A destroy that quietly does nothing reads to the
+ * caller as a completed teardown that never happened, which is the more
+ * expensive of the two failure modes.
  */
 export class Agent37ForeignHandleError extends Error {
   constructor(id: string, operation: string) {
     super(
-      `Agent37 refused to ${operation} instance "${id}": the handle is foreign — ` +
-        "only instances launched by this runtime may be mutated or destroyed",
+      `Agent37 refused to ${operation} instance "${id}": this runtime has no ` +
+        "registration for it. Resolve it with getById(id, { owned: true }) to " +
+        "declare ownership before mutating or destroying it.",
     );
     this.name = "Agent37ForeignHandleError";
+  }
+}
+
+/**
+ * Raised when a command completes but the provider's reply carries no
+ * `exit_code`, so its outcome is unknown.
+ *
+ * `runScript` reports this as `exitCode: null`, which the port models. `exec`
+ * cannot: `ExecResult.exitCode` is a number, and the only numbers available are
+ * lies — `0` would report a command that may have failed as a success.
+ */
+export class Agent37UnknownExitCodeError extends Error {
+  readonly output: string;
+
+  constructor(id: string, output: string) {
+    super(
+      `Agent37 exec on instance "${id}" returned no exit_code, so the command's ` +
+        "outcome is unknown; refusing to report it as success",
+    );
+    this.name = "Agent37UnknownExitCodeError";
+    this.output = output;
+  }
+}
+
+/**
+ * Raised when a caller asks for a command lifetime Agent37 cannot enforce.
+ *
+ * `timeoutMs` on the port means the command is no longer running once it
+ * elapses. Agent37's `exec` accepts no timeout, and aborting the HTTP request
+ * only abandons the response — the command keeps running inside the instance.
+ * The single lifetime bound Agent37 genuinely enforces is its own
+ * {@link AGENT37_COMMAND_CAP_MS} cap, so anything shorter is refused instead of
+ * being faked with an `AbortSignal`.
+ *
+ * Callers that want to stop *waiting* (as opposed to stopping the command) want
+ * `requestTimeoutMs`, which is named for what it actually does.
+ */
+export class Agent37CommandTimeoutUnsupportedError extends Error {
+  constructor(timeoutMs: number) {
+    super(
+      `Agent37 cannot enforce a ${timeoutMs}ms command timeout: exec takes no ` +
+        `timeout, and aborting the request leaves the command running. The only ` +
+        `lifetime bound is the provider's own ${AGENT37_COMMAND_CAP_MS}ms cap, so ` +
+        `timeoutMs must be at least that. To bound how long this client waits ` +
+        `— which does not stop the command — use requestTimeoutMs instead.`,
+    );
+    this.name = "Agent37CommandTimeoutUnsupportedError";
   }
 }
 
@@ -302,9 +384,13 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   // An instance's own origin is only knowable from its instance object. Cache
   // what has been seen so the file plane does not re-GET on every transfer.
   private readonly instanceUrls = new Map<string, string>();
-  // IDs of instances launched by this runtime. Only these may be mutated or
-  // destroyed; handles obtained through getById / label lookup are foreign.
-  private readonly launchedIds = new Set<string>();
+  // What this runtime has been told about each instance it has resolved:
+  // `true` for one it launched or that the caller explicitly claimed, `false`
+  // for a plain attachment. Absent means "never seen", which is refused rather
+  // than mutated. Deliberately not a provenance set — a process that crashed
+  // and restarted launched nothing, yet must still be able to delete its own
+  // instances, which it does by resolving them with `owned: true`.
+  private readonly ownership = new Map<string, boolean>();
 
   constructor(options: Agent37RuntimeOptions) {
     if (!options.defaultHomeDir?.trim()) {
@@ -365,16 +451,13 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       if (excluded.has(instance.id)) {
         continue;
       }
-      // When owned: true is requested, only return instances this runtime launched.
-      if (options.owned === true && !this.launchedIds.has(instance.id)) {
-        continue;
-      }
       if (!matchesLabels(instance, labels)) {
         continue;
       }
       if (!matchesState(instance.status, states)) {
         continue;
       }
+      this.declareOwnership(instance.id, options.owned === true);
       handles.push(this.registerInstance(instance));
       if (limit !== undefined && handles.length >= limit) {
         break;
@@ -412,10 +495,6 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       workdir?: string;
     } = {},
   ): Promise<RuntimeHandle | null> {
-    // When owned: true is requested, only return instances this runtime launched.
-    if (options.owned === true && !this.launchedIds.has(id)) {
-      return null;
-    }
     const instance = await this.fetchInstance(id);
     if (!instance) {
       return null;
@@ -428,6 +507,10 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     if (!matchesState(instance.status, states)) {
       return null;
     }
+    // `owned: true` is the caller asserting this instance is theirs — the one
+    // way a restarted process reacquires the right to tear down what a previous
+    // run created.
+    this.declareOwnership(id, options.owned === true);
     const handle = this.registerInstance(instance);
     return {
       ...handle,
@@ -474,7 +557,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
         ? {}
         : { timeoutMs: options.createTimeoutSeconds * 1000 }),
     });
-    this.launchedIds.add(instance.id);
+    this.declareOwnership(instance.id, true);
     const handle = this.registerInstance(instance);
     return {
       ...handle,
@@ -484,7 +567,12 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   }
 
   async start(handle: RuntimeHandle): Promise<RuntimeHandle> {
-    this.assertOwned(handle.id, "start");
+    if (!this.requireOwnership(handle.id, "start")) {
+      // Attached, not owned: the instance's lifecycle belongs to whoever does
+      // own it. Returning the handle unchanged is honest; claiming STARTED
+      // would not be.
+      return handle;
+    }
     const ack = await this.client.hosting<{ id: string; status: Agent37InstanceStatus }>(
       "POST",
       `/v1/instances/${encodeURIComponent(handle.id)}/start`,
@@ -493,13 +581,20 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   }
 
   async stop(handle: RuntimeHandle): Promise<void> {
-    this.assertOwned(handle.id, "stop");
+    if (!this.requireOwnership(handle.id, "stop")) {
+      return;
+    }
     await this.client.hosting("POST", `/v1/instances/${encodeURIComponent(handle.id)}/stop`);
   }
 
   async destroy(handle: RuntimeHandle): Promise<void> {
-    this.assertOwned(handle.id, "destroy");
-    this.instanceUrls.delete(handle.id);
+    if (!this.requireOwnership(handle.id, "destroy")) {
+      // Destroying an attachment releases this runtime's reference to it and
+      // nothing else. The instance is caller-managed, so deleting it here would
+      // be destroying someone else's sandbox.
+      this.forget(handle.id);
+      return;
+    }
     try {
       await this.client.hosting("DELETE", `/v1/instances/${encodeURIComponent(handle.id)}`);
     } catch (error) {
@@ -507,10 +602,15 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       // the caller's desired end state, so absorb it rather than making every
       // teardown path handle a race it cannot prevent.
       if (isNotFound(error)) {
+        this.forget(handle.id);
         return;
       }
+      // Order matters: the registration is dropped only on a terminal outcome.
+      // Forgetting first would strip ownership from a handle whose delete has
+      // not happened yet, leaving the caller unable to retry its own teardown.
       throw error;
     }
+    this.forget(handle.id);
   }
 
   // --- execution ----------------------------------------------------------
@@ -518,29 +618,32 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   async exec(
     handle: RuntimeHandle,
     command: string,
-    options: ExecOptions = {},
+    options: Agent37ExecOptions = {},
   ): Promise<ExecResult> {
-    // timeoutMs bounds the HTTP call, not the command inside the instance.
-    // Commands that exceed the provider's 280s cap fail with provisioning_failed.
     const result = await this.runScript(handle, {
       command,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.requestTimeoutMs === undefined
+        ? {}
+        : { requestTimeoutMs: options.requestTimeoutMs }),
     });
     if (result.exitCode === null) {
-      throw new Error(
-        `Agent37 exec returned unknown outcome: provider response omitted exit_code; ` +
-          `treating as failure to avoid false success`,
-      );
+      throw new Agent37UnknownExitCodeError(handle.id, result.output);
     }
-    return { output: result.output, exitCode: result.exitCode };
+    return {
+      output: result.output,
+      exitCode: result.exitCode,
+      ...(result.truncated === true ? { truncated: true } : {}),
+    };
   }
 
   async runScript(
     handle: RuntimeHandle,
     options: Agent37RunScriptOptions,
-  ): Promise<RunScriptResult & { truncated?: boolean }> {
+  ): Promise<RunScriptResult> {
+    assertHonourableCommandTimeout(options.timeoutMs);
     if (options.env) {
       assertValidEnv(options.env);
     }
@@ -549,7 +652,11 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       ...(cwd ? { cwd } : {}),
       ...(options.env ? { env: options.env } : {}),
     });
-    const result = await this.execRaw(handle.id, script, options.timeoutMs);
+    // Only `requestTimeoutMs` becomes an abort signal. `timeoutMs` is a command
+    // lifetime, and it got here only because the provider's own cap already
+    // satisfies it — turning it into an HTTP abort would abandon the response
+    // while the command ran on.
+    const result = await this.execRaw(handle.id, script, options.requestTimeoutMs);
     return {
       output: combineOutput(result.stdout, result.stderr),
       ...(result.stdout ? { stdout: result.stdout } : {}),
@@ -658,10 +765,41 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
 
   // --- internals ----------------------------------------------------------
 
-  private assertOwned(id: string, operation: string): void {
-    if (!this.launchedIds.has(id)) {
+  /**
+   * Record what the caller declared about an instance.
+   *
+   * Monotonic on purpose: once ownership is claimed it survives later read-only
+   * resolutions of the same id. A plain `findAllByLabels` sweep listing an
+   * instance must not quietly revoke the delete rights a caller already
+   * declared through `getById(id, { owned: true })`.
+   */
+  private declareOwnership(id: string, owned: boolean): void {
+    if (owned) {
+      this.ownership.set(id, true);
+      return;
+    }
+    if (!this.ownership.has(id)) {
+      this.ownership.set(id, false);
+    }
+  }
+
+  /**
+   * Resolve what may be done to `id`: `true` to mutate it, `false` for an
+   * attachment this runtime must leave alone. Throws when the id was never
+   * registered, because that is a caller mistake rather than a policy decision.
+   */
+  private requireOwnership(id: string, operation: string): boolean {
+    const owned = this.ownership.get(id);
+    if (owned === undefined) {
       throw new Agent37ForeignHandleError(id, operation);
     }
+    return owned;
+  }
+
+  /** Drop every trace of an instance this runtime is done with. */
+  private forget(id: string): void {
+    this.ownership.delete(id);
+    this.instanceUrls.delete(id);
   }
 
   private async execRaw(
@@ -791,6 +929,19 @@ function matchesLabels(instance: Agent37Instance, labels: Record<string, string>
 
 function isNotFound(error: unknown): boolean {
   return error instanceof Agent37ApiError && (error.status === 404 || error.code === "not_found");
+}
+
+/**
+ * Reject a command lifetime Agent37 cannot deliver.
+ *
+ * Anything at or above the provider's cap is genuinely satisfied — the command
+ * cannot outlive the cap, so it certainly cannot outlive a longer deadline.
+ * Anything below it would need real cancellation, which `exec` does not offer.
+ */
+export function assertHonourableCommandTimeout(timeoutMs: number | undefined): void {
+  if (timeoutMs !== undefined && timeoutMs < AGENT37_COMMAND_CAP_MS) {
+    throw new Agent37CommandTimeoutUnsupportedError(timeoutMs);
+  }
 }
 
 export function assertValidEnv(env: Record<string, string>): void {
