@@ -11,8 +11,10 @@ import {
   Agent37ApiError,
   Agent37Client,
   Agent37CommandTimeoutUnsupportedError,
+  Agent37CreateTimeoutUnsupportedError,
   Agent37EnvValidationError,
   Agent37ForeignHandleError,
+  Agent37MalformedResponseError,
   Agent37Runtime,
   Agent37UnknownExitCodeError,
   isRetryableAgent37Code,
@@ -151,6 +153,8 @@ describe("public barrel", () => {
     assert.equal(typeof pkg.Agent37ForeignHandleError, "function");
     assert.equal(typeof pkg.Agent37UnknownExitCodeError, "function");
     assert.equal(typeof pkg.Agent37CommandTimeoutUnsupportedError, "function");
+    assert.equal(typeof pkg.Agent37CreateTimeoutUnsupportedError, "function");
+    assert.equal(typeof pkg.Agent37MalformedResponseError, "function");
     assert.equal(typeof pkg.isRetryableAgent37Code, "function");
   });
 });
@@ -487,7 +491,6 @@ describe("Agent37Runtime.launch", () => {
       name: "issue-greeter",
       labels: { purpose: "test-purpose", agentId: "agent-1" },
       env: { SANDBOX_AGENT_ID: "agent-1" },
-      createTimeoutSeconds: 120,
       workdir: "/work",
     });
 
@@ -506,7 +509,6 @@ describe("Agent37Runtime.launch", () => {
       metadata: { purpose: "test-purpose", agentId: "agent-1" },
       env: { SANDBOX_AGENT_ID: "agent-1" },
     });
-    assert.equal(request.hasSignal, true, "createTimeoutSeconds must bound the create request");
     assert.deepEqual(handle, {
       id: "ab12cd34ef",
       state: "STARTED",
@@ -835,9 +837,12 @@ describe("Agent37Runtime label lookup", () => {
     assert.equal(h.requests.length, 0);
   });
 
-  it("tolerates a response with no data array", async () => {
+  it("refuses a response with no data array rather than reporting no matches", async () => {
     const h = harness(() => ({ json: {} }));
-    assert.deepEqual(await makeRuntime(h).findAllByLabels({}), []);
+    await assert.rejects(
+      () => makeRuntime(h).findAllByLabels({}),
+      Agent37MalformedResponseError,
+    );
   });
 });
 
@@ -1031,6 +1036,183 @@ describe("Agent37 command lifetime", () => {
     const h = harness(() => ({ status: 502, json: { error: { code: "provisioning_failed" } } }));
     await assert.rejects(makeRuntime(h).exec(RUNNING_HANDLE, "sleep 600"), /provisioning_failed/);
     assert.equal(h.requests.length, 1, "one submitted command must never become two");
+  });
+});
+
+// --- malformed 2xx responses ----------------------------------------------
+
+// A 2xx whose body is not the documented shape is a broken response, not a
+// negative answer. The distinction is load-bearing for the warm-lease path:
+// an empty list means "launch a new instance", so decoding garbage into `[]`
+// spends money and abandons a running lease on every malformed reply.
+describe("Agent37 malformed 2xx responses", () => {
+  it("refuses a list whose body is not JSON instead of reading it as no matches", async () => {
+    const h = harness(() => ({ status: 200, text: "<html>502 Bad Gateway</html>" }));
+    const runtime = makeRuntime(h);
+
+    await assert.rejects(
+      () => runtime.findAllByLabels({ purpose: "test-purpose" }),
+      (error: unknown) => {
+        assert.ok(error instanceof Agent37MalformedResponseError, `got ${String(error)}`);
+        assert.match(error.message, /GET \/v1\/instances/);
+        return true;
+      },
+    );
+  });
+
+  it("refuses a list whose `data` is missing, null, or not an array", async () => {
+    for (const json of [{}, { data: null }, { data: {} }, { data: "nope" }, []]) {
+      const h = harness(() => ({ status: 200, json }));
+      const runtime = makeRuntime(h);
+      await assert.rejects(
+        () => runtime.findAllByLabels({ purpose: "test-purpose" }),
+        Agent37MalformedResponseError,
+        `data=${JSON.stringify(json)} must fail closed, not read as zero matches`,
+      );
+    }
+  });
+
+  it("refuses a list entry with no usable id or status", async () => {
+    for (const entry of [
+      {},
+      { id: "", status: "running" },
+      { id: "ab12cd34ef" },
+      { id: "ab12cd34ef", status: "" },
+      { id: 7, status: "running" },
+      null,
+    ]) {
+      const h = harness(() => ({ status: 200, json: { data: [entry] } }));
+      const runtime = makeRuntime(h);
+      await assert.rejects(
+        () => runtime.findAllByLabels({}),
+        Agent37MalformedResponseError,
+        `entry=${JSON.stringify(entry)} must fail closed`,
+      );
+    }
+  });
+
+  it("accepts an empty list as a genuine no-match", async () => {
+    const h = harness(() => ({ status: 200, json: { data: [] } }));
+    const handles = await makeRuntime(h).findAllByLabels({ purpose: "test-purpose" });
+    assert.deepEqual(handles, []);
+  });
+
+  it("accepts an unknown status string, which is forward-compatible, not malformed", async () => {
+    const h = harness(() => ({
+      status: 200,
+      json: { data: [instanceObject({ status: "hibernating" as never })] },
+    }));
+    const handles = await makeRuntime(h).findAllByLabels({}, { states: null });
+    assert.equal(handles.length, 1);
+    // Anything that is not `running` normalizes to STOPPED, so an unrecognized
+    // status can never be handed out as ready to exec.
+    assert.equal((handles[0] as RuntimeHandle).state, "STOPPED");
+  });
+
+  it("refuses a launch whose reply carries no id, so ownership is never keyed on undefined", async () => {
+    const h = harness(() => ({ status: 201, json: { status: "running" } }));
+    const runtime = makeRuntime(h);
+
+    await assert.rejects(
+      () => runtime.launch({ labels: { purpose: "test-purpose" } }),
+      (error: unknown) => {
+        assert.ok(error instanceof Agent37MalformedResponseError, `got ${String(error)}`);
+        assert.match(error.message, /POST \/v1\/instances/);
+        return true;
+      },
+    );
+    // The decisive part: a launch that could not be identified must not leave a
+    // registration behind, or a later destroy would issue DELETE on a garbage id.
+    await assert.rejects(
+      () => runtime.destroy({ id: "undefined", state: "STARTED" }),
+      Agent37ForeignHandleError,
+    );
+  });
+
+  it("refuses a getById reply that is not an instance object", async () => {
+    for (const json of [{}, { id: "ab12cd34ef" }, { status: "running" }, []]) {
+      const h = harness(() => ({ status: 200, json }));
+      await assert.rejects(
+        () => makeRuntime(h).getById("ab12cd34ef", { owned: true }),
+        Agent37MalformedResponseError,
+        `body=${JSON.stringify(json)} must fail closed, not resolve a half-instance`,
+      );
+    }
+  });
+
+  it("keeps a real 404 as null rather than turning it into a malformed error", async () => {
+    const h = harness(() => ({ status: 404, json: { error: { code: "not_found", message: "gone" } } }));
+    assert.equal(await makeRuntime(h).getById("ab12cd34ef"), null);
+  });
+
+  it("refuses a start acknowledgement with no status instead of reporting STOPPED", async () => {
+    const h = harness((request) =>
+      request.url.endsWith("/start")
+        ? { status: 200, json: {} }
+        : { status: 201, json: instanceObject({ status: "stopped" }) },
+    );
+    const runtime = makeRuntime(h);
+    const handle = await runtime.launch({});
+
+    await assert.rejects(
+      () => runtime.start(handle),
+      Agent37MalformedResponseError,
+      "an ack with no status must not be normalized into a confident STOPPED",
+    );
+  });
+});
+
+// --- create timeout -------------------------------------------------------
+
+// See the HOLD note on Agent37CreateTimeoutUnsupportedError: aborting the
+// create request cannot un-allocate an instance, and without an identifying
+// handle the adapter cannot find one to clean up afterwards.
+describe("Agent37 create timeout", () => {
+  it("refuses createTimeoutSeconds rather than aborting a create that may still allocate", async () => {
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+    const runtime = makeRuntime(h);
+
+    await assert.rejects(
+      () =>
+        runtime.launch({
+          labels: { purpose: "test-purpose" },
+          createTimeoutSeconds: 120,
+        } as pkg.Agent37LaunchOptions),
+      (error: unknown) => {
+        assert.ok(error instanceof Agent37CreateTimeoutUnsupportedError, `got ${String(error)}`);
+        assert.match(error.message, /leak|orphan/i);
+        return true;
+      },
+    );
+    assert.equal(h.requests.length, 0, "the create must be refused before it is sent");
+  });
+
+  it("sends no abort signal on create, because an abort would not be a cancellation", async () => {
+    const h = harness(() => ({ status: 201, json: instanceObject() }));
+    await makeRuntime(h).launch({ labels: { purpose: "test-purpose" } });
+    assert.equal(
+      (h.requests[0] as RecordedRequest).hasSignal,
+      false,
+      "create must not carry a timeout signal that reads as cancellation",
+    );
+  });
+
+  it("keeps createTimeoutSeconds off the public launch options type", async () => {
+    const dir = fileURLToPath(new URL(".", import.meta.url));
+    const code = withoutComments(await readFile(join(dir, "runtime.ts"), "utf8"));
+    const optionsBlock = /export type Agent37LaunchOptions = \{[\s\S]*?\n\};/.exec(code);
+    assert.ok(optionsBlock, "Agent37LaunchOptions must still be declared");
+    assert.ok(
+      !optionsBlock[0].includes("createTimeoutSeconds"),
+      "createTimeoutSeconds must not be a declared launch option: see the HOLD note",
+    );
+    // And the create call must carry no timeout, however it is spelled.
+    const launchCall = /"POST", "\/v1\/instances", \{[\s\S]*?\}\);/.exec(code);
+    assert.ok(launchCall, "the create call must still be findable");
+    assert.ok(
+      !launchCall[0].includes("timeoutMs"),
+      "the create request must not carry a timeout that reads as cancellation",
+    );
   });
 });
 

@@ -198,7 +198,9 @@ export type Agent37LaunchOptions = {
   env?: Record<string, string>;
   labels?: Record<string, string>;
   workdir?: string;
-  createTimeoutSeconds?: number;
+  // No `createTimeoutSeconds`. See Agent37CreateTimeoutUnsupportedError for
+  // why bounding a synchronous create cannot be done honestly here; passing
+  // one anyway is refused at runtime rather than silently ignored.
 };
 
 export type Agent37RunScriptOptions = {
@@ -318,6 +320,79 @@ export class Agent37CommandTimeoutUnsupportedError extends Error {
         `— which does not stop the command — use requestTimeoutMs instead.`,
     );
     this.name = "Agent37CommandTimeoutUnsupportedError";
+  }
+}
+
+/**
+ * Raised when a 2xx reply does not carry the shape the endpoint documents.
+ *
+ * The alternative is worse than an error, because a tolerant decode turns a
+ * broken response into a *confident negative*: `GET /v1/instances` answering
+ * with HTML from a proxy would read as "no instance matches these labels",
+ * which is the exact answer that makes a caller abandon a running warm lease
+ * and pay to launch a replacement. Similarly, a create reply with no `id`
+ * would register ownership under `undefined` and aim a later DELETE at a
+ * garbage path.
+ *
+ * So the adapter fails closed: an unusable reply is reported as unusable, and
+ * the caller retries or escalates instead of acting on a fiction. Only `id` and
+ * `status` are required to be non-empty strings — an *unrecognized* status is
+ * forward compatibility, not corruption, and {@link normalizeStatus} already
+ * treats anything but `running` as not ready.
+ */
+export class Agent37MalformedResponseError extends Error {
+  /** Method and path only, matching {@link Agent37ApiError.request}. */
+  readonly request: string;
+
+  constructor(request: string, detail: string) {
+    super(`Agent37 ${request} returned a malformed 2xx response: ${detail}`);
+    this.name = "Agent37MalformedResponseError";
+    this.request = request;
+  }
+}
+
+/**
+ * Raised when a caller asks `launch` to bound how long instance creation may
+ * take.
+ *
+ * HOLD — not implementable against the documented contract. `POST
+ * /v1/instances` is synchronous: it returns 201 only once the instance reports
+ * `running`. Abandoning that request client-side does not un-allocate anything
+ * the provider has already started building, and the reply that would have
+ * carried the new instance's `id` is discarded with it. The result is an
+ * orphan the caller cannot name, let alone delete — a billed leak dressed up
+ * as a timeout.
+ *
+ * Cleaning up afterwards would need one of three things the API does not
+ * document: an idempotency key to correlate a retry with the original create,
+ * a create call that returns an id before the instance is ready, or a
+ * guarantee about whether a still-provisioning instance appears in `GET
+ * /v1/instances` (and carries the `metadata` it was created with) so a bounded
+ * sweep could identify exactly the one that was abandoned. Sweeping on labels
+ * alone is not a substitute: labels are reused precisely so warm leases can be
+ * found by them, so a sweep could delete a healthy instance belonging to
+ * someone else.
+ *
+ * Verifying any of that needs live calls against the provider, which this work
+ * is not authorized to make. Until it is verified, the option is refused rather
+ * than shipped as an `AbortSignal` that reads like a cancellation and is not
+ * one. Callers that need a bound should launch with labels unique to the
+ * attempt, apply their own deadline around `launch`, and reconcile with
+ * `findAllByLabels(..., { owned: true })` — a recovery they can reason about,
+ * because they chose the labels.
+ */
+export class Agent37CreateTimeoutUnsupportedError extends Error {
+  constructor() {
+    super(
+      "Agent37 cannot bound instance creation: POST /v1/instances returns only " +
+        "once the instance is running, and aborting that request neither stops " +
+        "the allocation nor yields the id needed to delete it, so the timeout " +
+        "would leak a billed orphan. The API documents no idempotency key and no " +
+        "way to identify an abandoned create, so no cleanup is possible either. " +
+        "Apply your own deadline around launch(), using labels unique to the " +
+        "attempt, and reconcile with findAllByLabels(labels, { owned: true }).",
+    );
+    this.name = "Agent37CreateTimeoutUnsupportedError";
   }
 }
 
@@ -522,6 +597,12 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   // --- lifecycle ----------------------------------------------------------
 
   async launch(options: Agent37LaunchOptions & LaunchOptions = {}): Promise<RuntimeHandle> {
+    // Refused before anything is sent, and refused loudly: a JavaScript caller
+    // carrying this option forward from an earlier draft would otherwise have
+    // it silently dropped and believe creation was bounded when it is not.
+    if ((options as { createTimeoutSeconds?: unknown }).createTimeoutSeconds !== undefined) {
+      throw new Agent37CreateTimeoutUnsupportedError();
+    }
     const env = options.env;
     if (env) {
       assertValidEnv(env);
@@ -551,12 +632,11 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       ...(metadata ? { metadata } : {}),
       ...(env && Object.keys(env).length > 0 ? { env } : {}),
     };
-    const instance = await this.client.hosting<Agent37Instance>("POST", "/v1/instances", {
-      body,
-      ...(options.createTimeoutSeconds === undefined
-        ? {}
-        : { timeoutMs: options.createTimeoutSeconds * 1000 }),
-    });
+    const payload = await this.client.hosting<unknown>("POST", "/v1/instances", { body });
+    // Validated before the id is recorded. Registering ownership off an
+    // unusable reply would key it on `undefined` and aim a later DELETE at
+    // `/v1/instances/undefined`.
+    const instance = parseInstance(payload, "POST /v1/instances");
     this.declareOwnership(instance.id, true);
     const handle = this.registerInstance(instance);
     return {
@@ -573,11 +653,18 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       // would not be.
       return handle;
     }
-    const ack = await this.client.hosting<{ id: string; status: Agent37InstanceStatus }>(
+    const request = `POST /v1/instances/${handle.id}/start`;
+    const ack = await this.client.hosting<unknown>(
       "POST",
       `/v1/instances/${encodeURIComponent(handle.id)}/start`,
     );
-    return { ...handle, state: normalizeStatus(ack.status) };
+    // An ack with no status must not be normalized: `normalizeStatus(undefined)`
+    // is STOPPED, which would report a successful start as a failed one.
+    const status = readNonEmptyString(ack, "status");
+    if (status === null) {
+      throw new Agent37MalformedResponseError(request, "no `status` on the start acknowledgement");
+    }
+    return { ...handle, state: normalizeStatus(status as Agent37InstanceStatus) };
   }
 
   async stop(handle: RuntimeHandle): Promise<void> {
@@ -828,20 +915,29 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   }
 
   private async listInstances(timeoutMs?: number): Promise<Agent37Instance[]> {
-    const response = await this.client.hosting<{ data?: Agent37Instance[] }>(
-      "GET",
-      "/v1/instances",
-      { ...(timeoutMs === undefined ? {} : { timeoutMs }) },
+    const request = "GET /v1/instances";
+    const payload = await this.client.hosting<unknown>("GET", "/v1/instances", {
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    // `{ "data": [...] }` is the documented envelope. Anything else is a broken
+    // response, and coercing it to `[]` would answer "no warm lease" — the one
+    // answer that makes a caller discard a running instance and launch another.
+    // An empty `data` array still means exactly that, honestly.
+    if (!isPlainObject(payload) || !Array.isArray(payload["data"])) {
+      throw new Agent37MalformedResponseError(request, "no `data` array on the instance list");
+    }
+    return (payload["data"] as unknown[]).map((entry, index) =>
+      parseInstance(entry, `${request}[${index}]`),
     );
-    return Array.isArray(response.data) ? response.data : [];
   }
 
   private async fetchInstance(id: string): Promise<Agent37Instance | null> {
     try {
-      return await this.client.hosting<Agent37Instance>(
+      const payload = await this.client.hosting<unknown>(
         "GET",
         `/v1/instances/${encodeURIComponent(id)}`,
       );
+      return parseInstance(payload, `GET /v1/instances/${id}`);
     } catch (error) {
       if (isNotFound(error)) {
         return null;
@@ -925,6 +1021,46 @@ function matchesLabels(instance: Agent37Instance, labels: Record<string, string>
     return false;
   }
   return entries.every(([key, value]) => metadata[key] === value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The property as a non-empty string, or `null` if it is anything else. */
+function readNonEmptyString(value: unknown, key: string): string | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const field = value[key];
+  return typeof field === "string" && field !== "" ? field : null;
+}
+
+/**
+ * Accept a 2xx body as an instance object, or refuse it.
+ *
+ * Only `id` and `status` are checked, and only for being non-empty strings.
+ * That is the whole load-bearing minimum: `id` is what every subsequent call
+ * addresses and what ownership is keyed on, and `status` is what decides
+ * whether the instance is handed out as ready. Every other field is optional in
+ * the contract and already treated as such. Notably the *value* of `status` is
+ * not constrained to the known set — a status this adapter has not heard of is
+ * the provider moving forward, and {@link normalizeStatus} maps anything but
+ * `running` to STOPPED, so an unknown one is already handled conservatively.
+ */
+function parseInstance(value: unknown, request: string): Agent37Instance {
+  const id = readNonEmptyString(value, "id");
+  if (id === null) {
+    throw new Agent37MalformedResponseError(request, "no `id` on the instance object");
+  }
+  const status = readNonEmptyString(value, "status");
+  if (status === null) {
+    throw new Agent37MalformedResponseError(
+      request,
+      `no \`status\` on instance "${id}"`,
+    );
+  }
+  return { ...(value as Agent37Instance), id, status: status as Agent37InstanceStatus };
 }
 
 function isNotFound(error: unknown): boolean {
