@@ -92,6 +92,11 @@ const MAX_SANDBOX_NAME_BYTES = 128;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 10_000;
 const DEFAULT_LIST_PAGE_SIZE = 100;
+/**
+ * How long a call may wait for the process-global backend gate before it fails
+ * instead of waiting forever. See {@link MicrosandboxBackendBusyError}.
+ */
+const DEFAULT_BACKEND_QUEUE_TIMEOUT_MS = 30_000;
 const SCRIPT_LOG_READ_MAX_BYTES = 200_000;
 /**
  * Longest encoded run-state path segment before it is replaced by a digest.
@@ -407,6 +412,14 @@ export type MicrosandboxRuntimeOptions = {
   lookupTimeoutMs?: number;
   /** Page size used when draining label listings. Defaults to 100. */
   listPageSize?: number;
+  /**
+   * How long a call may wait for the process-global backend gate before failing
+   * with {@link MicrosandboxBackendBusyError}. Defaults to 30s.
+   *
+   * Only meaningful in a process that drives MORE THAN ONE backend: a process
+   * on a single backend shares one open scope and never queues.
+   */
+  backendQueueTimeoutMs?: number;
   /** Injection seam for tests / a wrapping adapter — defaults to lazy `import("microsandbox")`. */
   sdk?: MicrosandboxSdk;
 };
@@ -488,6 +501,37 @@ export class MicrosandboxPaginationError extends Error {
   constructor(pages: number, detail: string) {
     super(`Microsandbox sandbox listing could not be drained after ${pages} page(s): ${detail}`);
     this.pages = pages;
+  }
+}
+
+/**
+ * A call gave up waiting for the process-global backend gate.
+ *
+ * The gate exists because `withDefaultBackend` mutates ONE process-wide slot,
+ * so a call on backend A cannot run while backend B holds the scope. Normally
+ * the wait is short. It is NOT short when the scope holder has been abandoned:
+ * a create or a lookup that outlived its own client-side deadline returned a
+ * typed error to ITS caller, but the SDK exposes no cancellation, so the
+ * request is still in flight and the process-wide backend still has to be its
+ * own until it settles.
+ *
+ * Waiting forever in that situation deadlocks every other backend in the
+ * process. Running anyway would send this call to whatever backend the process
+ * default happens to hold, which is the one outcome the gate exists to prevent.
+ * So the queued call FAILS, loudly and with a typed error the caller can retry
+ * on — the honest third option.
+ */
+export class MicrosandboxBackendBusyError extends Error {
+  override readonly name = "MicrosandboxBackendBusyError";
+  readonly waitedMs: number;
+
+  constructor(waitedMs: number) {
+    super(
+      `Microsandbox backend gate was held by another backend for ${waitedMs}ms; this call was not sent `
+        + "rather than being sent to the wrong backend. A scope held this long usually means an SDK call "
+        + "outlived its client-side deadline and is still in flight.",
+    );
+    this.waitedMs = waitedMs;
   }
 }
 
@@ -601,6 +645,16 @@ let currentBackendScope: BackendScope | null = null;
 const backendScopeWaiters: Array<() => void> = [];
 
 /**
+ * Is this runtime bound to the LOCAL backend?
+ *
+ * Two capability claims hinge on it — snapshot support and isolation — so it is
+ * a named predicate rather than an inline `=== "local"` repeated at each site.
+ */
+function isLocalBackend(backend: MicrosandboxBackend): boolean {
+  return backend === "local";
+}
+
+/**
  * Stable identity for a backend value. The API key is hashed rather than
  * stored, so a long-lived comparison key never holds the secret itself.
  */
@@ -619,8 +673,10 @@ async function withBackendScope<T>(
   sdk: MicrosandboxSdk,
   backend: MicrosandboxBackend,
   fn: () => Promise<T> | T,
+  queueTimeoutMs: number,
 ): Promise<T> {
   const key = backendKey(backend);
+  const queueDeadline = Date.now() + queueTimeoutMs;
   for (;;) {
     const open = currentBackendScope;
     if (open && !open.closing && open.key === key) {
@@ -635,9 +691,31 @@ async function withBackendScope<T>(
       }
     }
     if (open) {
-      await new Promise<void>((resolve) => {
-        backendScopeWaiters.push(resolve);
-      });
+      // BOUNDED. An abandoned scope holder (a create or lookup that outlived
+      // its client-side deadline) is still in flight and still owns the
+      // process-wide backend, so this wait can otherwise never end.
+      const remainingMs = queueDeadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new MicrosandboxBackendBusyError(queueTimeoutMs);
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = await Promise.race([
+        new Promise<false>((resolve) => {
+          // A stale resolver left here after the race is harmless: the waiter
+          // list is spliced wholesale on release and resolving a promise
+          // nobody awaits is a no-op.
+          backendScopeWaiters.push(() => resolve(false));
+        }),
+        new Promise<true>((resolve) => {
+          timer = setTimeout(() => resolve(true), remainingMs);
+        }),
+      ]);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (timedOut) {
+        throw new MicrosandboxBackendBusyError(queueTimeoutMs);
+      }
       continue;
     }
 
@@ -804,17 +882,30 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
    * through the port, not everything the SDK can do — the same convention the
    * Daytona adapter follows.
    *
+   * TWO OF THESE ARE BACKEND-SENSITIVE, and both were previously reported as
+   * flat process-wide constants — which published a claim about the cloud
+   * backend that this package cannot stand behind. They are now derived from
+   * the backend this instance is bound to.
+   *
    *  - `pty: false` — the SDK's `ExecOptionsBuilder.tty(true)` and
    *    `ExecHandle.resize()` are real, but the port has no pty method and this
    *    adapter never allocates one.
-   *  - `snapshots: true` — `launch` can source a sandbox from a snapshot via
-   *    the builder's `fromSnapshot`.
-   *  - `isolation: 'strong'` — microsandbox boots each sandbox as a microVM
-   *    with its own guest Linux kernel. On the LOCAL backend that requires a
+   *  - `snapshots` — LOCAL only. `launch` sources a sandbox from a snapshot via
+   *    the builder's `fromSnapshot`, and what that consumes is a snapshot
+   *    ARTIFACT: a host-local directory (the SDK stores them under
+   *    `~/.microsandbox/snapshots/<name>/` and indexes them in a local DB
+   *    cache). A cloud create has no access to that directory, so the cloud
+   *    backend reports `false` and refuses the pairing outright — see the
+   *    constructor. Note the adapter only ever CONSUMES a snapshot; it never
+   *    creates one, so `SandboxHandle.snapshot()` is not on this path.
+   *  - `isolation` — `'strong'` on LOCAL, `'unknown'` on CLOUD. Locally the SDK
+   *    boots each sandbox as a microVM with its own guest kernel on a
    *    virtualization-capable host (KVM on Linux, Apple Silicon on macOS, WHP
-   *    on Windows 10+); on the cloud backend the microVM boots on the
-   *    provider's host instead. Either way the workload does not share this
-   *    process's kernel.
+   *    on Windows 10+), which this package can stand behind. The cloud
+   *    backend's isolation, region placement and resource enforcement are
+   *    vendor-documented but NOT observable from here, and this adapter runs no
+   *    measurement against them — so it reports `'unknown'` rather than
+   *    publishing an unverified `'strong'`. See {@link IsolationLevel}.
    *  - `persistentHandle: true` — a sandbox is re-resolvable by name from a
    *    fresh process via `Sandbox.get(name)` + `connect()`, and
    *    `launchDetached` sets `detached(true)` so it outlives this process.
@@ -822,14 +913,13 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
    *    `execStream`, but this adapter's log path is a durable file read, so
    *    claiming a streaming capability here would be claiming a code path that
    *    does not exist.
+   *
+   * NOT SUPPORTED, and deliberately absent rather than silently ignored: custom
+   * or published PORTS. The SDK builder exposes `port()`/`portBind()`/`portUdp()`,
+   * but the ports this package targets have no public-port surface to express
+   * them, so this adapter never calls them and never implies a reachable port.
    */
-  readonly capabilities: RuntimeCapabilities = {
-    pty: false,
-    snapshots: true,
-    isolation: "strong",
-    persistentHandle: true,
-    streamingLogs: false,
-  };
+  readonly capabilities: RuntimeCapabilities;
 
   /**
    * Both true, and declared rather than left to default so the reasoning is on
@@ -858,6 +948,7 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   private readonly connectTimeoutMs: number;
   private readonly lookupTimeoutMs: number;
   private readonly listPageSize: number;
+  private readonly backendQueueTimeoutMs: number;
   private readonly injectedSdk?: MicrosandboxSdk;
   private sdkPromise?: Promise<MicrosandboxSdk>;
 
@@ -883,6 +974,28 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
         "MicrosandboxRuntime accepts `image` or `snapshot`, not both: a sandbox has exactly one rootfs source",
       );
     }
+    // Refused HERE — before the lazy `import("microsandbox")`, before any SDK
+    // call, before a single byte leaves the process. A snapshot source is a
+    // local-backend-only configuration, so this is a static fact about the
+    // pairing rather than something the provider has to be asked about;
+    // deferring it to `launch` would surface it as an opaque remote failure on
+    // a path the caller was told existed.
+    //
+    // PROVENANCE: that Microsandbox CLOUD does not support snapshot-sourced
+    // creates is vendor documentation, relayed by the sandbox program lead as a
+    // release blocker; it is NOT derivable from microsandbox@0.6.11's typings,
+    // which carry no cloud/local gating on the snapshot surface. What IS
+    // checkable from the installed package, and what makes the restriction
+    // coherent, is that a snapshot artifact is host-local: the SDK documents
+    // them under `~/.microsandbox/snapshots/<name>/` and lists them from a
+    // local DB cache, and a cloud create cannot resolve a host path.
+    if (options.snapshot && !isLocalBackend(options.backend)) {
+      throw new Error(
+        "MicrosandboxRuntime cannot boot from a `snapshot` on the cloud backend: a snapshot artifact is host-local "
+          + "(the SDK resolves it under ~/.microsandbox/snapshots/), so a cloud create cannot reach it. "
+          + "Use `image` on the cloud backend, or set `backend: \"local\"` to boot from a snapshot.",
+      );
+    }
     this.backend = options.backend;
     if (options.image !== undefined) {
       this.image = options.image;
@@ -906,6 +1019,13 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     if (options.maxDurationSeconds !== undefined) {
       this.maxDurationSeconds = options.maxDurationSeconds;
     }
+    this.capabilities = {
+      pty: false,
+      snapshots: isLocalBackend(options.backend),
+      isolation: isLocalBackend(options.backend) ? "strong" : "unknown",
+      persistentHandle: true,
+      streamingLogs: false,
+    };
     this.replaceExisting = options.replaceExisting ?? false;
     this.namePrefix = options.namePrefix ?? "";
     this.runStateDir = (options.runStateDir ?? DEFAULT_RUN_STATE_DIR).replace(/\/+$/, "");
@@ -913,6 +1033,7 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.lookupTimeoutMs = options.lookupTimeoutMs ?? DEFAULT_LOOKUP_TIMEOUT_MS;
     this.listPageSize = options.listPageSize ?? DEFAULT_LIST_PAGE_SIZE;
+    this.backendQueueTimeoutMs = options.backendQueueTimeoutMs ?? DEFAULT_BACKEND_QUEUE_TIMEOUT_MS;
     if (options.sdk !== undefined) {
       this.injectedSdk = options.sdk;
     }
@@ -1640,7 +1761,7 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     fn: (sdk: MicrosandboxSdk) => Promise<T> | T,
   ): Promise<T> {
     const sdk = await this.sdk();
-    return withBackendScope(sdk, this.backend, () => fn(sdk));
+    return withBackendScope(sdk, this.backend, () => fn(sdk), this.backendQueueTimeoutMs);
   }
 
   private async lookupHandle(name: string): Promise<MsbSandboxHandle | null> {

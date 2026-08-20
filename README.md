@@ -39,6 +39,26 @@ the microsandbox adapter never loads that SDK: it is imported lazily, at first
 use, and a load failure is reported with the constraint that most often
 explains it.
 
+### Microsandbox capabilities are backend-sensitive
+
+`MicrosandboxRuntime.capabilities` is derived from the backend the instance is
+bound to, not reported as a single process-wide constant:
+
+| Capability | `local` | `cloud` | Why |
+| --- | --- | --- | --- |
+| `snapshots` | `true` | `false` | A snapshot source is a host-local artifact — the SDK resolves it under `~/.microsandbox/snapshots/` and indexes it in a local DB cache — so a cloud create cannot reach one. Configuring `snapshot` with a cloud backend is refused in the constructor, before any SDK call. |
+| `isolation` | `'strong'` | `'unknown'` | Locally the SDK boots a microVM with its own guest kernel on a virtualization-capable host, which this package can stand behind. The cloud backend's isolation is vendor-documented but not observable from here, and this adapter measures nothing about it. |
+
+`'unknown'` is not a synonym for weak. It means this package has not established
+the guarantee, so a caller that requires one must decide for itself rather than
+read an unverified `'strong'`.
+
+Cloud region placement and resource enforcement are likewise not represented as
+measured facts. Custom or published **ports are not supported**: the SDK builder
+exposes `port()`/`portBind()`, but the ports this package targets have no
+public-port surface, so the adapter never calls them and never implies a
+reachable port.
+
 ## Design
 
 Two pieces, deliberately kept apart:

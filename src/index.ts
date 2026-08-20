@@ -74,6 +74,7 @@ export type {
 } from "./e2b/runtime.js";
 
 export {
+  MicrosandboxBackendBusyError,
   MicrosandboxCreateTimeoutError,
   MicrosandboxLookupTimeoutError,
   MicrosandboxNameTooLongError,
