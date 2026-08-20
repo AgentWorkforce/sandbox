@@ -699,13 +699,13 @@ async function withBackendScope<T>(
         throw new MicrosandboxBackendBusyError(queueTimeoutMs);
       }
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let wake!: () => void;
+      const woken = new Promise<false>((resolve) => {
+        wake = () => resolve(false);
+      });
+      backendScopeWaiters.push(wake);
       const timedOut = await Promise.race([
-        new Promise<false>((resolve) => {
-          // A stale resolver left here after the race is harmless: the waiter
-          // list is spliced wholesale on release and resolving a promise
-          // nobody awaits is a no-op.
-          backendScopeWaiters.push(() => resolve(false));
-        }),
+        woken,
         new Promise<true>((resolve) => {
           timer = setTimeout(() => resolve(true), remainingMs);
         }),
@@ -714,6 +714,15 @@ async function withBackendScope<T>(
         clearTimeout(timer);
       }
       if (timedOut) {
+        // Deregister. The waiter list is only spliced wholesale when a scope
+        // releases, so a timed-out waiter left behind would never be collected
+        // — and the case this bound exists for is precisely the one where no
+        // release ever comes, which would grow the list without limit under
+        // sustained load.
+        const queued = backendScopeWaiters.indexOf(wake);
+        if (queued !== -1) {
+          backendScopeWaiters.splice(queued, 1);
+        }
         throw new MicrosandboxBackendBusyError(queueTimeoutMs);
       }
       continue;

@@ -853,6 +853,45 @@ describe("backend gate (the scope is process-global)", () => {
     assert.equal((await queued).id, "local-1");
   });
 
+  it("stays correct after repeated queue timeouts against a wedged scope", async () => {
+    // Every timed-out waiter must deregister itself. The waiter list is only
+    // spliced wholesale when a scope RELEASES, and the case this bound exists
+    // for is the one where no release ever comes — so a waiter left behind
+    // would accumulate without limit. Behaviourally: repeated timeouts must not
+    // corrupt the queue, and the gate must still work once the holder settles.
+    let creates = 0;
+    let finishFirstCreate!: () => void;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            finishFirstCreate = resolve;
+          });
+      },
+    });
+    const cloud = makeRuntime(sdk, { backendQueueTimeoutMs: 20 });
+    const local = makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 20 });
+
+    await assert.rejects(
+      cloud.launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await assert.rejects(
+        local.launch({ name: `q-${attempt}` }),
+        MicrosandboxBackendBusyError,
+      );
+    }
+
+    // The holder finally settles: the gate must hand over cleanly, proving the
+    // queue was not left in a corrupt state by the eight timeouts.
+    finishFirstCreate();
+    const handle = await local.launch({ name: "after" });
+    assert.equal(handle.id, "after");
+  });
+
   it("keeps interleaved two-runtime static calls on their own backend", async () => {
     // The discriminating one. `withDefaultBackend` mutates ONE process-wide
     // slot; this fake models exactly that slot, and every DEFAULT-DEPENDENT
