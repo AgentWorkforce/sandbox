@@ -594,7 +594,11 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
     if (!response || !Array.isArray(response.vms)) {
       throw new Error("Freestyle VM list response is malformed");
     }
-    return response.vms.filter(isFreestyleVmListItem);
+    const malformedIndex = response.vms.findIndex((item) => !isFreestyleVmListItem(item));
+    if (malformedIndex !== -1) {
+      throw new Error(`Freestyle VM list item ${malformedIndex} is malformed`);
+    }
+    return response.vms;
   }
 
   private async remoteById(id: string, timeoutMs: number): Promise<FreestyleVmListItem | null> {
