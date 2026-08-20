@@ -533,6 +533,12 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   ): Promise<RuntimeHandle[]> {
     const states = options.states === undefined ? ["STARTED"] : options.states;
     const limit = options.limit ?? options.pageSize;
+    // A non-positive cap means "zero handles wanted": the post-push break at
+    // the loop tail runs one iteration late, so limit:0 leaked one handle. Fold
+    // that into the pre-fetch short circuit — no lookup, no ownership claim.
+    if (limit !== undefined && limit <= 0) {
+      return [];
+    }
     const excluded = new Set(options.excludeIds ?? []);
     const instances = await this.listInstances(options.timeoutMs);
     const handles: RuntimeHandle[] = [];

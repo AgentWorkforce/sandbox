@@ -828,6 +828,19 @@ describe("Agent37Runtime label lookup", () => {
     assert.equal(skipped?.id, "eeeeeeeeee");
   });
 
+  it("returns an empty list without probing when limit is non-positive", async () => {
+    const h = harness(() => ({ json: { data: fleet } }));
+    const runtime = makeRuntime(h);
+    for (const bad of [0, -1]) {
+      const result = await runtime.findAllByLabels(
+        { purpose: "test-purpose" },
+        { limit: bad },
+      );
+      assert.deepEqual(result, []);
+    }
+    assert.equal(h.requests.length, 0, "no lookup should be issued for a zero/negative limit");
+  });
+
   it("counts matches and stops at maxCount", async () => {
     const h = harness(() => ({ json: { data: fleet } }));
     const runtime = makeRuntime(h);
