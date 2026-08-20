@@ -1,4 +1,15 @@
-export type IsolationLevel = 'none' | 'process' | 'strong';
+/**
+ * How strongly a runtime isolates a workload from the host.
+ *
+ * `'unknown'` is deliberately NOT a synonym for weak. It is for a provider
+ * whose isolation this package has not established as fact — most often a
+ * hosted backend whose internals are documented by the vendor but not
+ * observable from here. Encoding such a case as `'strong'` would publish a
+ * guarantee nobody verified, and encoding it as `'none'`/`'process'` would
+ * publish a limitation that may not exist. A caller that requires a specific
+ * guarantee must treat `'unknown'` as "not established" and decide for itself.
+ */
+export type IsolationLevel = 'none' | 'process' | 'strong' | 'unknown';
 
 export interface RuntimeCapabilities {
   pty: boolean;
@@ -36,6 +47,15 @@ export interface ExecOptions {
 export interface ExecResult {
   output: string;
   exitCode: number;
+  /**
+   * True when `output` is a TAIL of the real output rather than all of it.
+   *
+   * Present only when the adapter actually bounds the read. Absent means the
+   * output is complete — never "unknown". A silently shortened log reads as a
+   * command that simply printed less, which is the one reading that cannot be
+   * distinguished from the truth by looking at the value.
+   */
+  truncated?: boolean;
 }
 
 export interface AsyncExecStartResult {

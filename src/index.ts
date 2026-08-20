@@ -62,6 +62,7 @@ export { E2BSandboxRuntime } from "./e2b/runtime.js";
 export type { E2BSandboxRuntimeOptions, E2BSandboxStatics } from "./e2b/runtime.js";
 
 export {
+  MicrosandboxBackendBusyError,
   MicrosandboxCreateTimeoutError,
   MicrosandboxLookupTimeoutError,
   MicrosandboxNameTooLongError,

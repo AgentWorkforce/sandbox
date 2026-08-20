@@ -8,6 +8,7 @@ import { after, before, describe, it } from "node:test";
 
 import * as pkg from "../index.js";
 import {
+  MicrosandboxBackendBusyError,
   MicrosandboxCreateTimeoutError,
   MicrosandboxLookupTimeoutError,
   MicrosandboxNameTooLongError,
@@ -542,6 +543,42 @@ describe("construction", () => {
     );
   });
 
+  // A snapshot source is a LOCAL-backend-only configuration. The SDK boots a
+  // sandbox from a snapshot ARTIFACT — a host-local directory under
+  // `~/.microsandbox/snapshots/<name>/`, indexed in a local DB cache — which a
+  // cloud create has no access to. Accepting the pairing and letting it fail at
+  // the provider would surface as an opaque remote error on a path the caller
+  // was told existed, so it is refused here instead.
+  it("refuses a snapshot on the cloud backend, and refuses it before any SDK call", () => {
+    const { sdk, log } = createHarness();
+    assert.throws(
+      () =>
+        new MicrosandboxRuntime({
+          backend: CLOUD_BACKEND,
+          snapshot: "snap-1",
+          homeDir: HOME_DIR,
+          sdk,
+        }),
+      /snapshot/i,
+    );
+    // MUST NOT FIRE. The refusal rests on a provider fact known without asking
+    // the provider, so it has to land before the SDK is touched at all — that
+    // is what keeps it distinguishable from a backend outage.
+    assert.deepEqual(log, [], "a refused configuration must not reach the SDK");
+  });
+
+  it("accepts a snapshot on the local backend", () => {
+    const { sdk, log } = createHarness();
+    const runtime = new MicrosandboxRuntime({
+      backend: "local",
+      snapshot: "snap-1",
+      homeDir: HOME_DIR,
+      sdk,
+    });
+    assert.equal(runtime.capabilities.snapshots, true);
+    assert.deepEqual(log, []);
+  });
+
   it("touches no SDK surface at construction time", () => {
     const { sdk, log } = createHarness();
     makeRuntime(sdk);
@@ -737,6 +774,83 @@ describe("backend gate (the scope is process-global)", () => {
     );
     releaseExec();
     await running;
+  });
+
+  it("fails a queued call rather than waiting forever on an abandoned scope holder", async () => {
+    // The create-timeout path is a SUPPORTED outcome, not an exotic one, and
+    // the SDK exposes no way to cancel an in-flight create — so after the
+    // deadline fires the create is still running. If the gate is held until
+    // that abandoned create settles, every OTHER backend in the process is
+    // blocked for an unbounded time by a call whose caller already gave up.
+    //
+    // The scope only has to cover the part that READS the process-global
+    // default; it must not cover the wait for a result nobody is waiting for.
+    let creates = 0;
+    let finishFirstCreate!: () => void;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            finishFirstCreate = resolve;
+          });
+      },
+    });
+    const cloud = makeRuntime(sdk, { backendQueueTimeoutMs: 150 });
+    const local = makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 150 });
+
+    await assert.rejects(
+      cloud.launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+      MicrosandboxCreateTimeoutError,
+    );
+
+    // The local call cannot run: the cloud scope is held by a create nobody is
+    // waiting for any more. The guarantee is NOT that it succeeds — that would
+    // require changing the process default while an SDK call bound to the other
+    // backend is still in flight, which is the mis-routing the gate exists to
+    // prevent. The guarantee is that it does not hang forever.
+    const outcome = await Promise.race([
+      local.launch({ name: "local-1" }).then(
+        () => "launched",
+        (error: unknown) => (error instanceof MicrosandboxBackendBusyError ? "busy" : `other:${error}`),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve("HUNG"), 2_000)),
+    ]);
+    // Release before asserting: a failing assertion throws, and an abandoned
+    // create still pending at that point would hold the gate for the rest of
+    // the file, turning one honest red into a cascade of cancellations.
+    finishFirstCreate();
+    assert.equal(
+      outcome,
+      "busy",
+      "a queued call must fail with a typed error, never hang, when the scope holder was abandoned",
+    );
+  });
+
+  it("does not fail a queued call while the other backend is merely slow", async () => {
+    // MUST NOT FIRE. The bound above must not turn ordinary contention into an
+    // error: once the holder finishes, the queued call runs normally.
+    let creates = 0;
+    let finishFirstCreate!: () => void;
+    const { sdk } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates > 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+            finishFirstCreate = resolve;
+          });
+      },
+    });
+    const cloud = makeRuntime(sdk, { backendQueueTimeoutMs: 5_000 });
+    const local = makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 5_000 });
+    const slow = cloud.launch({ name: "slow" });
+    const queued = local.launch({ name: "local-1" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    finishFirstCreate();
+    await slow;
+    assert.equal((await queued).id, "local-1");
   });
 
   it("keeps interleaved two-runtime static calls on their own backend", async () => {
@@ -998,7 +1112,10 @@ describe("launch", () => {
 
   it("boots from a snapshot and never from an image when configured that way", async () => {
     const { sdk, log } = createHarness();
-    await makeRuntime(sdk, { image: undefined, snapshot: "snap-7" }).launch({ name: "s1" });
+    // Local backend: a snapshot source is only accepted there (see the
+    // construction block), because the artifact is a host-local directory.
+    await makeRuntime(sdk, { backend: "local", image: undefined, snapshot: "snap-7" })
+      .launch({ name: "s1" });
     assert.deepEqual(firstArgs(log, "builder.fromSnapshot"), ["snap-7"]);
     assert.equal(called(log, "builder.image"), false);
   });
@@ -1088,18 +1205,28 @@ describe("launchDetached", () => {
 
 describe("create deadline", () => {
   it("fails with a typed error when the create deadline elapses", async () => {
+    // The create is released at the end rather than left pending forever. An
+    // abandoned scope holder really does hold the process-global backend gate
+    // — that is a real defect, covered by its own test in "backend gate" — but
+    // leaving one behind HERE would poison every later different-backend call
+    // in this process and turn one defect into a suite-wide cascade.
+    let releaseCreate!: () => void;
     const { sdk } = createHarness({
-      onCreate: () => new Promise<void>(() => {}),
+      onCreate: () => new Promise<void>((resolve) => { releaseCreate = resolve; }),
     });
-    await assert.rejects(
-      makeRuntime(sdk).launch({ name: "slow", createTimeoutSeconds: 0.02 }),
-      (error: unknown) => {
-        assert.ok(error instanceof MicrosandboxCreateTimeoutError);
-        assert.equal(error.sandboxName, "slow");
-        assert.equal(error.timeoutMs, 20);
-        return true;
-      },
-    );
+    try {
+      await assert.rejects(
+        makeRuntime(sdk).launch({ name: "slow", createTimeoutSeconds: 0.02 }),
+        (error: unknown) => {
+          assert.ok(error instanceof MicrosandboxCreateTimeoutError);
+          assert.equal(error.sandboxName, "slow");
+          assert.equal(error.timeoutMs, 20);
+          return true;
+        },
+      );
+    } finally {
+      releaseCreate();
+    }
   });
 
   it("never maps the create deadline onto a sandbox LIFETIME budget", async () => {
@@ -1383,40 +1510,58 @@ describe("label lookup", () => {
     assert.deepEqual(handles.map((handle) => handle.id), ["a", "b"]);
   });
 
+  // All three release their hung listing at the end: see the note on the
+  // create-deadline test above. The listing genuinely holds the process-global
+  // backend gate until it settles, which is covered in "backend gate".
   it("stops draining pages when the lookup deadline elapses", async () => {
     // Without a deadline a listing that never answers hangs the caller's
     // request forever, holding a warm-lease decision open indefinitely.
+    let releaseList!: () => void;
     const { sdk } = createHarness({
-      listWith: () => new Promise<never>(() => {}),
+      listWith: () => new Promise<void>((resolve) => { releaseList = resolve; }),
     });
-    await assert.rejects(
-      makeRuntime(sdk).findAllByLabels({}, { timeoutMs: 20 }),
-      (error: unknown) => {
-        assert.ok(error instanceof MicrosandboxLookupTimeoutError);
-        assert.equal(error.timeoutMs, 20);
-        return true;
-      },
-    );
+    try {
+      await assert.rejects(
+        makeRuntime(sdk).findAllByLabels({}, { timeoutMs: 20 }),
+        (error: unknown) => {
+          assert.ok(error instanceof MicrosandboxLookupTimeoutError);
+          assert.equal(error.timeoutMs, 20);
+          return true;
+        },
+      );
+    } finally {
+      releaseList();
+    }
   });
 
   it("bounds a count with the same deadline", async () => {
+    let releaseList!: () => void;
     const { sdk } = createHarness({
-      listWith: () => new Promise<never>(() => {}),
+      listWith: () => new Promise<void>((resolve) => { releaseList = resolve; }),
     });
-    await assert.rejects(
-      makeRuntime(sdk).countByLabels({}, { timeoutMs: 20 }),
-      MicrosandboxLookupTimeoutError,
-    );
+    try {
+      await assert.rejects(
+        makeRuntime(sdk).countByLabels({}, { timeoutMs: 20 }),
+        MicrosandboxLookupTimeoutError,
+      );
+    } finally {
+      releaseList();
+    }
   });
 
   it("applies the runtime's configured lookup deadline when the caller gives none", async () => {
+    let releaseList!: () => void;
     const { sdk } = createHarness({
-      listWith: () => new Promise<never>(() => {}),
+      listWith: () => new Promise<void>((resolve) => { releaseList = resolve; }),
     });
-    await assert.rejects(
-      makeRuntime(sdk, { lookupTimeoutMs: 20 }).findByLabels({}),
-      MicrosandboxLookupTimeoutError,
-    );
+    try {
+      await assert.rejects(
+        makeRuntime(sdk, { lookupTimeoutMs: 20 }).findByLabels({}),
+        MicrosandboxLookupTimeoutError,
+      );
+    } finally {
+      releaseList();
+    }
   });
 
   it("answers a zero maxCount without any SDK call", async () => {
@@ -2508,15 +2653,43 @@ describe("reattach", () => {
 });
 
 describe("capabilities", () => {
-  it("declares the bootstrap-plane capability set this adapter actually implements", () => {
+  // The capability set is BACKEND-SENSITIVE, and `snapshots` is the field that
+  // differs. Microsandbox snapshot artifacts are host-local — the SDK stores
+  // them under `~/.microsandbox/snapshots/<name>/` and `Snapshot.list()` reads
+  // a local DB cache — so a cloud create cannot source one. Reporting a flat
+  // `snapshots: true` told a caller on the cloud backend that a boot path
+  // exists which the provider does not offer.
+  it("declares snapshot support on the local backend, where the boot path exists", () => {
     const { sdk } = createHarness();
-    assert.deepEqual(makeRuntime(sdk).capabilities, {
+    assert.deepEqual(makeRuntime(sdk, { backend: "local" }).capabilities, {
       pty: false,
       snapshots: true,
       isolation: "strong",
       persistentHandle: true,
       streamingLogs: false,
     });
+  });
+
+  // Cloud differs on BOTH backend-sensitive fields. `isolation: "unknown"` is
+  // the honest value: microsandbox's cloud isolation is vendor-documented but
+  // this adapter measures nothing about it, and publishing "strong" would be
+  // publishing a guarantee nobody here verified.
+  it("does NOT declare snapshot support on the cloud backend, and reports isolation as unknown", () => {
+    const { sdk } = createHarness();
+    assert.deepEqual(makeRuntime(sdk).capabilities, {
+      pty: false,
+      snapshots: false,
+      isolation: "unknown",
+      persistentHandle: true,
+      streamingLogs: false,
+    });
+  });
+
+  // Guard against the easy over-correction: "unknown" must not leak onto the
+  // local backend, where the microVM boot path IS established.
+  it("keeps strong isolation on the local backend", () => {
+    const { sdk } = createHarness();
+    assert.equal(makeRuntime(sdk, { backend: "local" }).capabilities.isolation, "strong");
   });
 
   it("declares warm-lease and lifecycle support", () => {
@@ -2546,10 +2719,23 @@ describe("capabilities", () => {
     }
   });
 
-  it("backs its snapshots claim with a real snapshot boot path", async () => {
+  // MUST FIRE: the local claim is backed by a real SDK call, not by the mere
+  // existence of `fromSnapshot` on the builder type.
+  it("backs its local snapshots claim with a real snapshot boot path", async () => {
     const { sdk, log } = createHarness();
-    await makeRuntime(sdk, { image: undefined, snapshot: "snap-1" }).launch({ name: "s1" });
+    await makeRuntime(sdk, { backend: "local", image: undefined, snapshot: "snap-1" })
+      .launch({ name: "s1" });
     assert.equal(called(log, "builder.fromSnapshot"), true);
+    assert.equal(called(log, "builder.image"), false, "a snapshot boot has no image source");
+  });
+
+  // MUST NOT FIRE: a cloud launch never reaches the snapshot boot path, because
+  // a cloud runtime cannot be configured with a snapshot in the first place.
+  it("never takes the snapshot boot path on the cloud backend", async () => {
+    const { sdk, log } = createHarness();
+    await makeRuntime(sdk).launch({ name: "s1" });
+    assert.equal(called(log, "builder.fromSnapshot"), false);
+    assert.equal(called(log, "builder.image"), true);
   });
 });
 
