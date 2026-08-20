@@ -76,8 +76,10 @@ export type {
 export {
   AGENT37_COMMAND_CAP_MS,
   Agent37CommandTimeoutUnsupportedError,
+  Agent37CreateTimeoutUnsupportedError,
   Agent37EnvValidationError,
   Agent37ForeignHandleError,
+  Agent37MalformedResponseError,
   Agent37Runtime,
   Agent37UnknownExitCodeError,
 } from "./agent37/runtime.js";
