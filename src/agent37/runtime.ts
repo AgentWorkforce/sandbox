@@ -833,20 +833,63 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     destination?: string,
   ): Promise<Buffer | void> {
     const instanceUrl = await this.resolveInstanceUrl(handle.id);
-    if (!instanceUrl) {
-      throw new Error(
-        `Agent37 instance "${handle.id}" exposes no URL, so its file API is unreachable; ` +
-          "register the template with a port, or read the file through exec.",
-      );
-    }
-    const bytes = await this.client.instanceBytes(instanceUrl, "GET", "/v1/files/content", {
-      query: { path: source, disposition: "attachment" },
-    });
-    const buffer = Buffer.from(bytes);
+    const buffer = instanceUrl
+      ? Buffer.from(
+          await this.client.instanceBytes(instanceUrl, "GET", "/v1/files/content", {
+            query: { path: source, disposition: "attachment" },
+          }),
+        )
+      : await this.downloadFileViaExec(handle.id, source);
     if (destination === undefined) {
       return buffer;
     }
     await writeFile(destination, buffer);
+  }
+
+  /**
+   * Read-side counterpart to `uploadFile`'s exec fallback: templates registered
+   * with no ports have no URL of their own, so the file plane is unreachable
+   * and the only way out is through the hosting plane's exec. The payload is
+   * carried inside a bounded shell script that first sizes the file, refuses
+   * anything larger than `execUploadMaxBytes` (the same cap as the upload
+   * path), then emits base64 on stdout. Truncated exec output is rejected
+   * rather than decoded — a truncated base64 stream would decode into the
+   * wrong bytes without error.
+   */
+  private async downloadFileViaExec(id: string, source: string): Promise<Buffer> {
+    const cap = this.execUploadMaxBytes;
+    const quoted = shellQuote(source);
+    const script = [
+      `set -e`,
+      `if [ ! -f ${quoted} ]; then echo "agent37: missing file" >&2; exit 66; fi`,
+      `size=$(wc -c < ${quoted})`,
+      `if [ "$size" -gt ${cap} ]; then`,
+      `  echo "agent37: file exceeds exec download cap of ${cap} bytes ($size bytes)" >&2`,
+      `  exit 67`,
+      `fi`,
+      // `base64 -w0` on GNU coreutils avoids the 76-column wrap. macOS/BSD
+      // `base64` has no `-w` but also does not wrap unless `-b` is given, so a
+      // graceful fallback keeps both platforms honest without try/catch.
+      `if base64 -w0 < ${quoted} 2>/dev/null; then :; else base64 < ${quoted}; fi`,
+    ].join("\n");
+    const result = await this.execRaw(id, script);
+    if (result.truncated) {
+      throw new Error(
+        `Agent37 exec download of "${source}" was truncated by the exec plane; ` +
+          "register the template with a port to use the file API.",
+      );
+    }
+    if (result.exit_code !== 0) {
+      throw new Error(
+        `Agent37 exec download of "${source}" failed (exit ${result.exit_code}): ${
+          combineOutput(result.stdout, result.stderr).slice(0, 2000)
+        }`,
+      );
+    }
+    // `base64` prints only the payload on stdout; ignore stderr (empty on
+    // success). Any whitespace is harmless — `Buffer.from(..., "base64")` skips
+    // characters outside the base64 alphabet.
+    return Buffer.from(result.stdout, "base64");
   }
 
   async getHomeDir(handle: RuntimeHandle): Promise<string> {

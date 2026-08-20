@@ -1358,11 +1358,42 @@ describe("Agent37Runtime file transfer", () => {
     assert.equal(h.requests.filter((request) => request.method === "POST").length, 0);
   });
 
-  it("refuses to download from an instance with no URL instead of guessing one", async () => {
-    const h = harness(() => ({ json: instanceObject({ url: null }) }));
+  it("falls back to base64 over exec on download when the instance exposes no URL", async () => {
+    const payload = Buffer.from([9, 8, 7, 6, 0, 255]);
+    const h = harness((request) =>
+      request.method === "GET"
+        ? { json: instanceObject({ url: null }) }
+        : { json: { exit_code: 0, stdout: payload.toString("base64") } },
+    );
+    const buffer = await makeRuntime(h).downloadFile(RUNNING_HANDLE, "/work/a.bin");
+    assert.deepEqual(Array.from(buffer as Buffer), Array.from(payload));
+    const post = h.requests.find((request) => request.method === "POST") as RecordedRequest;
+    const command = execCommand(post);
+    assert.match(command, /wc -c < '\/work\/a\.bin'/);
+    assert.match(command, /base64 -w0 < '\/work\/a\.bin'/);
+  });
+
+  it("rejects a truncated exec download rather than decoding partial bytes", async () => {
+    const h = harness((request) =>
+      request.method === "GET"
+        ? { json: instanceObject({ url: null }) }
+        : { json: { exit_code: 0, stdout: "AAAA", truncated: true } },
+    );
     await assert.rejects(
-      makeRuntime(h).downloadFile(RUNNING_HANDLE, "/work/a.txt"),
-      /exposes no URL/,
+      makeRuntime(h).downloadFile(RUNNING_HANDLE, "/work/a.bin"),
+      /truncated by the exec plane/,
+    );
+  });
+
+  it("surfaces a non-zero exec download exit rather than returning empty bytes", async () => {
+    const h = harness((request) =>
+      request.method === "GET"
+        ? { json: instanceObject({ url: null }) }
+        : { json: { exit_code: 67, stderr: "agent37: file exceeds exec download cap" } },
+    );
+    await assert.rejects(
+      makeRuntime(h).downloadFile(RUNNING_HANDLE, "/work/big.bin"),
+      /exit 67/,
     );
   });
 
