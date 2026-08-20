@@ -13,6 +13,12 @@ export type RunScriptResult = {
 export type AsyncRunStartResult = {
   sessionId: string;
   commandId: string;
+  /**
+   * True when a submit whose outcome was unknown resolved to the run that was
+   * already admitted for this exact session and command, rather than starting
+   * a second one.
+   */
+  reconciled?: true;
 };
 
 export type AsyncRunStatus = {
