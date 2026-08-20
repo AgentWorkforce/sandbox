@@ -38,6 +38,21 @@ is a required argument supplied by the caller. This keeps the package usable
 outside the environment it was extracted from, and keeps credential handling in
 the caller where it belongs.
 
+### Daytona restart recovery
+
+`DaytonaRuntime.start()` does not trust the provider state transition alone. It
+rehydrates the SDK sandbox and runs a bounded `true` command after `start`,
+because Daytona can report `STARTED` while its Toolbox exec daemon remains
+unavailable. A healthy restart keeps the same sandbox ID.
+
+When that post-start command fails, the runtime defaults to creating and proving
+a replacement before deleting the unusable sandbox. The returned handle is
+updated in place and can therefore have a new `id`; callers must persist that
+returned ID. The replacement preserves the configured snapshot plus provider
+labels, environment, lifecycle, volume, and network settings, but non-volume
+filesystem changes in the old sandbox are not copied. Stateful callers that
+prefer a hard failure to that trade-off can set `recreateOnFailedStart: false`.
+
 ### E2B runtime contract
 
 `E2BSandboxRuntime` implements both the outer orchestration port and the live
