@@ -211,9 +211,12 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     streamingLogs: false,
   };
 
-  // E2B v2 performs metadata-filtered server-side lookup, and stop/start map
-  // to pause/connect (connect resumes a paused sandbox).
-  readonly declaredCapabilities = { warmLease: true, lifecycle: true } as const;
+  // E2B v2 performs metadata-filtered server-side lookup. Direct callers can
+  // opt into stop/start, which map to pause/connect (connect resumes a paused
+  // sandbox), but the router must not select E2B for lifecycle-dependent work:
+  // provider pause/resume has had state-persistence and process-reconciliation
+  // failures that this adapter cannot make atomic or independently verify.
+  readonly declaredCapabilities = { warmLease: true, lifecycle: false } as const;
 
   private readonly apiKey: string;
   private readonly template: string;
@@ -702,7 +705,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       return;
     }
     const statics = await this.statics();
-    await statics.pause(handle.id, { apiKey: this.apiKey });
+    await statics.pause(handle.id, { apiKey: this.apiKey, keepMemory: true });
     entry.sandbox = undefined;
     entry.state = "paused";
     handle.state = "STOPPED";

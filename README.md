@@ -43,11 +43,17 @@ the caller where it belongs.
 `E2BSandboxRuntime` implements both the outer orchestration port and the live
 `WorkflowRuntime` surface: metadata/state lookup, reattachment, synchronous and
 durable asynchronous execution, upload/download, home-directory resolution,
-pause/resume, and owned-resource teardown. It deliberately does not expose a
-detached-launch method because E2B's public create call waits for a running
-sandbox. Its live capability descriptor likewise reports PTY and streaming logs
-as unsupported because this adapter exposes neither behavior, even though the
-provider SDK has lower-level APIs for them.
+explicit pause/resume, and owned-resource teardown. It deliberately does not
+expose a detached-launch method because E2B's public create call waits for a
+running sandbox. Its live capability descriptor likewise reports PTY and
+streaming logs as unsupported because this adapter exposes neither behavior,
+even though the provider SDK has lower-level APIs for them.
+
+Direct callers may explicitly pause and resume an owned E2B sandbox through
+`stop()` and `start()`. The router-facing `lifecycle` capability remains `false`,
+so lifecycle-dependent workloads are not automatically routed to E2B: provider
+pause/resume cannot currently give this adapter an atomic, independently
+verifiable state-persistence guarantee.
 
 The adapter applies an explicit sandbox lifetime on create, reconnect, and
 synchronous use; `sandboxLifetimeMs` defaults to the configured asynchronous

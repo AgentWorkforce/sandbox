@@ -36,18 +36,25 @@ describe("E2BSandboxRuntime public contract", () => {
       reattach: true,
       detachedLaunch: false,
       warmLease: true,
-      lifecycle: true,
+      lifecycle: false,
     });
   });
 
-  it("must-not-fire: does not advertise unsupported PTY, streaming, or detached launch", () => {
+  it("must-not-fire: does not advertise unsupported PTY, streaming, detached launch, or routed lifecycle", () => {
     const { statics } = fakeStatics();
     const runtime = createRuntime(statics);
 
     assert.equal(runtime.capabilities.pty, false);
     assert.equal(runtime.capabilities.streamingLogs, false);
     assert.equal("launchDetached" in runtime, false);
-    assert.equal(resolveSandboxRuntimeCapabilities(runtime).detachedLaunch, false);
+    const resolved = resolveSandboxRuntimeCapabilities(runtime);
+    assert.equal(resolved.detachedLaunch, false);
+    // start/stop are intentionally available to direct callers, so this is a
+    // control proving method-presence inference cannot revive the false claim.
+    assert.equal(typeof runtime.start, "function");
+    assert.equal(typeof runtime.stop, "function");
+    assert.equal(runtime.declaredCapabilities.lifecycle, false);
+    assert.equal(resolved.lifecycle, false);
   });
 
   it("must-not-fire: rejects an empty provider-specific template before an SDK call", () => {
@@ -979,7 +986,7 @@ describe("E2BSandboxRuntime files and home directory", () => {
 });
 
 describe("E2BSandboxRuntime ownership and lifecycle", () => {
-  it("must-fire: stops and starts an owned sandbox through pause/connect", async () => {
+  it("must-fire: stops and starts an owned sandbox through full-memory pause/connect", async () => {
     const created = fakeSandbox({ id: "sbx-owned" });
     const resumed = fakeSandbox({ id: "sbx-owned" });
     const { statics, calls } = fakeStatics({
@@ -995,7 +1002,12 @@ describe("E2BSandboxRuntime ownership and lifecycle", () => {
     await runtime.start(handle);
     assert.equal(handle.state, "STARTED");
     assert.deepEqual(calls.pause, ["sbx-owned"]);
+    assert.deepEqual(calls.pauseOptions, [{ apiKey: API_KEY, keepMemory: true }]);
     assert.deepEqual(calls.connect, ["sbx-owned"]);
+    assert.deepEqual(calls.connectOptions, [{
+      apiKey: API_KEY,
+      timeoutMs: 1_800_000,
+    }]);
     assert.equal((await runtime.exec(handle, "true")).exitCode, 0);
     assert.equal(resumed.calls.run.length, 1);
   });
@@ -1013,8 +1025,30 @@ describe("E2BSandboxRuntime ownership and lifecycle", () => {
     await runtime.destroy(handle);
 
     assert.deepEqual(calls.pause, []);
+    assert.deepEqual(calls.pauseOptions, []);
     assert.deepEqual(calls.connect, []);
     assert.deepEqual(calls.kill, []);
+  });
+
+  it("must-not-fire: failed provider lifecycle calls never advance the local state", async () => {
+    const pauseError = new Error("pause transport failed");
+    const resumeError = new Error("resume transport failed");
+    const { statics, calls } = fakeStatics({
+      createSandbox: fakeSandbox({ id: "sbx-failed-lifecycle" }),
+      pauseErrors: [pauseError],
+      connectErrors: new Map([["sbx-failed-lifecycle", resumeError]]),
+    });
+    const runtime = createRuntime(statics);
+    const handle = await runtime.launch();
+
+    await assert.rejects(() => runtime.stop(handle), pauseError);
+    assert.equal(handle.state, "STARTED");
+    assert.deepEqual(calls.connect, []);
+
+    await runtime.stop(handle);
+    assert.equal(handle.state, "STOPPED");
+    await assert.rejects(() => runtime.start(handle), resumeError);
+    assert.equal(handle.state, "STOPPED");
   });
 
   it("must-fire: destroys an owned sandbox and retains ownership when kill fails so cleanup can retry", async () => {
@@ -1176,6 +1210,7 @@ function fakeStatics(options: {
   getInfoErrors?: Map<string, Error>;
   pages?: FakeInfo[][];
   stalledList?: boolean;
+  pauseErrors?: Error[];
   killErrors?: Error[];
 } = {}) {
   const created = options.createSandbox ?? fakeSandbox({ id: "sbx-default" });
@@ -1187,6 +1222,7 @@ function fakeStatics(options: {
     list: Array<Record<string, unknown>>;
     nextItems: number;
     pause: string[];
+    pauseOptions: Array<Record<string, unknown>>;
     kill: string[];
   } = {
     create: [],
@@ -1196,8 +1232,10 @@ function fakeStatics(options: {
     list: [],
     nextItems: 0,
     pause: [],
+    pauseOptions: [],
     kill: [],
   };
+  const pauseErrors = [...(options.pauseErrors ?? [])];
   const killErrors = [...(options.killErrors ?? [])];
   const statics = {
     create: async (template: string, createOptions: Record<string, unknown> = {}) => {
@@ -1235,8 +1273,11 @@ function fakeStatics(options: {
         },
       };
     },
-    pause: async (id: string) => {
+    pause: async (id: string, pauseOptions: Record<string, unknown> = {}) => {
       calls.pause.push(id);
+      calls.pauseOptions.push(pauseOptions);
+      const error = pauseErrors.shift();
+      if (error) throw error;
       return true;
     },
     kill: async (id: string) => {
