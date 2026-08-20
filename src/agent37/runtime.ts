@@ -2,8 +2,6 @@ import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 
 import type {
-  AsyncExecStartResult,
-  AsyncExecStatus,
   ExecOptions,
   ExecResult,
   LaunchOptions,
@@ -12,8 +10,6 @@ import type {
   WorkflowRuntime,
 } from "../types.js";
 import type {
-  AsyncRunStartResult,
-  AsyncRunStatus,
   RunScriptResult,
   SandboxRuntime,
 } from "../port.js";
@@ -37,13 +33,25 @@ import type { Agent37ClientOptions, Agent37Fetch } from "./client.js";
 //    client-side filter over a complete list.
 //  - `POST /v1/instances/{id}/exec` takes exactly one field, `command`, run
 //    through `sh -c`. No cwd, no env, no timeout, no async mode. Working
-//    directory and environment are composed into the script; asynchronous
-//    execution is built on the provider's own documented recipe (`nohup ... &`
-//    plus a second exec to poll).
-//  - Command output is capped at 512 KB per stream and a command may run for
-//    280 seconds before the call fails.
+//    directory and environment are composed into the script.
+//  - Commands are capped at 280 seconds by the provider; exceeding the cap
+//    fails the call with `provisioning_failed` (502). `timeoutMs` on exec and
+//    runScript bounds the *HTTP call*, not the command inside the instance.
+//  - Command output is capped at 512 KB per stream. When output is truncated,
+//    the response carries `truncated: true`; this field is passed through in
+//    RunScriptResult so callers can detect incomplete output.
 //  - File transfer lives on the instance plane (`PUT`/`GET /v1/files/content`)
 //    and is uncapped, which is why it is preferred over base64-over-exec.
+//    The instance plane is authenticated with `X-Agent37-Key` and does NOT
+//    require a public port; public ports are for user-space services only.
+//
+// Async exec (nohup+/tmp emulation) was removed because it cannot provide
+// durable, idempotent guarantees:
+//  - /tmp state is lost when an instance stops, restarts, or updates.
+//  - Instance crashes leave the exit sentinel unwritten — permanent null state.
+//  - No deduplication guard for concurrent startScript calls with the same sessionId.
+// asyncExec is therefore false. Callers requiring async execution should use an
+// external queue or a provider that natively supports it.
 // ---------------------------------------------------------------------------
 
 /** Instance lifecycle states the hosting API reports. */
@@ -68,7 +76,13 @@ export type Agent37Resources = {
   disk?: number;
 };
 
-/** A port exposed at a permanent unauthenticated URL. */
+/**
+ * A port exposed at a permanent unauthenticated URL, for user-space services.
+ *
+ * The instance plane (file API) is authenticated with `X-Agent37-Key` and does
+ * NOT require a public port. Register public ports only for services that need
+ * anonymous ingress from outside the instance.
+ */
 export type Agent37PublicPort = {
   port: number;
   prefix?: string;
@@ -134,7 +148,11 @@ export type Agent37RuntimeOptions = {
   autoSleep?: boolean;
   /** Idle seconds before sleeping. Only meaningful with `autoSleep`. */
   idleTimeoutSeconds?: number;
-  /** Ports to expose at permanent unauthenticated URLs. */
+  /**
+   * Ports to expose at permanent unauthenticated URLs, for user-space services.
+   * The instance plane (file API) uses `X-Agent37-Key` auth and does not need
+   * a public port.
+   */
   publicPorts?: readonly Agent37PublicPort[];
   /** Opaque attribution tag stamped on every instance this runtime launches. */
   user?: string;
@@ -146,8 +164,6 @@ export type Agent37RuntimeOptions = {
   sleep?: (ms: number) => Promise<void>;
   /** Pre-built client, for tests or for sharing one transport across runtimes. */
   client?: Agent37Client;
-  /** Trailing bytes of a background run's log file that `getScriptLogs` pulls. */
-  scriptLogReadMaxBytes?: number;
   /**
    * Largest file `uploadBundle` will push through the base64-over-exec
    * fallback, used only when an instance exposes no URL of its own.
@@ -182,11 +198,9 @@ export type Agent37LaunchOptions = {
 
 export type Agent37RunScriptOptions = {
   command: string;
-  sessionId?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
   cwd?: string;
-  suppressInputEcho?: boolean;
 };
 
 export type Agent37BundleFile = {
@@ -206,6 +220,25 @@ export class Agent37EnvValidationError extends Error {
   }
 }
 
+/**
+ * Raised when a mutation (start / stop / destroy) is attempted on an instance
+ * that was not launched by this runtime.
+ *
+ * Only instances whose IDs appear in this runtime's `launchedIds` set may be
+ * mutated. Handles obtained through `getById` or label lookup identify foreign
+ * instances and are intentionally read-only by default, so a crash-recovery
+ * reattach cannot accidentally delete something it does not own.
+ */
+export class Agent37ForeignHandleError extends Error {
+  constructor(id: string, operation: string) {
+    super(
+      `Agent37 refused to ${operation} instance "${id}": the handle is foreign — ` +
+        "only instances launched by this runtime may be mutated or destroyed",
+    );
+    this.name = "Agent37ForeignHandleError";
+  }
+}
+
 // The provider documents `env` as at most 32 entries, keys of uppercase
 // letters, digits, and underscores starting with a letter, values up to 4096
 // characters. Checking locally turns a 400 after a round trip into an
@@ -215,9 +248,7 @@ const ENV_MAX_ENTRIES = 32;
 const ENV_MAX_VALUE_LENGTH = 4096;
 const ENV_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
 
-const DEFAULT_SCRIPT_LOG_READ_MAX_BYTES = 262_144; // 256 KiB
 const DEFAULT_EXEC_UPLOAD_MAX_BYTES = 262_144; // 256 KiB
-const RUN_STATE_ROOT = "/tmp/agent37-run";
 
 export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   readonly id = "agent37";
@@ -250,6 +281,10 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
    * here — but it happens over a complete, unpaginated list, which makes an
    * empty result mean "no match" and nothing else. That is the ambiguity the
    * capability exists to rule out, and it is ruled out.
+   *
+   * `asyncExec` is not declared here; it is derived from method presence by
+   * `resolveSandboxRuntimeCapabilities`. Async exec is absent from this adapter
+   * because nohup+/tmp emulation cannot provide durable, idempotent guarantees.
    */
   readonly declaredCapabilities = { warmLease: true, lifecycle: true } as const;
 
@@ -263,11 +298,13 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   private readonly idleTimeoutSeconds?: number;
   private readonly publicPorts?: readonly Agent37PublicPort[];
   private readonly user?: string;
-  private readonly scriptLogReadMaxBytes: number;
   private readonly execUploadMaxBytes: number;
   // An instance's own origin is only knowable from its instance object. Cache
   // what has been seen so the file plane does not re-GET on every transfer.
   private readonly instanceUrls = new Map<string, string>();
+  // IDs of instances launched by this runtime. Only these may be mutated or
+  // destroyed; handles obtained through getById / label lookup are foreign.
+  private readonly launchedIds = new Set<string>();
 
   constructor(options: Agent37RuntimeOptions) {
     if (!options.defaultHomeDir?.trim()) {
@@ -301,8 +338,6 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     if (options.user !== undefined) {
       this.user = options.user;
     }
-    this.scriptLogReadMaxBytes =
-      options.scriptLogReadMaxBytes ?? DEFAULT_SCRIPT_LOG_READ_MAX_BYTES;
     this.execUploadMaxBytes = options.execUploadMaxBytes ?? DEFAULT_EXEC_UPLOAD_MAX_BYTES;
   }
 
@@ -328,6 +363,10 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     const handles: RuntimeHandle[] = [];
     for (const instance of instances) {
       if (excluded.has(instance.id)) {
+        continue;
+      }
+      // When owned: true is requested, only return instances this runtime launched.
+      if (options.owned === true && !this.launchedIds.has(instance.id)) {
         continue;
       }
       if (!matchesLabels(instance, labels)) {
@@ -373,6 +412,10 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       workdir?: string;
     } = {},
   ): Promise<RuntimeHandle | null> {
+    // When owned: true is requested, only return instances this runtime launched.
+    if (options.owned === true && !this.launchedIds.has(id)) {
+      return null;
+    }
     const instance = await this.fetchInstance(id);
     if (!instance) {
       return null;
@@ -400,7 +443,16 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     if (env) {
       assertValidEnv(env);
     }
-    const metadata = options.labels;
+    // The singular `label` from LaunchOptions populates a "label" metadata key.
+    // Explicit `labels` entries merge on top and take precedence if both are provided.
+    const rawMetadata: Record<string, string> = {};
+    if (options.label !== undefined) {
+      rawMetadata["label"] = options.label;
+    }
+    if (options.labels) {
+      Object.assign(rawMetadata, options.labels);
+    }
+    const metadata = Object.keys(rawMetadata).length > 0 ? rawMetadata : undefined;
     const body: Record<string, unknown> = {
       ...(this.template === undefined ? {} : { template: this.template }),
       ...(this.resources === undefined ? {} : { resources: this.resources }),
@@ -413,7 +465,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       ...(this.publicPorts === undefined ? {} : { public_ports: this.publicPorts }),
       ...(this.user === undefined ? {} : { user: this.user }),
       ...(options.name === undefined ? {} : { name: options.name }),
-      ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
+      ...(metadata ? { metadata } : {}),
       ...(env && Object.keys(env).length > 0 ? { env } : {}),
     };
     const instance = await this.client.hosting<Agent37Instance>("POST", "/v1/instances", {
@@ -422,6 +474,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
         ? {}
         : { timeoutMs: options.createTimeoutSeconds * 1000 }),
     });
+    this.launchedIds.add(instance.id);
     const handle = this.registerInstance(instance);
     return {
       ...handle,
@@ -431,6 +484,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   }
 
   async start(handle: RuntimeHandle): Promise<RuntimeHandle> {
+    this.assertOwned(handle.id, "start");
     const ack = await this.client.hosting<{ id: string; status: Agent37InstanceStatus }>(
       "POST",
       `/v1/instances/${encodeURIComponent(handle.id)}/start`,
@@ -439,10 +493,12 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   }
 
   async stop(handle: RuntimeHandle): Promise<void> {
+    this.assertOwned(handle.id, "stop");
     await this.client.hosting("POST", `/v1/instances/${encodeURIComponent(handle.id)}/stop`);
   }
 
   async destroy(handle: RuntimeHandle): Promise<void> {
+    this.assertOwned(handle.id, "destroy");
     this.instanceUrls.delete(handle.id);
     try {
       await this.client.hosting("DELETE", `/v1/instances/${encodeURIComponent(handle.id)}`);
@@ -464,19 +520,27 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     command: string,
     options: ExecOptions = {},
   ): Promise<ExecResult> {
+    // timeoutMs bounds the HTTP call, not the command inside the instance.
+    // Commands that exceed the provider's 280s cap fail with provisioning_failed.
     const result = await this.runScript(handle, {
       command,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     });
-    return { output: result.output, exitCode: result.exitCode ?? 0 };
+    if (result.exitCode === null) {
+      throw new Error(
+        `Agent37 exec returned unknown outcome: provider response omitted exit_code; ` +
+          `treating as failure to avoid false success`,
+      );
+    }
+    return { output: result.output, exitCode: result.exitCode };
   }
 
   async runScript(
     handle: RuntimeHandle,
     options: Agent37RunScriptOptions,
-  ): Promise<RunScriptResult> {
+  ): Promise<RunScriptResult & { truncated?: boolean }> {
     if (options.env) {
       assertValidEnv(options.env);
     }
@@ -491,114 +555,8 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       ...(result.stdout ? { stdout: result.stdout } : {}),
       ...(result.stderr ? { stderr: result.stderr } : {}),
       exitCode: result.exit_code,
+      ...(result.truncated === true ? { truncated: true } : {}),
     };
-  }
-
-  /**
-   * Submit a command that outlives this request.
-   *
-   * `exec` is synchronous and capped at 280 seconds, so a long run cannot be
-   * held open across the call. The provider's own guidance is to background it
-   * and poll with a second exec; this builds that into a durable form. The
-   * command and its runner are written to files (base64-decoded in place, so no
-   * caller text is ever interpolated into a shell word), the runner redirects
-   * combined output to `out` and writes the final status to `exit`, and
-   * `nohup ... &` detaches it. `getScriptStatus` and `getScriptLogs` then read
-   * those files, which survive across poll ticks and separate requests.
-   */
-  async startScript(
-    handle: RuntimeHandle,
-    options: Agent37RunScriptOptions,
-  ): Promise<AsyncRunStartResult> {
-    if (options.env) {
-      assertValidEnv(options.env);
-    }
-    const sessionId = options.sessionId ?? `run-${handle.id}-${Date.now()}`;
-    const dir = scriptRunDir(sessionId);
-    const cwd = options.cwd ?? handle.workdir;
-    const script = composeScript(options.command, {
-      ...(cwd ? { cwd } : {}),
-      ...(options.env ? { env: options.env } : {}),
-    });
-    const runner =
-      `sh ${shellQuote(`${dir}/cmd.sh`)} > ${shellQuote(`${dir}/out`)} 2>&1\n` +
-      `echo $? > ${shellQuote(`${dir}/exit`)}\n`;
-    const bootstrap = [
-      `mkdir -p ${shellQuote(dir)}`,
-      writeFileViaBase64(`${dir}/cmd.sh`, script),
-      writeFileViaBase64(`${dir}/run.sh`, runner),
-      `nohup sh ${shellQuote(`${dir}/run.sh`)} >/dev/null 2>&1 &`,
-      "echo $!",
-    ].join("\n");
-    const started = await this.execRaw(handle.id, bootstrap, options.timeoutMs);
-    if (started.exit_code !== 0) {
-      throw new Error(
-        `Agent37 failed to start background run in "${handle.id}" (exit ${started.exit_code}): ${
-          combineOutput(started.stdout, started.stderr).slice(0, 2000)
-        }`,
-      );
-    }
-    return { sessionId, commandId: started.stdout.trim() };
-  }
-
-  startExec(
-    handle: RuntimeHandle,
-    command: string,
-    options: ExecOptions & { sessionId?: string } = {},
-  ): Promise<AsyncExecStartResult> {
-    return this.startScript(handle, {
-      command,
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
-    });
-  }
-
-  async getScriptStatus(
-    handle: RuntimeHandle,
-    sessionId: string,
-    _commandId: string,
-  ): Promise<AsyncRunStatus> {
-    const exitPath = `${scriptRunDir(sessionId)}/exit`;
-    // The durable exit file is the only source of truth. Missing or empty
-    // means the run has not finished — never "succeeded".
-    const raw = await this.readRemoteText(handle.id, exitPath, 64);
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      return { exitCode: null };
-    }
-    const parsed = Number.parseInt(trimmed, 10);
-    return { exitCode: Number.isFinite(parsed) ? parsed : null };
-  }
-
-  getExecStatus(
-    handle: RuntimeHandle,
-    sessionId: string,
-    commandId: string,
-  ): Promise<AsyncExecStatus> {
-    return this.getScriptStatus(handle, sessionId, commandId);
-  }
-
-  async getScriptLogs(
-    handle: RuntimeHandle,
-    sessionId: string,
-    commandId: string,
-  ): Promise<RunScriptResult> {
-    const outPath = `${scriptRunDir(sessionId)}/out`;
-    const output = await this.readRemoteText(handle.id, outPath, this.scriptLogReadMaxBytes);
-    // `exitCode: null` on purpose: status owns the exit code, and a log read
-    // that invented one would let a still-running command read as finished.
-    return { output, exitCode: null, cmdId: commandId };
-  }
-
-  async getExecLogs(
-    handle: RuntimeHandle,
-    sessionId: string,
-    commandId: string,
-  ): Promise<ExecResult> {
-    const result = await this.getScriptLogs(handle, sessionId, commandId);
-    return { output: result.output, exitCode: result.exitCode ?? 0 };
   }
 
   // --- files --------------------------------------------------------------
@@ -700,6 +658,12 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
 
   // --- internals ----------------------------------------------------------
 
+  private assertOwned(id: string, operation: string): void {
+    if (!this.launchedIds.has(id)) {
+      throw new Agent37ForeignHandleError(id, operation);
+    }
+  }
+
   private async execRaw(
     id: string,
     command: string,
@@ -723,19 +687,6 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       stderr: response.stderr ?? "",
       ...(response.truncated === undefined ? {} : { truncated: response.truncated }),
     };
-  }
-
-  /**
-   * Read at most `maxBytes` trailing bytes of a remote file, returning "" when
-   * it does not exist yet. `|| true` keeps a missing file — the normal state
-   * of `exit` while a run is in flight — from reading as a failed poll.
-   */
-  private async readRemoteText(id: string, path: string, maxBytes: number): Promise<string> {
-    const result = await this.execRaw(
-      id,
-      `tail -c ${maxBytes} ${shellQuote(path)} 2>/dev/null || true`,
-    );
-    return result.stdout;
   }
 
   private async listInstances(timeoutMs?: number): Promise<Agent37Instance[]> {
@@ -902,11 +853,6 @@ function writeFileViaBase64(path: string, contents: string | Buffer): string {
   const encoded = (typeof contents === "string" ? Buffer.from(contents, "utf8") : contents)
     .toString("base64");
   return `printf %s '${encoded}' | base64 -d > ${shellQuote(path)}`;
-}
-
-function scriptRunDir(sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
-  return `${RUN_STATE_ROOT}/${safe}`;
 }
 
 function posixDirname(path: string): string {
