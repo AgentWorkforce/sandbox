@@ -26,6 +26,14 @@ export type SandboxCommandResult = {
   output: string;
   exitCode: number | null;
   cmdId?: string;
+  /**
+   * True when the provider capped captured output and `output` is therefore
+   * incomplete. Optional and additive: a provider that either never truncates
+   * or cannot tell simply omits it, and `undefined` means "not reported",
+   * never "complete". Mirrors the runtime port's `RunScriptResult.truncated`
+   * so the marker survives the orchestration hop.
+   */
+  truncated?: boolean;
 };
 
 export type SandboxOutputChunk = {
@@ -38,6 +46,13 @@ export type SandboxCapturedOutput = {
   chunks: SandboxOutputChunk[];
   exitCode: number | null;
   cmdId?: string;
+  /**
+   * Copied verbatim from the underlying `SandboxCommandResult`. Callers who
+   * treat captured output as complete must first check this flag: `undefined`
+   * means the adapter did not report truncation, not that the output is known
+   * to be complete.
+   */
+  truncated?: boolean;
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -142,6 +157,7 @@ export class SandboxOrchestrator<Handle> {
       chunks: output ? [{ stream: "combined", text: output }] : [],
       exitCode: result.exitCode,
       ...(result.cmdId !== undefined ? { cmdId: result.cmdId } : {}),
+      ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
       startedAt,
       endedAt: new Date(ended).toISOString(),
       durationMs: Number.isFinite(started) ? Math.max(0, ended - started) : 0,
