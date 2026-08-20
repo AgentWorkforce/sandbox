@@ -51,7 +51,17 @@ provider SDK has lower-level APIs for them.
 
 The adapter applies an explicit sandbox lifetime on create, reconnect, and
 synchronous use; `sandboxLifetimeMs` defaults to the configured asynchronous
-run budget. Asynchronous session IDs are immutable idempotency keys. A retry
+run budget.
+
+Synchronous runs always carry an explicit command lifetime cap, because E2B —
+alone among the providers here — applies a 60-second default when the field is
+omitted, while the orchestrator omits `timeoutMs` on most execs. A run without a
+caller timeout therefore uses `syncRunBudgetMs`, which defaults to the
+configured `runBudgetMs` (30 minutes unless set). An explicit caller timeout
+always wins, and is the only thing that extends the sandbox past
+`sandboxLifetimeMs`; the implicit budget never does.
+
+Asynchronous session IDs are immutable idempotency keys. A retry
 reconciles the durable admission record with E2B's process list and will not
 erase the session directory or submit another copy. Status is pending only
 while the matching provider process is present. If that process disappears

@@ -367,6 +367,68 @@ describe("E2BSandboxRuntime command execution", () => {
     });
   });
 
+  it("must-fire: an omitted sync timeout applies the adapter's own budget, never the SDK default", async () => {
+    const sandbox = fakeSandbox({ id: "sbx-default-budget" });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics, {
+      runBudgetMs: 600_000,
+    });
+    const handle = await runtime.launch();
+
+    await runtime.runScript(handle, { command: "node long-build.mjs" });
+
+    // Omitting `timeoutMs` must not fall through to E2B's 60s command default:
+    // Daytona has no equivalent wall, and the orchestrator omits the timeout on
+    // most execs, so inheriting 60s would kill long syncs on E2B alone.
+    assert.equal(sandbox.calls.run[0]!.options?.timeoutMs, 600_000);
+    // The sandbox lifetime is untouched by the implicit budget.
+    assert.deepEqual(sandbox.calls.setTimeout, [600_000]);
+  });
+
+  it("must-fire: a separately configured sync budget overrides the async run budget", async () => {
+    const sandbox = fakeSandbox({ id: "sbx-sync-budget" });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics, {
+      runBudgetMs: 1_800_000,
+      sandboxLifetimeMs: 900_000,
+      syncRunBudgetMs: 300_000,
+    });
+    const handle = await runtime.launch();
+
+    await runtime.runScript(handle, { command: "npm test" });
+
+    assert.equal(sandbox.calls.run[0]!.options?.timeoutMs, 300_000);
+    // A sync budget below the configured lifetime never shortens or extends it.
+    assert.deepEqual(sandbox.calls.setTimeout, [900_000]);
+  });
+
+  it("must-not-fire: the implicit sync budget never extends a shorter sandbox lifetime", async () => {
+    const sandbox = fakeSandbox({ id: "sbx-short-lifetime" });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics, {
+      runBudgetMs: 1_800_000,
+      sandboxLifetimeMs: 60_000,
+    });
+    const handle = await runtime.launch();
+
+    await runtime.runScript(handle, { command: "node runner.mjs" });
+
+    assert.equal(sandbox.calls.run[0]!.options?.timeoutMs, 1_800_000);
+    // Only an explicit caller timeout may extend the sandbox past its lifetime.
+    assert.deepEqual(sandbox.calls.setTimeout, [60_000]);
+  });
+
+  it("must-fire: an explicit caller timeout still wins and still extends the sandbox", async () => {
+    const sandbox = fakeSandbox({ id: "sbx-explicit-timeout" });
+    const runtime = createRuntime(fakeStatics({ createSandbox: sandbox }).statics, {
+      runBudgetMs: 600_000,
+      sandboxLifetimeMs: 120_000,
+    });
+    const handle = await runtime.launch();
+
+    await runtime.runScript(handle, { command: "node runner.mjs", timeoutMs: 300_000 });
+
+    assert.equal(sandbox.calls.run[0]!.options?.timeoutMs, 300_000);
+    assert.deepEqual(sandbox.calls.setTimeout, [300_000]);
+  });
+
   it("must-not-fire: does not disguise transport/auth failures as command exits", async () => {
     const upstream = new Error("transport unavailable");
     const sandbox = fakeSandbox({ id: "sbx-error", run: async () => { throw upstream; } });
@@ -1191,6 +1253,7 @@ function createRuntime(
   statics: E2BSandboxStatics,
   options: {
     runBudgetMs?: number;
+    syncRunBudgetMs?: number;
     createTimeoutMs?: number;
     sandboxLifetimeMs?: number;
   } = {},

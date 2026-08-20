@@ -169,6 +169,13 @@ export type E2BSandboxRuntimeOptions = {
   template: string;
   /** Maximum lifetime granted to an asynchronous command and its sandbox. */
   runBudgetMs?: number;
+  /**
+   * Command lifetime cap applied to a *synchronous* run when the caller passes
+   * no `timeoutMs`. Defaults to `runBudgetMs`. Set it only to give synchronous
+   * work a different wall than asynchronous work; it never overrides an
+   * explicit caller timeout and never extends the sandbox lifetime.
+   */
+  syncRunBudgetMs?: number;
   /** Sandbox lifetime applied on create, connect, and each synchronous use. */
   sandboxLifetimeMs?: number;
   /** Default timeout for the create HTTP request, not sandbox lifetime. */
@@ -211,6 +218,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   private readonly apiKey: string;
   private readonly template: string;
   private readonly runBudgetMs: number;
+  private readonly syncRunBudgetMs: number;
   private readonly sandboxLifetimeMs: number;
   private readonly createTimeoutMs: number;
   private readonly injectedStatics?: E2BSandboxStatics;
@@ -230,6 +238,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     this.apiKey = apiKey;
     this.template = template;
     this.runBudgetMs = positiveDuration(options.runBudgetMs, DEFAULT_RUN_BUDGET_MS);
+    this.syncRunBudgetMs = positiveDuration(options.syncRunBudgetMs, this.runBudgetMs);
     this.sandboxLifetimeMs = positiveDuration(
       options.sandboxLifetimeMs,
       this.runBudgetMs,
@@ -406,14 +415,20 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     options: E2BRunScriptOptions,
   ): Promise<RunScriptResult> {
     const sandbox = await this.requireSandbox(handle);
+    const explicitTimeoutMs = options.timeoutMs && options.timeoutMs > 0
+      ? options.timeoutMs
+      : undefined;
     try {
-      await sandbox.setTimeout(Math.max(
-        this.sandboxLifetimeMs,
-        options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 0,
-      ));
+      // Only an explicit caller timeout may push the sandbox past its
+      // configured lifetime; the implicit budget below must not.
+      await sandbox.setTimeout(Math.max(this.sandboxLifetimeMs, explicitTimeoutMs ?? 0));
       const result = await sandbox.commands.run(options.command, {
         ...(options.cwd ? { cwd: options.cwd } : {}),
-        ...(options.timeoutMs && options.timeoutMs > 0 ? { timeoutMs: options.timeoutMs } : {}),
+        // Always send a timeout. E2B applies its own 60s command default when
+        // the field is omitted, which no other provider imposes and which the
+        // orchestrator does not expect: it omits `timeoutMs` on most execs, so
+        // an inherited 60s wall would kill long synchronous work on E2B alone.
+        timeoutMs: explicitTimeoutMs ?? this.syncRunBudgetMs,
         ...(hasEntries(options.env) ? { envs: options.env } : {}),
       });
       return commandResult(result);
@@ -970,6 +985,8 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     maxBytes: number,
     requestTimeoutMs?: number,
   ): Promise<string> {
+    // Unlike `runScript`, this runs a fixed bounded `tail`, not caller work, so
+    // E2B's own command default is an appropriate wall when no cap is given.
     const result = await sandbox.commands.run(
       `tail -c ${maxBytes} ${shellSingleQuote(path)} 2>/dev/null || true`,
       requestTimeoutMs
