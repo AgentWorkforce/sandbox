@@ -1594,6 +1594,66 @@ describe("backend gate poisoning (a restore that failed)", () => {
     }
   });
 
+  it("poisons and releases queued callers when restore throws synchronously after entry", async () => {
+    // `Promise.resolve(withDefaultBackend(...))` never sees a promise here:
+    // the SDK invokes the callback, then throws while restoring the process
+    // default on the same stack. Callback entry still proves the global slot
+    // was mutated, so this is poison just like an asynchronous restore
+    // rejection.
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const { sdk, log } = createHarness({
+      get: (name) => ({ name }),
+      onGet: () => holderCall,
+    });
+    const syncRestoreFailure: MicrosandboxSdk = {
+      Sandbox: sdk.Sandbox,
+      withDefaultBackend<T>(_backend, fn): Promise<T> {
+        fn();
+        throw new Error("synchronous restore failure");
+      },
+    };
+    __resetBackendGateForTests();
+    try {
+      const holder = makeRuntime(sdk).getById("holder");
+      await waitFor(() => called(log, "Sandbox.get"), "the healthy holder to enter the gate");
+
+      const failing = makeRuntime(syncRestoreFailure, {
+        backend: "local",
+        backendQueueTimeoutMs: 60_000,
+      }).getById("sync-failure");
+      const queued = makeRuntime(sdk, {
+        backend: { profile: "queued-after-sync-failure" },
+        backendQueueTimeoutMs: 60_000,
+      }).getById("queued");
+      await waitFor(
+        () => __backendGateWaiterCountForTests() === 2,
+        "both callers to queue behind the holder",
+      );
+
+      releaseHolder();
+      assert.equal((await holder)?.id, "holder");
+      await assert.rejects(failing, /synchronous restore failure/);
+      await assert.rejects(queued, MicrosandboxBackendPoisonedError);
+      assert.deepEqual(
+        argsFor(log, "Sandbox.get"),
+        [["holder"]],
+        "neither the failed scope nor a caller released by poison may issue its static",
+      );
+
+      const before = log.length;
+      await assert.rejects(
+        makeRuntime(sdk).getById("later"),
+        MicrosandboxBackendPoisonedError,
+      );
+      assert.deepEqual(log.slice(before), [], "later statics must fail before touching the SDK");
+    } finally {
+      __resetBackendGateForTests();
+    }
+  });
+
   it("poisons the gate even when the restore rejected with no value at all", async () => {
     // THE SENTINEL BUG. Recording the rejection reason and treating "no reason
     // recorded" as "not poisoned" collapses on exactly the rejections that
@@ -1721,7 +1781,7 @@ describe("backend gate poisoning (a restore that failed)", () => {
     const { sdk } = createHarness({ get: (name) => ({ name }) });
     const neverEnters: MicrosandboxSdk = {
       Sandbox: sdk.Sandbox,
-      async withDefaultBackend() {
+      withDefaultBackend() {
         throw new Error("could not push the backend scope");
       },
     };
@@ -1940,6 +2000,46 @@ describe("create deadline", () => {
     });
     const handle = await makeRuntime(sdk).launch({ name: "s1" });
     assert.equal(handle.id, "s1");
+  });
+
+  it("withdraws a timed-out create while it is queued behind another backend", async () => {
+    // The create deadline is an admission deadline too. If it expires before
+    // this backend owns the process-global gate, releasing the holder later
+    // must not construct a builder or start a provider create for a caller
+    // that already received a timeout.
+    let releaseHolder!: () => void;
+    const holderCall = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let creates = 0;
+    const { sdk, log } = createHarness({
+      onCreate: () => {
+        creates += 1;
+        return creates === 1 ? holderCall : Promise.resolve();
+      },
+    });
+    __resetBackendGateForTests();
+    try {
+      const holder = makeRuntime(sdk).launch({ name: "holder" });
+      await waitFor(() => creates === 1, "the first backend's create to hold the gate");
+
+      await assert.rejects(
+        makeRuntime(sdk, { backend: "local", backendQueueTimeoutMs: 60_000 }).launch({
+          name: "withdrawn",
+          createTimeoutSeconds: 0.03,
+        }),
+        MicrosandboxCreateTimeoutError,
+      );
+      assert.equal(__backendGateWaiterCountForTests(), 0, "the timed-out create must leave the queue");
+
+      releaseHolder();
+      await holder;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(argsFor(log, "Sandbox.builder"), [["holder"]]);
+      assert.deepEqual(argsFor(log, "builder.create"), [["holder"]]);
+    } finally {
+      __resetBackendGateForTests();
+    }
   });
 
   it("reclaims a create that lands after the deadline instead of leaking it", async () => {
@@ -3230,6 +3330,24 @@ describe("getScriptStatus", () => {
     );
   });
 
+  it("reports an unreadable recorded process identity as a retryable probe error", async () => {
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ stdout: "UNKNOWN starttime-unreadable\n" }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptStatus({ id: "s1" }, "sess-1", "123"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxStatusProbeError);
+        assert.equal(error.reason, "transport");
+        assert.equal(error.retryable, true);
+        assert.match(error.message, /start time/i);
+        assert.match(error.message, /could not be read/i);
+        return true;
+      },
+    );
+  });
+
   it("does not report a probe error for a run it can actually read", async () => {
     // The guard against over-correcting: the three refusals above must not
     // have made a healthy RUNNING unreachable.
@@ -4090,17 +4208,34 @@ describe("guest run protocol (real /bin/sh)", { skip: SHELL_SKIP }, () => {
     assert.equal((await probe("unchanged", procRoot)).stdout.trim(), "RUNNING");
   });
 
-  it("does not invent a mismatch when the current start time cannot be read", async () => {
+  it("reports unknown when a recorded start time cannot be read from procfs", async () => {
     // The fallback is chosen by the ABSENCE of a recorded start time, never by
-    // a failure to read the current one. A probe that cannot see procfs must
-    // not conclude the pid was recycled.
+    // a failure to read the current one. The latter proves neither RUNNING nor
+    // pid reuse, so the adapter must receive an explicit retryable non-verdict.
     await admit("sleep 5", "unreadable-now");
     const dir = join(root, "unreadable-now");
     await waitForFile(join(dir, "pid"));
     await writeFile(join(dir, "start"), "444444");
     const emptyProc = join(root, "proc-empty");
     await mkdir(emptyProc, { recursive: true });
-    assert.equal((await probe("unreadable-now", emptyProc)).stdout.trim(), "RUNNING");
+    assert.equal(
+      (await probe("unreadable-now", emptyProc)).stdout.trim(),
+      "UNKNOWN starttime-unreadable",
+    );
+  });
+
+  it("reports unknown when the current procfs stat record is malformed", async () => {
+    await admit("sleep 5", "malformed-now");
+    const dir = join(root, "malformed-now");
+    const pid = (await waitForFile(join(dir, "pid"))).trim();
+    await writeFile(join(dir, "start"), "555555");
+    const procRoot = join(root, "proc-malformed");
+    await mkdir(join(procRoot, pid), { recursive: true });
+    await writeFile(join(procRoot, pid, "stat"), "not a process stat line\n");
+    assert.equal(
+      (await probe("malformed-now", procRoot)).stdout.trim(),
+      "UNKNOWN starttime-unreadable",
+    );
   });
 
   it("falls back to pid liveness when no start time was recorded", async () => {
@@ -4163,13 +4298,21 @@ describe("guest run protocol (real /bin/sh)", { skip: SHELL_SKIP }, () => {
     assert.equal(result.stdout, "");
   });
 
+  it("succeeds with no output for an empty regular log file", async () => {
+    const path = join(root, "empty-log.txt");
+    await writeFile(path, "");
+    const result = await sh(MICROSANDBOX_RUN_LOG_SCRIPT, [path, "1024"]);
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "");
+  });
+
   it("fails rather than reporting empty when the path is not a readable file", async () => {
     // A directory where a log should be: readable-empty and unreadable have to
     // be distinguishable, or a failed read is recorded as "printed nothing".
     const path = join(root, "log-as-dir");
     await mkdir(path, { recursive: true });
     const result = await sh(MICROSANDBOX_RUN_LOG_SCRIPT, [path, "1024"]);
-    assert.equal(result.code, 0, "a directory is not a regular file, so it reads as absent");
+    assert.notEqual(result.code, 0, "an existing directory is a read failure, not an absent log");
     assert.equal(result.stdout, "");
   });
 

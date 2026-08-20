@@ -249,7 +249,7 @@ export const MICROSANDBOX_RUN_ADMIT_SCRIPT = [
  * Report one async run's outcome.
  *
  * Argument: `$1` run directory. Prints exactly one of `EXIT <code>`,
- * `RUNNING`, `MISSING`, or `LOST <reason>`.
+ * `RUNNING`, `MISSING`, `UNKNOWN <reason>`, or `LOST <reason>`.
  *
  * The exit file is checked first and again last: the wrapper writes it as its
  * final act, so re-reading after the liveness probe closes the window where a
@@ -268,8 +268,9 @@ export const MICROSANDBOX_RUN_ADMIT_SCRIPT = [
  * probe degrades to boot id + pid liveness — exactly the behaviour before start
  * time existed. The fallback is chosen by the ABSENCE of a recorded start time,
  * never by a failure to read the current one: if a start time was recorded and
- * the current read fails while the pid is alive, the probe reports RUNNING
- * rather than inventing a mismatch.
+ * the current read fails while the pid is alive, the probe emits an explicit
+ * UNKNOWN marker. That is neither proof of continued life nor proof of pid
+ * reuse, so the adapter turns it into a retryable status-probe error.
  *
  * @internal Exported only for the protocol tests (see above).
  */
@@ -303,8 +304,11 @@ export const MICROSANDBOX_RUN_STATUS_SCRIPT = [
   // answer; without one the probe says RUNNING, as it did before.
   '  recorded=$(cat "$dir/start" 2>/dev/null) || recorded=""',
   '  if [ -n "$recorded" ]; then',
-  "    current=$(msb_starttime \"$proc_root\" \"$run_pid\") || current=''",
-  '    if [ -n "$current" ] && [ "$current" != "$recorded" ]; then',
+  '    if ! current=$(msb_starttime "$proc_root" "$run_pid"); then',
+  '      printf "UNKNOWN starttime-unreadable\\n"',
+  "      exit 0",
+  "    fi",
+  '    if [ "$current" != "$recorded" ]; then',
   '      printf "LOST pid-reused\\n"',
   "      exit 0",
   "    fi",
@@ -347,8 +351,13 @@ export const MICROSANDBOX_RUN_LOG_SCRIPT = [
   "cap=$2",
   // Absent is not an error: a run that has not yet written its first byte, and
   // a run that printed nothing at all, both legitimately have no log.
-  'if [ ! -f "$path" ]; then exit 0; fi',
-  'tail -c "$cap" "$path"',
+  // `-f` alone cannot make that distinction: it is false for BOTH a missing
+  // path and an existing directory/device/socket. A symlink is rejected too;
+  // the run protocol writes a regular file at this exact path.
+  'if [ -L "$path" ]; then exit 1; fi',
+  'if [ -f "$path" ]; then exec tail -c "$cap" "$path"; fi',
+  'if [ -e "$path" ]; then exit 1; fi',
+  "exit 0",
 ].join("\n");
 
 // --- structural microsandbox SDK surface (microsandbox@0.6.11) --------------
@@ -774,10 +783,10 @@ export class MicrosandboxUnknownOutcomeError extends Error {
  *
  * Distinct from {@link MicrosandboxRunLostError}, which IS a verdict — the run
  * is over and cannot complete. This error says the adapter learned NOTHING:
- * the guest call failed, or it answered something this protocol does not
- * define. Returning "still running" for either would be a positive claim the
- * probe never made, and a poll loop reading it would wait for an outcome that
- * may already have happened.
+ * the guest call failed, a required guest-state read was unavailable, or it
+ * answered something this protocol does not define. Returning "still running"
+ * for any of those would be a positive claim the probe never made, and a poll
+ * loop reading it would wait for an outcome that may already have happened.
  *
  * It is safe to retry: nothing about the run was changed by asking.
  */
@@ -785,7 +794,10 @@ export class MicrosandboxStatusProbeError extends Error {
   override readonly name = "MicrosandboxStatusProbeError";
   readonly sessionId: string;
   readonly commandId: string;
-  /** `"transport"` — the probe call itself failed. `"unrecognized"` — it answered off-protocol. */
+  /**
+   * `"transport"` — the probe call or a required guest-state read failed.
+   * `"unrecognized"` — it answered off-protocol.
+   */
   readonly reason: "transport" | "unrecognized";
   /** Retrying is harmless; the probe has no side effects on the run. */
   readonly retryable = true;
@@ -1206,9 +1218,18 @@ async function openBackendScope<T>(
         }),
       );
     } catch (error) {
-      // A synchronous failure to push the scope — the SDK's own missing-native-
-      // bindings guard throws exactly like this. Nothing ran, so free the gate
-      // rather than wedging every later call in the process.
+      if (callbackRan) {
+        // The SDK entered our callback and then threw on the SAME stack while
+        // restoring the previous process default. `Promise.resolve(...)`
+        // never receives a value in this form, so the asynchronous rejection
+        // handler below cannot observe it; callback entry is nevertheless the
+        // decisive proof that the global slot was changed and is now unknown.
+        backendGatePoisoned = true;
+        backendGatePoisonCause = error;
+      }
+      // Pre-callback, this is a harmless synchronous failure to push the scope.
+      // Post-callback, freeing the now-poisoned gate wakes queued callers so
+      // they fail immediately with MicrosandboxBackendPoisonedError.
       abandonBackendScope(scope);
       throw error;
     }
@@ -1830,7 +1851,17 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       await pending;
     }
     const workdir = options.workdir ?? this.defaultWorkdir;
+    const timeoutMs = options.createTimeoutSeconds
+      ? options.createTimeoutSeconds * 1000
+      : undefined;
+    const controller = timeoutMs === undefined ? undefined : new AbortController();
+    let createStarted = false;
     const create = this.withBackendStatic(async (sdk) => {
+      // Once this flips, `builder.create()` is reached in the same synchronous
+      // turn: every preceding builder method is synchronous. A deadline after
+      // this point cannot cancel provider work, so the late-create watcher
+      // below must retain responsibility for its eventual outcome.
+      createStarted = true;
       let builder = sdk.Sandbox.builder(name);
       builder = this.snapshot
         ? builder.fromSnapshot(this.snapshot)
@@ -1864,19 +1895,18 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
         builder = builder.replace();
       }
       return builder.create();
-    });
+    }, controller?.signal);
 
     // The builder has no create-timeout setter, and `maxDuration` is a sandbox
     // LIFETIME budget — mapping the caller's boot deadline onto it would kill
     // every long-lived sandbox the moment that deadline elapsed. So the create
     // deadline is enforced here instead.
     let sandbox: MsbSandbox;
-    if (options.createTimeoutSeconds) {
-      const timeoutMs = options.createTimeoutSeconds * 1000;
+    if (timeoutMs !== undefined) {
       try {
-        sandbox = await withDeadline(create, timeoutMs, name);
+        sandbox = await withDeadline(create, timeoutMs, name, controller);
       } catch (error) {
-        if (error instanceof MicrosandboxCreateTimeoutError) {
+        if (error instanceof MicrosandboxCreateTimeoutError && createStarted) {
           this.reclaimLateCreate(name, create);
         }
         throw error;
@@ -2138,6 +2168,14 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
     if (marker === "RUNNING") {
       return { exitCode: null };
+    }
+    if (marker === "UNKNOWN starttime-unreadable") {
+      throw new MicrosandboxStatusProbeError(
+        sessionId,
+        commandId,
+        "transport",
+        "the run recorded a process start time, but its current start time could not be read from procfs",
+      );
     }
     if (marker === "MISSING") {
       throw new MicrosandboxRunLostError(
@@ -2755,16 +2793,22 @@ async function withDeadline<T>(
   promise: Promise<T>,
   timeoutMs: number,
   sandboxName: string,
+  controller?: AbortController,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new MicrosandboxCreateTimeoutError(sandboxName, timeoutMs)),
-          timeoutMs,
-        );
+        timer = setTimeout(() => {
+          const error = new MicrosandboxCreateTimeoutError(sandboxName, timeoutMs);
+          // A caller still waiting for the backend gate has not issued any
+          // provider work, so aborting withdraws it from admission entirely.
+          // Once its callback started, AbortSignal intentionally cannot cancel
+          // the provider promise; reclaimLateCreate keeps watching that path.
+          controller?.abort(error);
+          reject(error);
+        }, timeoutMs);
       }),
     ]);
   } finally {
