@@ -198,9 +198,12 @@ export type Agent37LaunchOptions = {
   env?: Record<string, string>;
   labels?: Record<string, string>;
   workdir?: string;
-  // No `createTimeoutSeconds`. See Agent37CreateTimeoutUnsupportedError for
-  // why bounding a synchronous create cannot be done honestly here; passing
-  // one anyway is refused at runtime rather than silently ignored.
+  // No `createTimeoutSeconds` is added here, but do not read that as the
+  // option being unreachable: `launch` takes this type intersected with the
+  // shared `LaunchOptions`, which declares it (src/types.ts) because Daytona,
+  // e2b, and local all implement it for real. A caller therefore compiles
+  // fine, and Agent37 refuses it at runtime instead — see
+  // Agent37CreateTimeoutUnsupportedError.
 };
 
 export type Agent37RunScriptOptions = {
@@ -376,8 +379,19 @@ export class Agent37MalformedResponseError extends Error {
  * Verifying any of that needs live calls against the provider, which this work
  * is not authorized to make. Until it is verified, the option is refused rather
  * than shipped as an `AbortSignal` that reads like a cancellation and is not
- * one. Callers that need a bound should launch with labels unique to the
- * attempt, apply their own deadline around `launch`, and reconcile with
+ * one.
+ *
+ * The refusal is purely a runtime one, and deliberately so. `createTimeoutSeconds`
+ * lives on the shared `LaunchOptions` and on `SandboxRuntime.launch` because
+ * other providers honour it, so it typechecks against this adapter too and no
+ * compile error is available to lean on. Narrowing this one signature would not
+ * change that — TypeScript compares method parameters bivariantly, so a caller
+ * holding a `SandboxRuntime` reference could still pass the option — and it
+ * would trade a real guarantee for the appearance of one while breaking the
+ * substitutability the port exists to provide.
+ *
+ * Callers that need a bound should launch with labels unique to the attempt,
+ * apply their own deadline around `launch`, and reconcile with
  * `findAllByLabels(..., { owned: true })` — a recovery they can reason about,
  * because they chose the labels.
  */
@@ -597,9 +611,11 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   // --- lifecycle ----------------------------------------------------------
 
   async launch(options: Agent37LaunchOptions & LaunchOptions = {}): Promise<RuntimeHandle> {
-    // Refused before anything is sent, and refused loudly: a JavaScript caller
-    // carrying this option forward from an earlier draft would otherwise have
-    // it silently dropped and believe creation was bounded when it is not.
+    // Refused before anything is sent. This is the *only* line that stops the
+    // option, because it is part of the shared cross-provider `LaunchOptions`
+    // and so typechecks against `launch` and against the `SandboxRuntime`
+    // interface alike. Silently dropping it would leave a caller that had
+    // configured a creation bound believing it was in force.
     if ((options as { createTimeoutSeconds?: unknown }).createTimeoutSeconds !== undefined) {
       throw new Agent37CreateTimeoutUnsupportedError();
     }
@@ -660,7 +676,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     );
     // An ack with no status must not be normalized: `normalizeStatus(undefined)`
     // is STOPPED, which would report a successful start as a failed one.
-    const status = readNonEmptyString(ack, "status");
+    const status = readNonBlankString(ack, "status");
     if (status === null) {
       throw new Agent37MalformedResponseError(request, "no `status` on the start acknowledgement");
     }
@@ -1027,19 +1043,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The property as a non-empty string, or `null` if it is anything else. */
-function readNonEmptyString(value: unknown, key: string): string | null {
+/**
+ * The property as a non-blank string, or `null` if it is anything else.
+ *
+ * Blank, not merely empty: an id of `"   "` is exactly as unusable as `""`,
+ * but it would survive an `!== ""` check and go on to address
+ * `/v1/instances/%20%20%20`. The value is returned unmodified rather than
+ * trimmed — a provider id is opaque, so refusing a blank one is this
+ * function's business while rewriting a non-blank one is not.
+ */
+function readNonBlankString(value: unknown, key: string): string | null {
   if (!isPlainObject(value)) {
     return null;
   }
   const field = value[key];
-  return typeof field === "string" && field !== "" ? field : null;
+  return typeof field === "string" && field.trim() !== "" ? field : null;
 }
 
 /**
  * Accept a 2xx body as an instance object, or refuse it.
  *
- * Only `id` and `status` are checked, and only for being non-empty strings.
+ * Only `id` and `status` are checked, and only for being non-blank strings.
  * That is the whole load-bearing minimum: `id` is what every subsequent call
  * addresses and what ownership is keyed on, and `status` is what decides
  * whether the instance is handed out as ready. Every other field is optional in
@@ -1049,11 +1073,11 @@ function readNonEmptyString(value: unknown, key: string): string | null {
  * `running` to STOPPED, so an unknown one is already handled conservatively.
  */
 function parseInstance(value: unknown, request: string): Agent37Instance {
-  const id = readNonEmptyString(value, "id");
+  const id = readNonBlankString(value, "id");
   if (id === null) {
     throw new Agent37MalformedResponseError(request, "no `id` on the instance object");
   }
-  const status = readNonEmptyString(value, "status");
+  const status = readNonBlankString(value, "status");
   if (status === null) {
     throw new Agent37MalformedResponseError(
       request,
