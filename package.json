@@ -26,7 +26,7 @@
   },
   "peerDependencies": {
     "@daytonaio/sdk": ">=0.180.0 <0.181.0",
-    "e2b": "^2"
+    "e2b": ">=2.35.0 <3.0.0"
   },
   "peerDependenciesMeta": {
     "@daytonaio/sdk": {
