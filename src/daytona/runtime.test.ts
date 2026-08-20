@@ -1399,6 +1399,40 @@ describe('DaytonaRuntime shared primitives', () => {
     ]);
   });
 
+  it('must-not-fire: transient post-start probe failures settle before any recreate', async () => {
+    const stoppedSandbox = fakeSandbox({ id: 'sbx-probe-settles', state: 'STOPPED' });
+    const restartedSandbox = fakeSandbox({
+      id: 'sbx-probe-settles',
+      state: 'STARTED',
+      commandResults: [
+        { exitCode: 1, result: 'daemon booting' },
+        { exitCode: 1, result: 'daemon booting' },
+        { exitCode: 0, result: '' },
+      ],
+    });
+    let getCalls = 0;
+    let createCalls = 0;
+    const runtime = new DaytonaRuntime({
+      defaultHomeDir: TEST_HOME_DIR,
+      daytona: {
+        get: async () => (++getCalls === 1 ? stoppedSandbox : restartedSandbox),
+        start: async () => {},
+        create: async () => {
+          createCalls += 1;
+          return fakeSandbox({ id: 'must-not-exist', state: 'STARTED' });
+        },
+      } as never,
+    });
+    const handle = await runtime.getById('sbx-probe-settles', { owned: true });
+
+    await runtime.start(handle!);
+
+    assert.equal(createCalls, 0);
+    assert.equal(restartedSandbox.commands.length, 3);
+    assert.equal(handle!.id, 'sbx-probe-settles');
+    assert.equal(handle!.state, 'STARTED');
+  });
+
   it('must-fire: replaces an exec-dead restarted sandbox and moves ownership to the healthy ID', async () => {
     const stoppedSandbox = fakeSandbox({
       id: 'sbx-dead-after-restart',
@@ -1465,9 +1499,12 @@ describe('DaytonaRuntime shared primitives', () => {
         networkAllowList: '10.0.0.0/8',
       },
     ]);
-    assert.deepEqual(restartedButDead.commands, [
-      { command: 'true', cwd: undefined, env: undefined, timeout: 10 },
-    ]);
+    assert.deepEqual(
+      restartedButDead.commands,
+      Array.from({ length: 3 }, () => (
+        { command: 'true', cwd: undefined, env: undefined, timeout: 10 }
+      )),
+    );
     assert.deepEqual(replacement.commands, [
       { command: 'true', cwd: undefined, env: undefined, timeout: 10 },
     ]);

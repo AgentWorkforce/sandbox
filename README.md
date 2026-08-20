@@ -41,7 +41,7 @@ the caller where it belongs.
 ### Daytona restart recovery
 
 `DaytonaRuntime.start()` does not trust the provider state transition alone. It
-rehydrates the SDK sandbox and runs a bounded `true` command after `start`,
+rehydrates the SDK sandbox and runs a bounded `true` readiness probe after `start`,
 because Daytona can report `STARTED` while its Toolbox exec daemon remains
 unavailable. A healthy restart keeps the same sandbox ID.
 

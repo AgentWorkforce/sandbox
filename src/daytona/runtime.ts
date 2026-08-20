@@ -109,6 +109,8 @@ const SCRIPT_LOG_READ_MAX_BYTES = 262_144; // 256 KiB
 const DEFAULT_DAYTONA_LOOKUP_TIMEOUT_MS = 10_000;
 const DAYTONA_ADMISSION_RECONCILIATION_LOOKUP_TIMEOUT_MS = 1_000;
 const DAYTONA_POST_START_EXEC_PROBE_TIMEOUT_SECONDS = 10;
+const DAYTONA_POST_START_EXEC_PROBE_ATTEMPTS = 3;
+const DAYTONA_POST_START_EXEC_PROBE_DELAY_MS = 250;
 
 export class DaytonaRuntime implements WorkflowRuntime {
   readonly id = 'daytona';
@@ -808,17 +810,29 @@ export class DaytonaRuntime implements WorkflowRuntime {
   }
 
   private async assertSandboxExecHealthy(sandbox: Sandbox): Promise<void> {
-    const result = await sandbox.process.executeCommand(
-      'true',
-      undefined,
-      undefined,
-      DAYTONA_POST_START_EXEC_PROBE_TIMEOUT_SECONDS,
-    );
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `Daytona sandbox "${sandbox.id}" post-start exec probe exited ${String(result.exitCode)}`,
-      );
+    let lastFailure: unknown;
+    for (let attempt = 1; attempt <= DAYTONA_POST_START_EXEC_PROBE_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await sandbox.process.executeCommand(
+          'true',
+          undefined,
+          undefined,
+          DAYTONA_POST_START_EXEC_PROBE_TIMEOUT_SECONDS,
+        );
+        if (result.exitCode === 0) {
+          return;
+        }
+        lastFailure = new Error(
+          `Daytona sandbox "${sandbox.id}" post-start exec probe exited ${String(result.exitCode)}`,
+        );
+      } catch (error) {
+        lastFailure = error;
+      }
+      if (attempt < DAYTONA_POST_START_EXEC_PROBE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, DAYTONA_POST_START_EXEC_PROBE_DELAY_MS));
+      }
     }
+    throw lastFailure;
   }
 
   private replacementCreateParams(sandbox: Sandbox): Record<string, unknown> {
