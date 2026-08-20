@@ -46,12 +46,14 @@ bound to, not reported as a single process-wide constant:
 
 | Capability | `local` | `cloud` | Why |
 | --- | --- | --- | --- |
-| `snapshots` | `true` | `false` | A snapshot source is a host-local artifact — the SDK resolves it under `~/.microsandbox/snapshots/` and indexes it in a local DB cache — so a cloud create cannot reach one. Configuring `snapshot` with a cloud backend is refused in the constructor, before any SDK call. |
-| `isolation` | `'strong'` | `'unknown'` | Locally the SDK boots a microVM with its own guest kernel on a virtualization-capable host, which this package can stand behind. The cloud backend's isolation is vendor-documented but not observable from here, and this adapter measures nothing about it. |
+| `snapshots` | `true` | `false` | A snapshot is a host-local artifact: the installed SDK's typings describe `Snapshot` as an artifact on disk and resolve one under `~/.microsandbox/snapshots/<name>/`. This adapter consumes such an artifact from the calling host and never transfers it, so a create issued against a remote backend has nothing to resolve. Configuring `snapshot` with a cloud backend is refused in the constructor, before any SDK call. |
+| `isolation` | `'strong'` | `'unknown'` | Locally the SDK boots a microVM with its own guest kernel on a virtualization-capable host, and the installed package states that requirement itself, so `'strong'` rests on something checkable here. This adapter observes and measures nothing about the cloud backend's isolation. |
 
-`'unknown'` is not a synonym for weak. It means this package has not established
-the guarantee, so a caller that requires one must decide for itself rather than
-read an unverified `'strong'`.
+Both values describe what this package has **established**, not what any
+provider documents. `'unknown'` is not a synonym for weak and is not a claim
+that the guarantee is missing — it means this package has not established one,
+so a caller that requires a specific guarantee must decide for itself rather
+than read an unverified `'strong'`.
 
 Cloud region placement and resource enforcement are likewise not represented as
 measured facts. Custom or published **ports are not supported**: the SDK builder

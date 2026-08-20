@@ -93,6 +93,11 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 10_000;
 const DEFAULT_LIST_PAGE_SIZE = 100;
 /**
+ * Hard bound on pages drained for one lookup. Reaching it is a failure, never
+ * a result — see the throw at the end of `collectByLabels`.
+ */
+const MAX_LIST_PAGES = 1_000;
+/**
  * How long a call may wait for the process-global backend gate before it fails
  * instead of waiting forever. See {@link MicrosandboxBackendBusyError}.
  */
@@ -119,6 +124,14 @@ const DEFAULT_RUN_STATE_DIR = "/tmp/microsandbox-run";
 /** POSIX shell used to interpret a `runScript`/`startScript` command string. */
 const DEFAULT_SHELL = "/bin/sh";
 
+/**
+ * Where the guest's process table lives. Passed to the run scripts as an
+ * argument rather than written into them, so the same scripts can be executed
+ * against a synthetic procfs in tests; the value the adapter sends is never
+ * anything else, and is never taken from caller-supplied environment.
+ */
+const GUEST_PROC_ROOT = "/proc";
+
 // --- guest-side async run protocol -----------------------------------------
 //
 // Both scripts below are pure POSIX `sh` and take every value — including the
@@ -131,6 +144,44 @@ const DEFAULT_SHELL = "/bin/sh";
 // session or proves someone else already did — which is what makes a resubmit
 // of the same session id incapable of starting a second process or of
 // overwriting the first one's state.
+
+/**
+ * Read a pid's START TIME (field 22 of `/proc/<pid>/stat`, in clock ticks
+ * since boot) into stdout, or fail with a non-zero status when procfs cannot
+ * answer.
+ *
+ * WHY IT IS PART OF RUN IDENTITY. A pid alone does not identify a process: the
+ * guest can recycle it, and a recycled pid answers `kill -0` exactly like the
+ * original, so a run whose process died would keep reporting RUNNING forever
+ * as soon as something else landed on its number. Start time is the field that
+ * makes the pair unique for the lifetime of a boot — two processes on the same
+ * pid cannot share it.
+ *
+ * The parse is byte-careful for one specific reason: field 2 is the executable
+ * name in parentheses and MAY CONTAIN SPACES AND PARENTHESES, so splitting the
+ * line on whitespace from the left is wrong. Every field after it is numeric or
+ * a single flag character, so the LAST `") "` in the line is always the end of
+ * that field — which is what `##*") "` finds. Start time is then the 20th field
+ * of the remainder (22 overall, less the pid and the name).
+ *
+ * @internal Shared by both scripts below; not part of the public API.
+ */
+const MSB_STARTTIME_FN = [
+  // `$1` procfs root, `$2` pid. The root is a PARAMETER rather than a literal
+  // so the identity check is executable against a synthetic procfs in tests —
+  // on every platform, not only on hosts that have a real one. It is passed by
+  // the adapter as a positional argument and is never read from the
+  // environment, which the caller controls: a run's liveness verdict must not
+  // be redirectable by whoever submitted it.
+  "msb_starttime() {",
+  '  msb_st=$(cat "$1/$2/stat" 2>/dev/null) || return 1',
+  '  msb_rest=${msb_st##*") "}',
+  '  if [ "$msb_rest" = "$msb_st" ]; then return 1; fi',
+  "  set -- $msb_rest",
+  '  if [ "$#" -lt 20 ]; then return 1; fi',
+  '  printf %s "${20}"',
+  "}",
+].join("\n");
 
 /**
  * Admit one async run.
@@ -156,6 +207,8 @@ export const MICROSANDBOX_RUN_ADMIT_SCRIPT = [
   "dir=$2",
   "parent=$3",
   "shell_path=$4",
+  "proc_root=$5",
+  MSB_STARTTIME_FN,
   'mkdir -p "$parent" 2>/dev/null || true',
   'if mkdir "$dir" 2>/dev/null; then',
   // Record the command BEFORE starting anything: a crash between the two
@@ -165,12 +218,17 @@ export const MICROSANDBOX_RUN_ADMIT_SCRIPT = [
   // Boot identity, used by the status probe to tell "still running" from "the
   // sandbox restarted and this pid now belongs to someone else". Absent on a
   // guest without procfs, in which case the probe falls back to pid liveness.
-  '  cat /proc/sys/kernel/random/boot_id > "$dir/boot" 2>/dev/null || true',
+  '  cat "$proc_root/sys/kernel/random/boot_id" > "$dir/boot" 2>/dev/null || true',
   // The command runs in a CHILD shell, so an `exit 7` inside it cannot skip
   // the exit-code record: the child exits, the wrapper writes its status.
   '  nohup "$shell_path" -c \'"$3" -c "$1" > "$2/out" 2>&1; printf %s "$?" > "$2/exit"\' msb-run "$cmd" "$dir" "$shell_path" > /dev/null 2>&1 &',
   "  run_pid=$!",
   '  printf %s "$run_pid" > "$dir/pid"',
+  // Pid + start time is the run's identity. Written only when procfs actually
+  // answered: an EMPTY `start` file would be indistinguishable from "recorded
+  // a start time of nothing", and the probe would then compare against it.
+  "  start_ticks=$(msb_starttime \"$proc_root\" \"$run_pid\") || start_ticks=''",
+  '  if [ -n "$start_ticks" ]; then printf %s "$start_ticks" > "$dir/start"; fi',
   '  printf "ADMITTED %s\\n" "$run_pid"',
   "  exit 0",
   "fi",
@@ -197,11 +255,29 @@ export const MICROSANDBOX_RUN_ADMIT_SCRIPT = [
  * final act, so re-reading after the liveness probe closes the window where a
  * run finishes mid-probe and would otherwise read as lost.
  *
+ * LIVENESS IS THREE CHECKS, not one, because each answers a different way of
+ * losing a run:
+ *  - boot id, for "the sandbox restarted underneath it";
+ *  - `kill -0`, for "the process is gone";
+ *  - START TIME, for "the pid is alive but it is somebody else's now". Without
+ *    the third, a recycled pid reports RUNNING forever, which is the one
+ *    failure a poll loop cannot end on.
+ *
+ * FALLBACK, stated because it is a real reduction in what the probe can tell
+ * apart: when the guest has no procfs, admission records no start time and the
+ * probe degrades to boot id + pid liveness — exactly the behaviour before start
+ * time existed. The fallback is chosen by the ABSENCE of a recorded start time,
+ * never by a failure to read the current one: if a start time was recorded and
+ * the current read fails while the pid is alive, the probe reports RUNNING
+ * rather than inventing a mismatch.
+ *
  * @internal Exported only for the protocol tests (see above).
  */
 export const MICROSANDBOX_RUN_STATUS_SCRIPT = [
   "set -u",
   "dir=$1",
+  "proc_root=$2",
+  MSB_STARTTIME_FN,
   'if [ -f "$dir/exit" ]; then',
   '  printf "EXIT %s\\n" "$(cat "$dir/exit" 2>/dev/null)"',
   "  exit 0",
@@ -211,7 +287,7 @@ export const MICROSANDBOX_RUN_STATUS_SCRIPT = [
   "  exit 0",
   "fi",
   'boot=$(cat "$dir/boot" 2>/dev/null) || boot=""',
-  'now=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || now=""',
+  'now=$(cat "$proc_root/sys/kernel/random/boot_id" 2>/dev/null) || now=""',
   'if [ -n "$boot" ] && [ -n "$now" ] && [ "$boot" != "$now" ]; then',
   '  printf "LOST sandbox-restarted\\n"',
   "  exit 0",
@@ -223,6 +299,16 @@ export const MICROSANDBOX_RUN_STATUS_SCRIPT = [
   "  exit 0",
   "fi",
   'if kill -0 "$run_pid" 2>/dev/null; then',
+  // The pid is alive. Is it still OUR process? Only a recorded start time can
+  // answer; without one the probe says RUNNING, as it did before.
+  '  recorded=$(cat "$dir/start" 2>/dev/null) || recorded=""',
+  '  if [ -n "$recorded" ]; then',
+  "    current=$(msb_starttime \"$proc_root\" \"$run_pid\") || current=''",
+  '    if [ -n "$current" ] && [ "$current" != "$recorded" ]; then',
+  '      printf "LOST pid-reused\\n"',
+  "      exit 0",
+  "    fi",
+  "  fi",
   '  printf "RUNNING\\n"',
   "  exit 0",
   "fi",
@@ -231,6 +317,38 @@ export const MICROSANDBOX_RUN_STATUS_SCRIPT = [
   "  exit 0",
   "fi",
   'printf "LOST process-gone\\n"',
+].join("\n");
+
+/**
+ * Read one run's captured output.
+ *
+ * Arguments: `$1` log path, `$2` byte cap. Exits 0 with the last `$2` bytes of
+ * the file, or 0 with NO output when the file is genuinely absent; any other
+ * failure exits non-zero.
+ *
+ * THE EXIT CODE IS THE WHOLE POINT. The previous form of this read was
+ * `tail -c N path 2>/dev/null || true`, which flattened three different
+ * situations — "the run has not written anything yet", "the log is
+ * unreadable", and "the guest call failed" — onto the same empty string. Empty
+ * output is a legitimate answer for a run that printed nothing, so a caller
+ * cannot tell that reading from an unreadable one. Absence is now the ONLY
+ * condition that yields empty-and-successful; everything else fails loudly and
+ * the adapter raises {@link MicrosandboxLogReadError}.
+ *
+ * The cap is read as one byte MORE than the caller's limit, so the adapter can
+ * see that a longer file exists and report `truncated` rather than handing back
+ * a tail that reads like a complete log.
+ *
+ * @internal Exported only for the protocol tests (see above).
+ */
+export const MICROSANDBOX_RUN_LOG_SCRIPT = [
+  "set -u",
+  "path=$1",
+  "cap=$2",
+  // Absent is not an error: a run that has not yet written its first byte, and
+  // a run that printed nothing at all, both legitimately have no log.
+  'if [ ! -f "$path" ]; then exit 0; fi',
+  'tail -c "$cap" "$path"',
 ].join("\n");
 
 // --- structural microsandbox SDK surface (microsandbox@0.6.11) --------------
@@ -598,6 +716,165 @@ export class MicrosandboxRunNotFinishedError extends Error {
   }
 }
 
+/**
+ * The process-wide default backend could not be restored, so no later
+ * default-dependent SDK static may be issued from this process.
+ *
+ * `withDefaultBackend` sets one process-global slot and restores it on the way
+ * out. When the RESTORE is what failed, the slot holds an unknown value: not
+ * necessarily this runtime's backend, not necessarily the previous one. Every
+ * static the adapter calls reads that slot, so the only two honest options are
+ * to guess or to stop. This adapter stops — permanently, for the life of the
+ * process, because nothing it is willing to do can re-establish the truth.
+ * (Calling `setDefaultBackend` to force a known value would mutate the host
+ * process on behalf of a library, which this adapter never does.)
+ *
+ * Sandbox and handle instances resolved BEFORE the failure are unaffected and
+ * still usable: the SDK binds each one to the backend it was resolved on (its
+ * typings call this "backend retained by this sandbox"), so their exec,
+ * filesystem and lifecycle calls read no global state.
+ */
+export class MicrosandboxBackendPoisonedError extends Error {
+  override readonly name = "MicrosandboxBackendPoisonedError";
+
+  constructor(cause: unknown) {
+    super(
+      "Microsandbox cannot issue any further backend-dependent SDK call from this process: restoring the "
+        + "process-wide default backend failed, so its current value is unknown and a call issued now could "
+        + `run against the wrong backend. Restart the process. Underlying error: ${errorMessage(cause)}`,
+      { cause },
+    );
+  }
+}
+
+/**
+ * A command finished, but the SDK reported no exit code for it.
+ *
+ * The bootstrap-plane `ExecResult.exitCode` is a number, so this adapter would
+ * have to INVENT one — and the only plausible invention, `0`, is the value that
+ * says "this succeeded". A command whose outcome the provider did not report is
+ * not a command that succeeded, so the caller is told the outcome is unknown
+ * instead of being told a comfortable lie it cannot detect.
+ */
+export class MicrosandboxUnknownOutcomeError extends Error {
+  override readonly name = "MicrosandboxUnknownOutcomeError";
+  readonly sandboxName: string;
+
+  constructor(sandboxName: string) {
+    super(
+      `Microsandbox exec on sandbox "${sandboxName}" completed without an exit code, so its outcome is `
+        + "unknown; it is reported as unknown rather than defaulted to success",
+    );
+    this.sandboxName = sandboxName;
+  }
+}
+
+/**
+ * The status probe for an async run did not produce a verdict.
+ *
+ * Distinct from {@link MicrosandboxRunLostError}, which IS a verdict — the run
+ * is over and cannot complete. This error says the adapter learned NOTHING:
+ * the guest call failed, or it answered something this protocol does not
+ * define. Returning "still running" for either would be a positive claim the
+ * probe never made, and a poll loop reading it would wait for an outcome that
+ * may already have happened.
+ *
+ * It is safe to retry: nothing about the run was changed by asking.
+ */
+export class MicrosandboxStatusProbeError extends Error {
+  override readonly name = "MicrosandboxStatusProbeError";
+  readonly sessionId: string;
+  readonly commandId: string;
+  /** `"transport"` — the probe call itself failed. `"unrecognized"` — it answered off-protocol. */
+  readonly reason: "transport" | "unrecognized";
+  /** Retrying is harmless; the probe has no side effects on the run. */
+  readonly retryable = true;
+
+  constructor(
+    sessionId: string,
+    commandId: string,
+    reason: "transport" | "unrecognized",
+    detail: string,
+    cause?: unknown,
+  ) {
+    super(
+      `Microsandbox could not determine the status of run "${sessionId}" (${reason}): ${detail}. `
+        + "The run's state is unchanged and the probe may be retried; it is NOT reported as still running, "
+        + "because that would be an observation this probe did not make.",
+      cause === undefined ? undefined : { cause },
+    );
+    this.sessionId = sessionId;
+    this.commandId = commandId;
+    this.reason = reason;
+  }
+}
+
+/**
+ * A run's captured output could not be read.
+ *
+ * Raised instead of returning `""`. An empty log is a legitimate outcome — a
+ * command that printed nothing has one — so a failed read that answered `""`
+ * would be indistinguishable from a real result, and the caller would record
+ * "the command produced no output" as a fact about a read that never happened.
+ * A genuinely ABSENT log file still yields `""`, which is the one case where
+ * empty is the truth.
+ */
+export class MicrosandboxLogReadError extends Error {
+  override readonly name = "MicrosandboxLogReadError";
+  readonly sessionId: string;
+  readonly path: string;
+
+  constructor(sessionId: string, path: string, detail: string, cause?: unknown) {
+    super(
+      `Microsandbox could not read the log for run "${sessionId}" at ${path}: ${detail}. `
+        + "Reported as a failure rather than as empty output, which would be indistinguishable from a run "
+        + "that printed nothing.",
+      cause === undefined ? undefined : { cause },
+    );
+    this.sessionId = sessionId;
+    this.path = path;
+  }
+}
+
+/**
+ * `startScript`/`startExec` was given a `timeoutMs`, which this adapter cannot
+ * honour as the port defines it.
+ *
+ * The port's `timeoutMs` is the COMMAND's lifetime. For a synchronous
+ * `runScript` that is exactly what the SDK's `ExecOptionsBuilder.timeout` gives,
+ * so the sync path honours it. An async run is different: it is detached inside
+ * the guest by the durable wrapper and outlives the submit call, so the submit
+ * call's timeout bounds nothing about the command.
+ *
+ * The adapter previously applied it to the submit call anyway. That is the
+ * failure mode this error exists to remove — a caller that asked for a 30s
+ * command budget got a 30s SUBMIT budget and a command that runs forever, with
+ * nothing in the result to say so.
+ *
+ * It is refused rather than approximated because the honest enforcement is not
+ * available here: killing the run's shell on expiry would leave that shell's
+ * own descendants running, so the adapter would report a terminated run while
+ * the work continued — a fabricated outcome, which is worse than a refusal. Use
+ * `maxDurationSeconds` for a sandbox-lifetime bound, or put the bound in the
+ * command itself (`timeout 30 ...`), where the guest can enforce it properly.
+ */
+export class MicrosandboxRunTimeoutUnsupportedError extends Error {
+  override readonly name = "MicrosandboxRunTimeoutUnsupportedError";
+  readonly sessionId: string;
+  readonly timeoutMs: number;
+
+  constructor(sessionId: string, timeoutMs: number) {
+    super(
+      `Microsandbox cannot apply a ${timeoutMs}ms command timeout to the async run "${sessionId}": the port `
+        + "defines `timeoutMs` as the command's lifetime, and an async run is detached in the guest, so the "
+        + "submit call's timeout would bound nothing. Nothing was submitted. Bound the sandbox with "
+        + "`maxDurationSeconds`, or put the timeout inside the command.",
+    );
+    this.sessionId = sessionId;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 // --- process-global backend gate -------------------------------------------
 //
 // WHAT ACTUALLY NEEDS GATING, and why it is only some of the SDK.
@@ -641,8 +918,83 @@ type BackendScope = {
   exited: Promise<void>;
 };
 
+/**
+ * One queued caller, in arrival order.
+ *
+ * A waiter is an OBJECT rather than a bare callback so that a timed-out or
+ * cancelled caller can be found by identity, and so the gate can be handed to
+ * exactly one of them (see {@link promoteNextBackendWaiter}).
+ */
+type BackendWaiter = {
+  readonly key: string;
+  readonly wake: () => void;
+};
+
 let currentBackendScope: BackendScope | null = null;
-const backendScopeWaiters: Array<() => void> = [];
+const backendScopeWaiters: BackendWaiter[] = [];
+
+/**
+ * The waiter the gate is currently RESERVED for, if any.
+ *
+ * Waking the head of the queue is not by itself FIFO: between the wake and the
+ * woken caller re-checking the gate, a brand-new arrival can observe a free
+ * gate and take it, so the queue's order decides nothing and a waiter can be
+ * skipped repeatedly. While this is set the gate is spoken for, and every
+ * caller other than this one must queue — which is what actually makes the
+ * handoff ordered.
+ */
+let backendGateHandoffTo: BackendWaiter | null = null;
+
+/**
+ * Set once the SDK fails to RESTORE the process-wide default backend, after
+ * which no default-dependent static may be issued from this process again.
+ *
+ * Deliberately permanent and deliberately module-scoped: the damage is to the
+ * SDK's process-global slot, so it is not a property of any one runtime
+ * instance, and no action this adapter is willing to take can re-establish
+ * what that slot now holds. See {@link MicrosandboxBackendPoisonedError}.
+ *
+ * The FLAG carries whether the gate is poisoned; the cause is kept beside it.
+ * Using the cause as its own sentinel would lose exactly the rejections that
+ * carry no value — `Promise.reject()`, `reject(null)` — and those poison the
+ * process default just as thoroughly as a rejection with an `Error` does.
+ */
+let backendGatePoisoned = false;
+let backendGatePoisonCause: unknown;
+
+/**
+ * Reset the module-global gate. TEST-ONLY.
+ *
+ * The gate is process-global on purpose, and poisoning it is permanent on
+ * purpose — which makes the poison path untestable in-process without a way
+ * back. Exported from the module but NOT from the package barrel, so it is
+ * reachable from this file's tests and from nowhere a consumer imports.
+ *
+ * @internal
+ */
+export function __resetBackendGateForTests(): void {
+  currentBackendScope = null;
+  backendScopeWaiters.splice(0);
+  backendGateHandoffTo = null;
+  backendGatePoisoned = false;
+  backendGatePoisonCause = undefined;
+}
+
+/**
+ * How many callers are queued on the gate right now. TEST-ONLY.
+ *
+ * The leak this exists to catch is INVISIBLE from the outside: a waiter that
+ * timed out still reports the same typed `MicrosandboxBackendBusyError` to its
+ * caller whether or not it deregistered itself, so a test written against
+ * observable behaviour alone passes against the bug. The only discriminating
+ * signal is the length of the queue itself, so the queue is what the test
+ * asserts on.
+ *
+ * @internal
+ */
+export function __backendGateWaiterCountForTests(): number {
+  return backendScopeWaiters.length;
+}
 
 /**
  * Is this runtime bound to the LOCAL backend?
@@ -674,60 +1026,144 @@ async function withBackendScope<T>(
   backend: MicrosandboxBackend,
   fn: () => Promise<T> | T,
   queueTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<T> {
   const key = backendKey(backend);
   const queueDeadline = Date.now() + queueTimeoutMs;
-  for (;;) {
-    const open = currentBackendScope;
-    if (open && !open.closing && open.key === key) {
-      open.active += 1;
-      try {
-        // The scope may still be opening; running before it is entered would
-        // run against whatever backend the process last had.
-        await open.entered;
-        return await fn();
-      } finally {
-        await leaveBackendScope(open);
-      }
+  // Set once this caller has been handed the gate as the FIFO head. It may
+  // then take the gate even though callers are still queued BEHIND it — which
+  // is the whole point of the handoff — but it owes the queue a promotion if
+  // it then leaves without taking the gate.
+  let holdsTurn = false;
+  const yieldTurn = (): void => {
+    if (holdsTurn) {
+      holdsTurn = false;
+      promoteNextBackendWaiter();
     }
-    if (open) {
-      // BOUNDED. An abandoned scope holder (a create or lookup that outlived
-      // its client-side deadline) is still in flight and still owns the
-      // process-wide backend, so this wait can otherwise never end.
-      const remainingMs = queueDeadline - Date.now();
-      if (remainingMs <= 0) {
-        throw new MicrosandboxBackendBusyError(queueTimeoutMs);
+  };
+  try {
+    for (;;) {
+      if (backendGatePoisoned) {
+        throw new MicrosandboxBackendPoisonedError(backendGatePoisonCause);
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let wake!: () => void;
-      const woken = new Promise<false>((resolve) => {
-        wake = () => resolve(false);
-      });
-      backendScopeWaiters.push(wake);
-      const timedOut = await Promise.race([
-        woken,
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), remainingMs);
-        }),
-      ]);
-      if (timer) {
-        clearTimeout(timer);
+      if (signal?.aborted) {
+        // ADMISSION CANCELLED. The caller's overall deadline has already
+        // expired, so `fn` must never run: a static admitted after its own
+        // deadline is a call the caller has stopped waiting for and will
+        // never read the result of.
+        throw signal.reason;
       }
-      if (timedOut) {
-        // Deregister. The waiter list is only spliced wholesale when a scope
-        // releases, so a timed-out waiter left behind would never be collected
-        // — and the case this bound exists for is precisely the one where no
-        // release ever comes, which would grow the list without limit under
-        // sustained load.
-        const queued = backendScopeWaiters.indexOf(wake);
-        if (queued !== -1) {
-          backendScopeWaiters.splice(queued, 1);
+      const open = currentBackendScope;
+      // JOINING IS THE STARVATION RISK, so it is conditional on an empty queue.
+      // A same-backend call may share an open scope only when NOBODY is waiting
+      // and the gate is not already promised to a waiter; the moment a call on
+      // another backend has queued, later same-backend arrivals queue behind it
+      // too. Without that condition a steady stream of same-backend work keeps
+      // the scope permanently occupied and the other backend never runs — which
+      // is the failure this gate's own comment claimed it prevented.
+      if (
+        open &&
+        !open.closing &&
+        open.key === key &&
+        (holdsTurn || (backendScopeWaiters.length === 0 && backendGateHandoffTo === null))
+      ) {
+        open.active += 1;
+        // Joining does not hold the gate — the open scope does — so a turn
+        // taken here is handed straight back to the queue.
+        yieldTurn();
+        try {
+          // The scope may still be opening; running before it is entered would
+          // run against whatever backend the process last had.
+          await open.entered;
+          return await fn();
+        } finally {
+          await leaveBackendScope(open);
+        }
+      }
+      if (
+        open ||
+        (!holdsTurn && (backendScopeWaiters.length > 0 || backendGateHandoffTo !== null))
+      ) {
+        // BOUNDED. An abandoned scope holder (a create or lookup that outlived
+        // its client-side deadline) is still in flight and still owns the
+        // process-wide backend, so this wait can otherwise never end.
+        const remainingMs = queueDeadline - Date.now();
+        if (remainingMs <= 0) {
+          throw new MicrosandboxBackendBusyError(queueTimeoutMs);
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let wake!: () => void;
+        const woken = new Promise<"woken">((resolve) => {
+          wake = () => resolve("woken");
+        });
+        const waiter: BackendWaiter = { key, wake };
+        backendScopeWaiters.push(waiter);
+        let onAbort: (() => void) | undefined;
+        const outcomes: Array<Promise<"woken" | "timeout" | "aborted">> = [
+          woken,
+          new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), remainingMs);
+          }),
+        ];
+        if (signal) {
+          outcomes.push(
+            new Promise<"aborted">((resolve) => {
+              onAbort = () => resolve("aborted");
+              signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          );
+        }
+        const outcome = await Promise.race(outcomes);
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (signal && onAbort) {
+          signal.removeEventListener("abort", onAbort);
+        }
+        if (outcome === "woken") {
+          // The gate was reserved for THIS waiter by name, so nothing else can
+          // have taken it in between. Consume the reservation and re-check.
+          backendGateHandoffTo = null;
+          holdsTurn = true;
+          continue;
+        }
+        // Deregister. The waiter list is no longer spliced wholesale on
+        // release, but a timed-out or cancelled waiter left behind would still
+        // be woken later and, worse, would hold a handoff the gate then waits
+        // on forever — so it both leaves the queue and passes on any turn it
+        // was given in the same tick.
+        dropBackendWaiter(waiter);
+        if (outcome === "aborted") {
+          throw signal!.reason;
         }
         throw new MicrosandboxBackendBusyError(queueTimeoutMs);
       }
-      continue;
-    }
 
+      return await openBackendScope(sdk, backend, key, fn, () => {
+        // Taking the gate consumes the turn: ownership now lives in the scope,
+        // and the queue is promoted when that scope releases.
+        holdsTurn = false;
+      });
+    }
+  } finally {
+    yieldTurn();
+  }
+}
+
+/**
+ * Open a NEW scope on a free gate and run `fn` inside it.
+ *
+ * Split out from {@link withBackendScope} only so the queueing loop above stays
+ * readable; it is never called on a gate that is already held.
+ */
+async function openBackendScope<T>(
+  sdk: MicrosandboxSdk,
+  backend: MicrosandboxBackend,
+  key: string,
+  fn: () => Promise<T> | T,
+  onTaken: () => void,
+): Promise<T> {
+  {
     let release!: () => void;
     const drained = new Promise<void>((resolve) => {
       release = resolve;
@@ -751,13 +1187,20 @@ async function withBackendScope<T>(
       exited: Promise.resolve(),
     };
     currentBackendScope = scope;
+    onTaken();
 
+    // Distinguishes the two ways `withDefaultBackend` can reject, which need
+    // opposite handling: before the callback ran, nothing of ours executed and
+    // the process default was never changed; after it ran, the rejection can
+    // only be the SDK failing to RESTORE, and the slot is then unknown.
+    let callbackRan = false;
     let scopeCall: Promise<unknown>;
     try {
       // The scope stays open for as long as anyone is inside it: the SDK's
       // callback resolves only once the last participant has left.
       scopeCall = Promise.resolve(
         sdk.withDefaultBackend(backend, () => {
+          callbackRan = true;
           markEntered();
           return drained;
         }),
@@ -772,9 +1215,27 @@ async function withBackendScope<T>(
     scope.exited = scopeCall.then(
       () => undefined,
       (error: unknown) => {
-        // Rejected before the callback ran: the scope was never entered.
-        // Rejected after: the caller's own call already carries the outcome.
-        failEntry(error);
+        if (!callbackRan) {
+          // Rejected BEFORE the callback ran: the scope was never entered, so
+          // the process default was never changed and nothing ran under it.
+          // `entered` rejects and this call fails closed, below.
+          failEntry(error);
+          return;
+        }
+        // Rejected AFTER the callback ran. The callback returns a promise that
+        // resolves only once the last participant has left, so the SDK had
+        // already re-entered its own teardown: this rejection is the RESTORE
+        // failing. The process-wide slot now holds an unknown value.
+        //
+        // Swallowing it — which is what returning here would do — hands the
+        // gate to the next backend as if the previous one had been cleanly
+        // restored, and that call then runs against whatever the slot actually
+        // holds. So it is recorded as poison for every later static, and
+        // rethrown so the participant that closed the scope is TOLD rather
+        // than left believing the call completed cleanly.
+        backendGatePoisoned = true;
+        backendGatePoisonCause = error;
+        throw error;
       },
     );
 
@@ -798,14 +1259,30 @@ async function withBackendScope<T>(
 async function leaveBackendScope(scope: BackendScope): Promise<void> {
   scope.active -= 1;
   if (scope.active > 0 || scope.closing) {
+    // EARLY LEAVER. Its own call finished, but the restore it depends on has
+    // not happened yet: the scope closes only when the LAST participant
+    // leaves. Returning here would let a joined caller report success while
+    // the very same scope goes on to fail its restore — two callers running
+    // concurrently against one backend, one told the truth and one not.
+    //
+    // Awaiting cannot deadlock: this participant has already decremented, so
+    // the count it is waiting on no longer includes itself, and `exited`
+    // settles as soon as the last one leaves.
+    await scope.exited;
     return;
   }
   scope.closing = true;
   scope.release();
-  // Wait for the SDK to restore the previous backend BEFORE any queued call on
-  // a different backend is allowed to open its own scope.
-  await scope.exited;
-  releaseBackendGate(scope);
+  try {
+    // Wait for the SDK to restore the previous backend BEFORE any queued call
+    // on a different backend is allowed to open its own scope.
+    await scope.exited;
+  } finally {
+    // Released even when the restore FAILED. The gate is poisoned by then, so
+    // waking the queue does not let anyone through — it converts a wait that
+    // would otherwise run to its timeout into an immediate, typed refusal.
+    releaseBackendGate(scope);
+  }
 }
 
 /** Free the gate for a scope that never opened. */
@@ -819,9 +1296,47 @@ function releaseBackendGate(scope: BackendScope): void {
   if (currentBackendScope === scope) {
     currentBackendScope = null;
   }
-  const waiters = backendScopeWaiters.splice(0);
-  for (const wake of waiters) {
-    wake();
+  promoteNextBackendWaiter();
+}
+
+/**
+ * Hand the free gate to the OLDEST waiter, and to that waiter alone.
+ *
+ * Waking every waiter at once and letting them re-race is not FIFO by any
+ * definition: all of them find the gate free, and which one actually takes it
+ * is decided by microtask scheduling order, so a waiter can lose that race
+ * arbitrarily many times while later arrivals win it. Reserving the gate for
+ * one named waiter is what makes the queue's order mean something.
+ */
+function promoteNextBackendWaiter(): void {
+  if (currentBackendScope !== null || backendGateHandoffTo !== null) {
+    return;
+  }
+  const next = backendScopeWaiters.shift();
+  if (!next) {
+    return;
+  }
+  backendGateHandoffTo = next;
+  next.wake();
+}
+
+/**
+ * Remove a waiter that will never take the gate, and pass on any reservation
+ * it was holding.
+ *
+ * The reservation matters more than the queue slot: a waiter that timed out in
+ * the same tick it was promoted still owns `backendGateHandoffTo`, and every
+ * other caller defers to that reservation — so dropping it without promoting a
+ * successor wedges the gate permanently on a caller that has already left.
+ */
+function dropBackendWaiter(waiter: BackendWaiter): void {
+  const queued = backendScopeWaiters.indexOf(waiter);
+  if (queued !== -1) {
+    backendScopeWaiters.splice(queued, 1);
+  }
+  if (backendGateHandoffTo === waiter) {
+    backendGateHandoffTo = null;
+    promoteNextBackendWaiter();
   }
 }
 
@@ -836,7 +1351,7 @@ function releaseBackendGate(scope: BackendScope): void {
  */
 function readSandboxPage(
   page: unknown,
-  previousCursor: string | undefined,
+  seenCursors: ReadonlySet<string>,
   pageNumber: number,
 ): { sandboxes: MsbSandboxHandle[]; nextCursor?: string } {
   if (typeof page !== "object" || page === null) {
@@ -849,7 +1364,34 @@ function readSandboxPage(
       "the provider returned a page whose sandbox list is unreadable",
     );
   }
-  const sandboxes = record.sandboxes as MsbSandboxHandle[];
+  // THE ENVELOPE IS NOT THE DATA. An array of unusable entries is exactly as
+  // unreadable as a missing array, and it fails the same way: every entry is
+  // dropped by the state filter, the drain ends, and the caller is told there
+  // is nothing warm — from a page the provider did in fact return sandboxes on.
+  // A handle is only usable if it has an addressable name, because the name IS
+  // the identity here, and a status, because the state filter reads it.
+  const sandboxes = record.sandboxes.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new MicrosandboxPaginationError(
+        pageNumber,
+        `entry ${index} of the page is not a sandbox object`,
+      );
+    }
+    const { name, status } = entry as { name?: unknown; status?: unknown };
+    if (typeof name !== "string" || name.trim() === "") {
+      throw new MicrosandboxPaginationError(
+        pageNumber,
+        `entry ${index} of the page has no usable sandbox name, so it cannot be addressed`,
+      );
+    }
+    if (typeof status !== "string" || status.trim() === "") {
+      throw new MicrosandboxPaginationError(
+        pageNumber,
+        `sandbox "${name}" was returned without a usable status, so it cannot be filtered by state`,
+      );
+    }
+    return entry as MsbSandboxHandle;
+  });
   const cursor = record.nextCursor;
   if (cursor === undefined || cursor === null || cursor === "") {
     return { sandboxes };
@@ -860,10 +1402,15 @@ function readSandboxPage(
       "the provider returned a next-page cursor that is not a string",
     );
   }
-  if (previousCursor !== undefined && cursor === previousCursor) {
+  // EVERY cursor already used, not just the previous one. A backend that walks
+  // A → B → A advances on each individual step, so comparing against only the
+  // last cursor sees progress forever while re-serving the same two pages —
+  // the drain then ends on the 1000-page bound at best, and duplicates every
+  // sandbox it collected on the way.
+  if (seenCursors.has(cursor)) {
     throw new MicrosandboxPaginationError(
       pageNumber,
-      "the provider returned a next-page cursor identical to the one just used, so the listing cannot advance",
+      `the provider returned a next-page cursor it has already served, so the listing is cycling rather than advancing`,
     );
   }
   return { sandboxes, nextCursor: cursor };
@@ -899,22 +1446,27 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
    *  - `pty: false` — the SDK's `ExecOptionsBuilder.tty(true)` and
    *    `ExecHandle.resize()` are real, but the port has no pty method and this
    *    adapter never allocates one.
-   *  - `snapshots` — LOCAL only. `launch` sources a sandbox from a snapshot via
-   *    the builder's `fromSnapshot`, and what that consumes is a snapshot
-   *    ARTIFACT: a host-local directory (the SDK stores them under
-   *    `~/.microsandbox/snapshots/<name>/` and indexes them in a local DB
-   *    cache). A cloud create has no access to that directory, so the cloud
-   *    backend reports `false` and refuses the pairing outright — see the
-   *    constructor. Note the adapter only ever CONSUMES a snapshot; it never
-   *    creates one, so `SandboxHandle.snapshot()` is not on this path.
-   *  - `isolation` — `'strong'` on LOCAL, `'unknown'` on CLOUD. Locally the SDK
-   *    boots each sandbox as a microVM with its own guest kernel on a
-   *    virtualization-capable host (KVM on Linux, Apple Silicon on macOS, WHP
-   *    on Windows 10+), which this package can stand behind. The cloud
-   *    backend's isolation, region placement and resource enforcement are
-   *    vendor-documented but NOT observable from here, and this adapter runs no
-   *    measurement against them — so it reports `'unknown'` rather than
-   *    publishing an unverified `'strong'`. See {@link IsolationLevel}.
+   *  - `snapshots` — LOCAL only, and the claim is about THIS ADAPTER's boot
+   *    path, not about the provider's hosted service. `launch` sources a
+   *    sandbox through the builder's `fromSnapshot`, which consumes a
+   *    host-local artifact: the installed SDK's typings describe `Snapshot` as
+   *    "an artifact on disk" and resolve one under
+   *    `~/.microsandbox/snapshots/<name>/`. This adapter never transfers that
+   *    artifact anywhere, so on a remote backend there is nothing for a create
+   *    to resolve — hence `false`, and a constructor that refuses the pairing.
+   *    Note the adapter only ever CONSUMES a snapshot; it never creates one, so
+   *    `SandboxHandle.snapshot()` is not on this path.
+   *  - `isolation` — `'strong'` on LOCAL, `'unknown'` on CLOUD, and both values
+   *    describe what this package has ESTABLISHED rather than what any provider
+   *    documentation says. Locally the SDK boots each sandbox as a microVM with
+   *    its own guest kernel on a virtualization-capable host, and the installed
+   *    package states that requirement itself (Node 22+, a native addon, KVM /
+   *    Apple Silicon / WHP), so `'strong'` rests on something checkable here.
+   *    For the cloud backend this adapter observes nothing about isolation,
+   *    region placement or resource enforcement and measures nothing against
+   *    them, so it reports `'unknown'` — which is a statement about this
+   *    package's evidence, not an assertion that the guarantee is absent. See
+   *    {@link IsolationLevel}.
    *  - `persistentHandle: true` — a sandbox is re-resolvable by name from a
    *    fresh process via `Sandbox.get(name)` + `connect()`, and
    *    `launchDetached` sets `detached(true)` so it outlives this process.
@@ -984,24 +1536,37 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       );
     }
     // Refused HERE — before the lazy `import("microsandbox")`, before any SDK
-    // call, before a single byte leaves the process. A snapshot source is a
-    // local-backend-only configuration, so this is a static fact about the
-    // pairing rather than something the provider has to be asked about;
-    // deferring it to `launch` would surface it as an opaque remote failure on
-    // a path the caller was told existed.
+    // call, before a single byte leaves the process. Deferring it to `launch`
+    // would surface it as an opaque remote failure on a path the caller was
+    // told existed.
     //
-    // PROVENANCE: that Microsandbox CLOUD does not support snapshot-sourced
-    // creates is vendor documentation, relayed by the sandbox program lead as a
-    // release blocker; it is NOT derivable from microsandbox@0.6.11's typings,
-    // which carry no cloud/local gating on the snapshot surface. What IS
-    // checkable from the installed package, and what makes the restriction
-    // coherent, is that a snapshot artifact is host-local: the SDK documents
-    // them under `~/.microsandbox/snapshots/<name>/` and lists them from a
-    // local DB cache, and a cloud create cannot resolve a host path.
+    // WHAT THIS REFUSAL RESTS ON, stated exactly, because a capability claim is
+    // only worth what its evidence is. It is NOT a claim about what the vendor's
+    // hosted service does or does not implement — this package has no way to
+    // observe that. It is a statement about the ADAPTER'S OWN CONTRACT plus one
+    // fact that is checkable in the installed package:
+    //
+    //  - checkable: a snapshot is a HOST-LOCAL ARTIFACT. `microsandbox@0.6.11`'s
+    //    `native/index.d.ts` declares `Snapshot` as "A snapshot artifact on
+    //    disk", resolves `SandboxHandle.snapshot(name)` "under
+    //    `~/.microsandbox/snapshots/<name>/`", and offers `Snapshot.listDir(dir)`
+    //    to walk a directory of them. `builder.fromSnapshot(pathOrName)` consumes
+    //    that artifact.
+    //  - contract: this adapter only ever CONSUMES a snapshot by path or name
+    //    from the calling host, and it does not transfer one anywhere. A create
+    //    issued against a remote backend therefore has nothing this adapter has
+    //    put within its reach.
+    //
+    // So the pairing is refused because THIS ADAPTER cannot make it work, which
+    // is a fact about code in this repository. `capabilities.snapshots` reports
+    // the same thing per backend, and neither claims anything about the hosted
+    // service's own capabilities.
     if (options.snapshot && !isLocalBackend(options.backend)) {
       throw new Error(
-        "MicrosandboxRuntime cannot boot from a `snapshot` on the cloud backend: a snapshot artifact is host-local "
-          + "(the SDK resolves it under ~/.microsandbox/snapshots/), so a cloud create cannot reach it. "
+        "MicrosandboxRuntime cannot boot from a `snapshot` on the cloud backend: a snapshot is a host-local "
+          + "artifact (the SDK's own typings resolve one under ~/.microsandbox/snapshots/ and describe it as an "
+          + "artifact on disk), and this adapter consumes it from the calling host without transferring it, so a "
+          + "create issued against a remote backend has nothing to resolve. "
           + "Use `image` on the cloud backend, or set `backend: \"local\"` to boot from a snapshot.",
       );
     }
@@ -1077,8 +1642,10 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       states: options.states === undefined ? ["STARTED"] : options.states,
       // `limit` caps RESULTS as well as sizing the request; `pageSize` only
       // sizes the request. Treating a page size as a result cap would silently
-      // truncate a listing the caller asked to receive in full.
-      ...(options.limit !== undefined ? { cap: options.limit } : {}),
+      // truncate a listing the caller asked to receive in full. A non-integral
+      // or negative cap is floored onto zero, which `collectByLabels` answers
+      // without a call — the same rule `countByLabels` applies to `maxCount`.
+      ...resultCap(options.limit),
       requestSize: options.limit ?? options.pageSize,
       excludeIds: options.excludeIds,
       timeoutMs: options.timeoutMs,
@@ -1091,16 +1658,9 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     labels: Record<string, string>,
     options: SandboxCountOptions = {},
   ): Promise<number> {
-    const maxCount = options.maxCount === undefined
-      ? Number.POSITIVE_INFINITY
-      : Math.max(0, Math.floor(options.maxCount));
-    if (maxCount === 0) {
-      // Short-circuit: a cap of zero can be answered without a network call.
-      return 0;
-    }
     const handles = await this.collectByLabels(labels, {
       states: options.states === undefined ? ["STARTED"] : options.states,
-      ...(Number.isFinite(maxCount) ? { cap: maxCount } : {}),
+      ...resultCap(options.maxCount),
       requestSize: options.limit ?? options.pageSize,
       timeoutMs: options.timeoutMs,
       description: "counting matching sandboxes",
@@ -1132,34 +1692,55 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       description: string;
     },
   ): Promise<RuntimeHandle[]> {
+    // A cap of zero is answerable without a network call, and answering it
+    // WITH one is how a cap of zero used to return a result: the cap was
+    // checked only after an entry had already been collected. Negative and
+    // fractional caps normalize onto it rather than meaning something
+    // accidental.
+    if (options.cap !== undefined && options.cap <= 0) {
+      return [];
+    }
     // Request size, resolved exactly as Daytona/E2B/local resolve it, so a
-    // caller that tuned one provider's lookup gets the same request shape here.
-    const limit = options.requestSize ?? this.listPageSize;
+    // caller that tuned one provider's lookup gets the same request shape here
+    // — except that a zero or negative size is not a request shape at all, so
+    // it falls back to the configured page size instead of being sent.
+    const limit = positivePageSize(options.requestSize) ?? this.listPageSize;
     const excluded = new Set(options.excludeIds ?? []);
     const deadline = this.lookupDeadline(options.timeoutMs);
     const handles: RuntimeHandle[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
-    // Bounded so a backend that keeps handing back the same cursor cannot spin
+    // Bounded so a backend that keeps handing back fresh cursors cannot spin
     // this loop forever. The deadline bounds it in wall-clock terms too.
-    for (let page = 0; page < 1_000; page += 1) {
+    for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
       const cursorForPage = cursor;
-      const raw = await this.awaitWithin(
-        this.withBackendStatic((sdk) =>
-          sdk.Sandbox.listWith((builder) => {
-            let configured = builder.limit(limit);
-            if (hasEntries(labels)) {
-              configured = configured.labels(labels);
-            }
-            if (cursorForPage) {
-              configured = configured.cursor(cursorForPage);
-            }
-            return configured;
-          }),
-        ),
+      const raw = await this.awaitWithinCancelling(
+        (signal) =>
+          this.withBackendStatic(
+            (sdk) =>
+              sdk.Sandbox.listWith((builder) => {
+                let configured = builder.limit(limit);
+                if (hasEntries(labels)) {
+                  configured = configured.labels(labels);
+                }
+                if (cursorForPage) {
+                  configured = configured.cursor(cursorForPage);
+                }
+                return configured;
+              }),
+            signal,
+          ),
         deadline,
         options.description,
       );
-      const result = readSandboxPage(raw, cursorForPage, page + 1);
+      // Recorded BEFORE the page is validated, so the cursor that fetched this
+      // page counts as seen: a provider that hands back the cursor it was just
+      // given is the degenerate cycle, and it has to fail on the same check as
+      // the longer A → B → A one.
+      if (cursorForPage !== undefined) {
+        seenCursors.add(cursorForPage);
+      }
+      const result = readSandboxPage(raw, seenCursors, page + 1);
       for (const entry of result.sandboxes) {
         if (!matchesState(entry.status, options.states) || excluded.has(entry.name)) {
           continue;
@@ -1177,7 +1758,17 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       }
       cursor = result.nextCursor;
     }
-    return handles;
+    // THE BOUND IS A FAILURE, NOT AN ANSWER. Falling out of this loop meant
+    // returning what had been collected so far, which is the exact shape of a
+    // complete listing — the caller cannot tell a drain that gave up after a
+    // thousand pages from one that genuinely ended, so it under-counts a quota
+    // or launches a sandbox it already had. Every other way this drain can end
+    // badly already throws; this one now does too.
+    throw new MicrosandboxPaginationError(
+      MAX_LIST_PAGES,
+      `the listing still had more pages at the ${MAX_LIST_PAGES}-page safety bound, so it cannot be drained `
+        + "to a trustworthy end; no partial result is returned",
+    );
   }
 
   async getById(
@@ -1348,7 +1939,14 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 
   // --- exec ----------------------------------------------------------------
 
-  /** Bootstrap-plane exec. Same call as `runScript`, narrower result shape. */
+  /**
+   * Bootstrap-plane exec. Same call as `runScript`, narrower result shape.
+   *
+   * `ExecResult.exitCode` is a `number`, and `RunScriptResult.exitCode` is
+   * `number | null`, so this is where a missing outcome would have to be
+   * invented. It is not: a `null` becomes a typed error rather than the `0`
+   * that would report an unobserved command as a successful one.
+   */
   async exec(
     handle: RuntimeHandle,
     command: string,
@@ -1360,7 +1958,14 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       ...(options.env !== undefined ? { env: options.env } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     });
-    return { output: result.output, exitCode: result.exitCode ?? 0 };
+    if (result.exitCode === null) {
+      throw new MicrosandboxUnknownOutcomeError(handle.id);
+    }
+    return {
+      output: result.output,
+      exitCode: result.exitCode,
+      ...(result.truncated ? { truncated: true } : {}),
+    };
   }
 
   async runScript(handle: RuntimeHandle, options: {
@@ -1421,8 +2026,15 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     env?: Record<string, string>;
     suppressInputEcho?: boolean;
   }): Promise<AsyncRunStartResult> {
-    const sandbox = await this.requireSandbox(handle);
     const sessionId = options.sessionId ?? `run-${handle.id}-${randomUUID()}`;
+    // REFUSED BEFORE ANYTHING IS SUBMITTED, so a caller that asked for a
+    // command budget it will not get is told before a process exists rather
+    // than after one is running unbounded. See the error's own docs for why it
+    // is refused instead of approximated.
+    if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
+      throw new MicrosandboxRunTimeoutUnsupportedError(sessionId, options.timeoutMs);
+    }
+    const sandbox = await this.requireSandbox(handle);
     const dir = this.scriptRunDir(sessionId);
     const cwd = options.cwd ?? handle.workdir;
     const output = await sandbox.execWith(this.shell, (builder) => {
@@ -1434,6 +2046,7 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
           dir,
           this.runStateDir,
           this.shell,
+          GUEST_PROC_ROOT,
         ]);
         if (cwd !== undefined) {
           configured = configured.cwd(cwd);
@@ -1441,13 +2054,11 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
         if (hasEntries(options.env)) {
           configured = configured.envs(options.env);
         }
-        // The caller's `timeoutMs` bounds the SUBMIT call only. It is
-        // deliberately NOT applied to the backgrounded command: the command's
-        // lifetime is the sandbox's, and applying the submit deadline here
-        // would kill every long-running run the moment submission completed.
-        if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
-          configured = configured.timeout(options.timeoutMs);
-        }
+        // No `timeout(...)` here, and that is the point: the only timeout this
+        // call could set is the SUBMIT call's, and the port's `timeoutMs` means
+        // the COMMAND's lifetime. Setting it here would satisfy the type and
+        // silently mean something else, so a `timeoutMs` is refused above
+        // instead.
       return configured;
     });
     const marker = output.stdout().trim();
@@ -1479,15 +2090,38 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     const sandbox = await this.requireSandbox(handle);
     const dir = this.scriptRunDir(sessionId);
     let marker: string;
+    let probeExit: number | undefined;
+    let probeStderr = "";
     try {
       const output = await sandbox.execWith(this.shell, (builder) =>
-        builder.args(["-c", MICROSANDBOX_RUN_STATUS_SCRIPT, "msb-status", dir]),
+        builder.args(["-c", MICROSANDBOX_RUN_STATUS_SCRIPT, "msb-status", dir, GUEST_PROC_ROOT]),
       );
       marker = (output.stdout() ?? "").trim();
-    } catch {
-      // A failed probe says nothing about the run. Report it as unfinished and
-      // let the caller poll again, exactly as a dropped status read should.
-      return { exitCode: null };
+      probeExit = typeof output.code === "number" ? output.code : undefined;
+      probeStderr = output.stderr() ?? "";
+    } catch (error) {
+      // A FAILED PROBE SAYS NOTHING ABOUT THE RUN, which is exactly why it can
+      // no longer be reported as `{ exitCode: null }`. That value means "asked,
+      // and it is still running" — a positive observation this call did not
+      // make. A caller polling on it treats a broken transport as a healthy
+      // long-running command and waits out an outcome that may already exist.
+      throw new MicrosandboxStatusProbeError(
+        sessionId,
+        commandId,
+        "transport",
+        `the probe call failed: ${errorMessage(error)}`,
+        error,
+      );
+    }
+    if (probeExit !== undefined && probeExit !== 0) {
+      // The call was delivered but the probe script itself failed — an
+      // unreadable run directory, a guest without `/bin/sh`. Same reasoning.
+      throw new MicrosandboxStatusProbeError(
+        sessionId,
+        commandId,
+        "transport",
+        `the probe exited ${probeExit}: ${summarize(probeStderr || marker)}`,
+      );
     }
     if (marker.startsWith("EXIT ")) {
       const parsed = Number.parseInt(marker.slice("EXIT ".length).trim(), 10);
@@ -1514,16 +2148,18 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
     if (marker.startsWith("LOST")) {
       const reason = marker.slice("LOST".length).trim();
-      throw new MicrosandboxRunLostError(
-        sessionId,
-        commandId,
-        reason === "sandbox-restarted"
-          ? "the sandbox restarted while it was running"
-          : "its process is gone and it never recorded an exit code",
-      );
+      throw new MicrosandboxRunLostError(sessionId, commandId, describeLostReason(reason));
     }
-    // Unrecognized output is an unreadable probe, not a verdict.
-    return { exitCode: null };
+    // Unrecognized output is an unreadable probe, NOT a verdict — and least of
+    // all the verdict "still running". Reporting one here is how a poll loop
+    // runs forever against a guest whose probe is answering something this
+    // protocol never defined.
+    throw new MicrosandboxStatusProbeError(
+      sessionId,
+      commandId,
+      "unrecognized",
+      `the probe answered ${summarize(marker)}, which is not a verdict this protocol defines`,
+    );
   }
 
   async getScriptLogs(
@@ -1533,10 +2169,17 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   ): Promise<RunScriptResult> {
     const sandbox = await this.requireSandbox(handle);
     const outPath = `${this.scriptRunDir(sessionId)}/out`;
-    const output = await this.readFileBestEffort(sandbox, outPath, SCRIPT_LOG_READ_MAX_BYTES);
+    const log = await this.readRunLog(sandbox, sessionId, outPath, SCRIPT_LOG_READ_MAX_BYTES);
     // exitCode stays null: `getScriptStatus` is the single source of truth for
     // the exit code, matching the Daytona, E2B and local adapters.
-    return { output, exitCode: null, cmdId: commandId };
+    return {
+      output: log.output,
+      exitCode: null,
+      cmdId: commandId,
+      // Present only when the read actually bounded something. An absent
+      // `truncated` means the log is complete — never "unknown".
+      ...(log.truncated ? { truncated: true } : {}),
+    };
   }
 
   // --- bootstrap-plane async exec aliases ----------------------------------
@@ -1575,7 +2218,13 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       throw new MicrosandboxRunNotFinishedError(sessionId, commandId);
     }
     const logs = await this.getScriptLogs(handle, sessionId, commandId);
-    return { output: logs.output, exitCode: status.exitCode };
+    return {
+      output: logs.output,
+      exitCode: status.exitCode,
+      // Carried through rather than dropped: the bootstrap plane's consumer is
+      // the one that would otherwise read a tail as the whole output.
+      ...(logs.truncated ? { truncated: true } : {}),
+    };
   }
 
   // --- files ---------------------------------------------------------------
@@ -1768,9 +2417,10 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
    */
   private async withBackendStatic<T>(
     fn: (sdk: MicrosandboxSdk) => Promise<T> | T,
+    signal?: AbortSignal,
   ): Promise<T> {
     const sdk = await this.sdk();
-    return withBackendScope(sdk, this.backend, () => fn(sdk), this.backendQueueTimeoutMs);
+    return withBackendScope(sdk, this.backend, () => fn(sdk), this.backendQueueTimeoutMs, signal);
   }
 
   private async lookupHandle(name: string): Promise<MsbSandboxHandle | null> {
@@ -1844,25 +2494,64 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
   }
 
-  private async readFileBestEffort(
+  /**
+   * Read one run's captured output, bounded, without turning a failure into an
+   * empty log.
+   *
+   * The read goes through {@link MICROSANDBOX_RUN_LOG_SCRIPT} rather than
+   * `fs.readToString` for two reasons that both matter to the caller: an
+   * ABSENT log is a success with no output (a run that has printed nothing has
+   * one), and everything else — an unreadable file, a failed guest call — is a
+   * failure. The previous form could not tell those apart, because it answered
+   * `""` to all of them.
+   *
+   * One byte MORE than the cap is requested, so a longer log is detectable
+   * rather than silently tailed: the extra byte is what turns "here is the
+   * output" into "here is the last `maxBytes` of it".
+   */
+  private async readRunLog(
     sandbox: MsbSandbox,
+    sessionId: string,
     path: string,
     maxBytes: number,
-  ): Promise<string> {
-    // Read through a bounded `tail -c` rather than `fs.readToString`: it yields
-    // "" instead of throwing while the file is still absent, and caps the bytes
-    // pulled back to the caller.
+  ): Promise<{ output: string; truncated: boolean }> {
+    let output: MsbExecOutput;
     try {
-      const output = await sandbox.execWith(this.shell, (builder) =>
+      output = await sandbox.execWith(this.shell, (builder) =>
         builder.args([
           "-c",
-          `tail -c ${maxBytes} ${shellSingleQuote(path)} 2>/dev/null || true`,
+          MICROSANDBOX_RUN_LOG_SCRIPT,
+          "msb-log",
+          path,
+          String(maxBytes + 1),
         ]),
       );
-      return output.stdout() ?? "";
-    } catch {
-      return "";
+    } catch (error) {
+      throw new MicrosandboxLogReadError(
+        sessionId,
+        path,
+        `the guest call failed: ${errorMessage(error)}`,
+        error,
+      );
     }
+    if (typeof output.code === "number" && output.code !== 0) {
+      throw new MicrosandboxLogReadError(
+        sessionId,
+        path,
+        `the read exited ${output.code}: ${summarize(output.stderr() ?? "")}`,
+      );
+    }
+    const text = output.stdout() ?? "";
+    const bytes = Buffer.from(text, "utf8");
+    if (bytes.byteLength <= maxBytes) {
+      return { output: text, truncated: false };
+    }
+    // More than the cap came back, so the log is longer than what is being
+    // returned. The caller is handed the TAIL and told it is one.
+    return {
+      output: bytes.subarray(bytes.byteLength - maxBytes).toString("utf8"),
+      truncated: true,
+    };
   }
 
   private lookupDeadline(timeoutMs: number | undefined): { endsAt: number; timeoutMs: number } {
@@ -1871,6 +2560,34 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       ? Math.max(1, Math.ceil(requested))
       : this.lookupTimeoutMs;
     return { endsAt: Date.now() + normalized, timeoutMs: normalized };
+  }
+
+  /**
+   * Run `build` under the ONE overall deadline, cancelling its admission when
+   * that deadline expires.
+   *
+   * Racing a timer against the operation is not enough on its own. The gate is
+   * a queue, so a lookup that gives up while queued is still queued: it can be
+   * admitted later and issue a static against the process default long after
+   * the caller stopped waiting for it. The signal is what actually withdraws
+   * it from the queue.
+   */
+  private async awaitWithinCancelling<T>(
+    build: (signal: AbortSignal) => Promise<T>,
+    deadline: { endsAt: number; timeoutMs: number },
+    description: string,
+  ): Promise<T> {
+    const controller = new AbortController();
+    try {
+      return await this.awaitWithin(build(controller.signal), deadline, description);
+    } catch (error) {
+      controller.abort(
+        error instanceof MicrosandboxLookupTimeoutError
+          ? error
+          : new MicrosandboxLookupTimeoutError(deadline.timeoutMs, description),
+      );
+      throw error;
+    }
   }
 
   private async awaitWithin<T>(
@@ -2013,6 +2730,17 @@ function isAlreadyStopped(error: unknown): boolean {
   return typeof message === "string" && /already\s+stopped|not\s+running/i.test(message);
 }
 
+/** Turn the status script's `LOST <reason>` token into something a human reads. */
+function describeLostReason(reason: string): string {
+  if (reason === "sandbox-restarted") {
+    return "the sandbox restarted while it was running";
+  }
+  if (reason === "pid-reused") {
+    return "its process is gone and the guest has since reused its pid for something else";
+  }
+  return "its process is gone and it never recorded an exit code";
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -2058,10 +2786,43 @@ function toUint8Array(buffer: Buffer): Uint8Array {
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
-function hasEntries(record?: Record<string, string>): record is Record<string, string> {
-  return !!record && Object.keys(record).length > 0;
+/**
+ * A page-request size the provider can actually be asked for, or `undefined`
+ * when the caller's value is not one.
+ *
+ * `limit: 0` and `limit: -1` are not page sizes; sending either would ask the
+ * backend to interpret them, and the two mainstream interpretations —
+ * "everything" and "nothing" — are opposite. The caller's configured default
+ * is used instead, and the RESULT cap (a separate concern, resolved by the
+ * caller of this helper) is what honours a zero.
+ */
+/**
+ * Normalize a caller's RESULT cap onto `collectByLabels`'s `cap` option.
+ *
+ * Returns a spreadable fragment so "no cap" is the absence of the key rather
+ * than a sentinel. The three edges are decided, not accidental:
+ *  - `undefined` — no cap; drain the whole listing.
+ *  - `Infinity` — no cap; it is the explicit spelling of the same thing.
+ *  - anything else, INCLUDING `NaN`, negatives and fractions — floored onto a
+ *    non-negative integer, with `NaN` becoming `0`. A cap nobody can interpret
+ *    resolves to "return nothing", never to "return everything": the first is
+ *    visibly wrong to the caller, the second silently drains a listing it asked
+ *    to bound.
+ */
+function resultCap(requested: number | undefined): { cap?: number } {
+  if (requested === undefined || requested === Number.POSITIVE_INFINITY) {
+    return {};
+  }
+  return { cap: Number.isFinite(requested) ? Math.max(0, Math.floor(requested)) : 0 };
 }
 
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+function positivePageSize(requested: number | undefined): number | undefined {
+  if (requested === undefined || !Number.isFinite(requested) || requested < 1) {
+    return undefined;
+  }
+  return Math.floor(requested);
+}
+
+function hasEntries(record?: Record<string, string>): record is Record<string, string> {
+  return !!record && Object.keys(record).length > 0;
 }
