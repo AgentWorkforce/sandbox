@@ -2196,7 +2196,7 @@ describe("create deadline", () => {
     // Must-not-fire control. If the hook fires on a happy reclamation, every
     // operator that wires it up as a leak alert starts paging on non-leaks.
     let finishCreate!: () => void;
-    const { sdk } = createHarness({
+    const { sdk, log } = createHarness({
       get: (name) => ({ name }),
       onCreate: () =>
         new Promise<void>((resolve) => {
@@ -2214,13 +2214,9 @@ describe("create deadline", () => {
       MicrosandboxCreateTimeoutError,
     );
     finishCreate();
-    // Wait for the reclamation to actually complete, otherwise a fast
-    // must-not-fire misses the failure it was supposed to catch.
-    await waitFor(() => {
-      // A working reclamation calls kill+remove; wait for the last step.
-      return true;
-    }, "reclamation to progress");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Wait for the reclamation to actually complete (kill+remove), otherwise
+    // a fast must-not-fire misses the failure it was supposed to catch.
+    await waitFor(() => called(log, "handle.remove"), "reclamation to complete");
     assert.deepEqual(observations, []);
   });
 
@@ -3163,6 +3159,20 @@ describe("startScript (durable async exec)", () => {
     assert.notEqual(dirs[0], dirs[1], "two different session ids must never share a directory");
   });
 
+  it("keeps distinct astral session ids on distinct directories", async () => {
+    // A non-unicode-aware regex walks UTF-16 code units, not code points, so
+    // it would split an astral character into its two surrogate halves and
+    // encode each one separately. `Buffer.from` turns a lone surrogate into
+    // the same replacement character regardless of which surrogate it was,
+    // so every astral character would collapse onto one encoded segment.
+    const { sdk, log } = createHarness({ get: (name) => ({ name }) });
+    const runtime = makeRuntime(sdk);
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "😀" });
+    await runtime.startScript({ id: "s1" }, { command: "true", sessionId: "🙃" });
+    const dirs = argsFor(log, "exec.args").map((args) => (args[0] as string[])[4]);
+    assert.notEqual(dirs[0], dirs[1], "two different astral session ids must never share a directory");
+  });
+
   it("escapes the percent sign it uses as the escape character", async () => {
     const { sdk, log } = createHarness({ get: (name) => ({ name }) });
     const runtime = makeRuntime(sdk);
@@ -3615,6 +3625,24 @@ describe("getScriptLogs", () => {
         assert.ok(error instanceof MicrosandboxLogReadError);
         assert.match(error.message, /exited 1/);
         assert.match(error.message, /tail: cannot open/);
+        return true;
+      },
+    );
+  });
+
+  it("reports a log read with no exit code as a failure, not as success", async () => {
+    // A read that completed without a numeric exit code told us nothing about
+    // whether it succeeded. Defaulting to "success" here would hand the
+    // caller stdout it cannot trust as if it were a verified log.
+    const { sdk } = createHarness({
+      get: (name) => ({ name }),
+      exec: () => ({ stdout: "maybe partial", stderr: "" }),
+    });
+    await assert.rejects(
+      makeRuntime(sdk).getScriptLogs({ id: "s1" }, "sess-1", "cmd-1"),
+      (error: unknown) => {
+        assert.ok(error instanceof MicrosandboxLogReadError);
+        assert.match(error.message, /without an exit code/);
         return true;
       },
     );

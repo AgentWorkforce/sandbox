@@ -2651,7 +2651,16 @@ export class MicrosandboxRuntime implements SandboxRuntime, WorkflowRuntime {
         error,
       );
     }
-    if (typeof output.code === "number" && output.code !== 0) {
+    if (typeof output.code !== "number") {
+      throw new MicrosandboxLogReadError(
+        sessionId,
+        path,
+        `the read completed without an exit code, so its outcome is unknown: ${
+          summarize(output.stderr() ?? "")
+        }`,
+      );
+    }
+    if (output.code !== 0) {
       throw new MicrosandboxLogReadError(
         sessionId,
         path,
@@ -2809,7 +2818,7 @@ function combineOutput(stdout: string, stderr: string): string {
  * never be confused with an encoded one.
  */
 function encodeRunSegment(sessionId: string): string {
-  const encoded = sessionId.replace(/[^A-Za-z0-9_-]/g, (character) =>
+  const encoded = sessionId.replace(/[^A-Za-z0-9_-]/gu, (character) =>
     [...Buffer.from(character, "utf8")]
       .map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`)
       .join(""),
