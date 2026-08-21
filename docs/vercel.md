@@ -90,6 +90,24 @@ is carried in an `AsyncLocalStorage` and joined onto every request the SDK
 issues inside that operation, so concurrent operations on one runtime cannot
 abort each other.
 
+A composite operation shares **one** budget across all of its round trips. This
+is the difference between a timeout and a promise: `runScript` runs the command
+and then fetches its output, `uploadBundle` creates parent directories, writes,
+and verifies, and `start` may look up, settle, resume, and settle again. Giving
+each round trip a fresh copy of the timeout would let a caller who asked for 60
+seconds wait several minutes, and would make `uploadBundle`'s worst case scale
+with the number of directories the bundle happens to span. When a call is cut
+short, the error names *which* cap fired — the operation budget or the SDK retry
+ceiling — because "did not complete within 60000ms" after 25ms sends a reader
+hunting for a slow network instead of at the ceiling they configured.
+
+The vendor boundary is a checked assignment, not a cast. Each SDK result is
+assigned through the structural interface in `internal/sdk.ts`, so a vendor
+signature change breaks the build in the one file that owns the boundary. An
+`as unknown as` would accept the drift silently and surface it later as a
+runtime failure against a live sandbox. (Pattern adopted from
+`modal-adapter-0821`.)
+
 ## Cleanup
 
 Vercel deletion removes the list row rather than flagging it, so absence is the
@@ -142,6 +160,18 @@ crash path.
 Capability means *reachable through this package's ports*. The vendor SDK having
 a method is not the same as this adapter exposing it, and that gap is where
 false capability claims come from.
+
+`reconcileVercelCapabilities` is exported and takes a structural surface rather
+than the concrete runtime, so its *failure* paths are unit-tested with
+deliberately broken fakes. A reconciliation whose failure path nobody has
+exercised is a reconciliation nobody has checked — including the specific check
+that will gate the `cleanupVerified` promotion.
+
+Note that an under-claim is deliberately permitted: `start`/`stop` are
+implemented while `lifecycle` declares `false`. The orchestrator reads the
+declaration, not method presence, so under-claiming is safe — and it is the only
+way a capability can wait for live evidence. A rule forbidding it would make the
+evidence discipline this package runs on impossible.
 
 A construction-time reconciliation walks all three registries — workflow, outer
 declared, observed — and throws `VercelCapabilityMismatchError` if any `true`
@@ -210,12 +240,24 @@ comparison.
 
 ## Live evidence
 
-**Not yet collected.** The n=1 canary and n=7 benchmark — cold create p50/p95,
+**Not yet collected — provider credentials pending Khaliq provisioning
+2026-08-21.** Vercel is not yet in the team's 1Password, so no live run has
+occurred: zero sandboxes created, zero spend. Nothing in the capability table
+above may be read as claimed or measured.
+
+The n=1 canary and n=7 benchmark — cold create p50/p95,
 ready state after create, first exec latency, burst-until-429 concurrency,
 cleanup discipline (destroyed vs verifiedGone), and delivered-vs-documented
 shape — are pending credential provisioning. Until that run lands, every
 behavioral cell in the capability table above stays `false`, and this section
 must not be read as if it contained measurements.
+
+The harness is written and ready to fire: `scripts/vercel-bench.ts`. It ledgers
+each sandbox name and fsyncs it *before* the create call goes out, so a crash
+between submit and response still leaves a reapable record; it caps count,
+vCPUs, and sandbox lifetime; and it ends every run with an independent prefix
+audit that reports `destroyed` and `verifiedGone` as separate numbers. If those
+two disagree, that disagreement is the finding.
 
 ## Dependency provenance
 

@@ -141,6 +141,43 @@ export class VercelCapabilityMismatchError extends Error {
   }
 }
 
+/**
+ * One budget for one logical operation, shared across every round trip it makes.
+ *
+ * The trap this closes: an operation built from four calls that each carry a
+ * 30-second timeout can legitimately take two minutes, which is not what any
+ * caller passing "30 seconds" meant. A `Deadline` fixes `expiresAt` once, and
+ * every subsequent call draws from what is left rather than starting fresh.
+ *
+ * `totalMs` is what the error reports, because that is the promise that was
+ * broken — not the sliver of it that happened to be left when the clock ran out.
+ */
+class Deadline {
+  private readonly expiresAt: number;
+
+  constructor(readonly totalMs: number, readonly operation: string) {
+    this.expiresAt = Date.now() + totalMs;
+  }
+
+  /** Milliseconds left, floored at zero. */
+  remaining(): number {
+    return Math.max(0, this.expiresAt - Date.now());
+  }
+
+  /** Milliseconds left, or throw if the budget is already spent. */
+  require(): number {
+    const left = this.remaining();
+    if (left <= 0) {
+      throw new VercelOperationTimeoutError(this.operation, this.totalMs);
+    }
+    return left;
+  }
+
+  expired(): boolean {
+    return this.remaining() <= 0;
+  }
+}
+
 export interface VercelAttachedSandboxOptions {
   states?: readonly string[] | null;
   owned?: boolean;
@@ -327,7 +364,7 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       DEFAULT_MAX_LIST_PAGES,
     );
     this.injectedApiFactory = dependencies.apiFactory;
-    assertVercelCapabilityImplementation(this);
+    reconcileVercelCapabilities(this);
   }
 
   // --- launch ---------------------------------------------------------------
@@ -546,16 +583,22 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     const timeoutMs = options.timeoutMs && options.timeoutMs > 0
       ? Math.ceil(options.timeoutMs)
       : this.execTimeoutMs;
-    const command = await this.run(timeoutMs, "command", (signal) =>
+    // One budget for the whole call. Fetching the output is a second round
+    // trip, and giving it a fresh `timeoutMs` would let a caller who asked for
+    // 60s wait 120s.
+    const deadline = new Deadline(timeoutMs, "command");
+    const command = await this.run(deadline, "command", (signal) =>
       this.sandbox(handle.id).then((sandbox) =>
         sandbox.runCommand({
           ...this.commandParams(options),
+          // The sandbox-side cap stays the caller's full timeout: the provider
+          // is timing the process, not our round trips.
           timeoutMs,
           signal,
         }),
       ),
     );
-    return this.collect(command, timeoutMs);
+    return this.collect(command, deadline);
   }
 
   async exec(
@@ -655,13 +698,17 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
           .filter((parent): parent is string => parent !== null),
       ),
     ];
+    // One budget across every parent mkdir, the write, and the verification.
+    // Per-call timeouts would make the worst case (parents + 2) x fileTimeoutMs,
+    // which is unbounded in the number of directories a bundle happens to span.
+    const deadline = new Deadline(this.fileTimeoutMs, "bundle upload");
     const sandbox = await this.sandbox(handle.id);
     for (const parent of parents) {
-      await this.run(this.fileTimeoutMs, "mkdir", (signal) =>
+      await this.run(deadline, "mkdir", (signal) =>
         sandbox.mkDir(parent, { signal }),
       );
     }
-    await this.run(this.fileTimeoutMs, "file upload", (signal) =>
+    await this.run(deadline, "file upload", (signal) =>
       sandbox.writeFiles(files, { signal }),
     );
     // The write API reports success without telling us what landed. Verify the
@@ -671,7 +718,7 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       command: files
         .map((file) => `test -f ${shellSingleQuote(file.path)}`)
         .join(" && "),
-      timeoutMs: this.fileTimeoutMs,
+      timeoutMs: deadline.require(),
     });
     if (verified.exitCode !== 0) {
       throw new Error("Failed to verify uploaded Vercel bundle files");
@@ -715,7 +762,9 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       return;
     }
     this.requireOwnedName(handle.id);
-    const current = await this.requireRemote(handle.id);
+    // Lookup, the stop call, and the settle poll all draw from one budget.
+    const deadline = new Deadline(this.lifecycleTimeoutMs, "stop");
+    const current = await this.requireRemote(handle.id, deadline);
     if (isStopped(current.status)) {
       entry.state = "STOPPED";
       handle.state = "STOPPED";
@@ -723,11 +772,9 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
     if (!isStopping(current.status)) {
       const sandbox = await this.sandbox(handle.id);
-      await this.run(this.lifecycleTimeoutMs, "stop", (signal) =>
-        sandbox.stop({ signal }),
-      );
+      await this.run(deadline, "stop", (signal) => sandbox.stop({ signal }));
     }
-    await this.waitForSettled(handle.id, isStopped, "stopped");
+    await this.waitForSettled(handle.id, isStopped, "stopped", deadline);
     entry.state = "STOPPED";
     handle.state = "STOPPED";
   }
@@ -744,22 +791,25 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       return handle;
     }
     this.requireOwnedName(handle.id);
-    const current = await this.requireRemote(handle.id);
+    // Up to four round trips — lookup, settle-if-stopping, resume, settle — so
+    // one budget is the only honest reading of `lifecycleTimeoutMs`.
+    const deadline = new Deadline(this.lifecycleTimeoutMs, "resume");
+    const current = await this.requireRemote(handle.id, deadline);
     if (isTerminated(current.status)) {
       throw new Error(
         `Vercel sandbox "${handle.id}" is ${current.status} and cannot be resumed`,
       );
     }
     if (isStopping(current.status)) {
-      await this.waitForSettled(handle.id, isStopped, "stopped");
+      await this.waitForSettled(handle.id, isStopped, "stopped", deadline);
     }
-    const resumed = await this.run(this.lifecycleTimeoutMs, "resume", (signal) =>
+    const resumed = await this.run(deadline, "resume", (signal) =>
       this.api().then((api) =>
         api.get({ name: handle.id, resume: true, signal }),
       ),
     );
     this.instances.set(handle.id, resumed);
-    await this.waitForSettled(handle.id, isRunning, "running");
+    await this.waitForSettled(handle.id, isRunning, "running", deadline);
     entry.state = "STARTED";
     handle.state = "STARTED";
     return handle;
@@ -782,20 +832,25 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       return;
     }
     this.requireOwnedName(handle.id);
+    // The delete call and the proof of absence share one budget: verification
+    // is part of the teardown, not a second operation with its own allowance.
+    const deadline = new Deadline(this.deleteTimeoutMs, "delete");
     try {
       const sandbox = await this.sandbox(handle.id);
-      await this.run(this.deleteTimeoutMs, "delete", (signal) =>
-        sandbox.delete({ signal }),
-      );
+      await this.run(deadline, "delete", (signal) => sandbox.delete({ signal }));
     } catch (error) {
       if (!isVercelNotFoundError(error)) {
         throw error;
       }
       // Already gone. Fall through to verification, which will agree.
     }
-    const verified = await this.waitUntilDeleted(handle.id, entry.createdAtMs);
+    const verified = await this.waitUntilDeleted(
+      handle.id,
+      deadline,
+      entry.createdAtMs,
+    );
     if (!verified) {
-      throw new VercelDestroyVerificationError(handle.id, this.deleteTimeoutMs);
+      throw new VercelDestroyVerificationError(handle.id, deadline.totalMs);
     }
     this.forget(handle.id);
   }
@@ -841,31 +896,57 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
    * into one typed error. Either alone leaves a hole — the signal alone yields
    * an opaque `AbortError`, the race alone leaves the request running.
    */
+  /**
+   * Bound one logical operation by an absolute deadline.
+   *
+   * Two mechanisms, deliberately: the ambient signal aborts the SDK's requests
+   * *including its internal retries*, and the race turns whatever comes back
+   * into one typed error. Either alone leaves a hole — the signal alone yields
+   * an opaque `AbortError`, the race alone leaves the request running.
+   *
+   * Pass a `Deadline` to share one budget across a multi-round-trip operation;
+   * pass a number for a single call that owns its own budget.
+   */
   private run<T>(
-    timeoutMs: number,
+    budget: number | Deadline,
     operation: string,
     fn: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    const budgetMs = Math.min(timeoutMs, this.retryDeadlineMs);
-    return withRequestDeadline(budgetMs, async () => {
+    const deadline = typeof budget === "number"
+      ? new Deadline(budget, operation)
+      : budget;
+    const remainingMs = deadline.require();
+    // The retry ceiling is an absolute cap on any *single* call, so it clamps
+    // what remains rather than replacing the operation's budget.
+    const callMs = Math.min(remainingMs, this.retryDeadlineMs);
+    // Report whichever cap actually fired. Saying "did not complete within
+    // 60000ms" after 25ms because the retry ceiling cut it short would send a
+    // reader hunting for a slow network instead of at the ceiling they set.
+    const timedOut = () =>
+      callMs < remainingMs
+        ? new VercelOperationTimeoutError(
+            `${operation} (SDK retry ceiling)`,
+            callMs,
+          )
+        : new VercelOperationTimeoutError(deadline.operation, deadline.totalMs);
+    return withRequestDeadline(callMs, async () => {
       const signal = currentRequestDeadlineSignal()!;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([
           fn(signal).catch((error: unknown) => {
             if (isAbortError(error)) {
-              throw new VercelOperationTimeoutError(operation, budgetMs);
+              throw timedOut();
             }
             throw error;
           }),
           new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new VercelOperationTimeoutError(operation, budgetMs)),
-              budgetMs,
-            );
+            timer = setTimeout(() => reject(timedOut()), callMs);
           }),
         ]);
       } finally {
+        // Always cleared: a pinned timer keeps the event loop alive and stops
+        // a short-lived process from exiting.
         if (timer !== undefined) {
           clearTimeout(timer);
         }
@@ -891,10 +972,10 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 
   private async collect(
     command: VercelCommandLike,
-    timeoutMs: number,
+    budget: number | Deadline,
   ): Promise<RunScriptResult> {
     const [stdout, stderr] = await this.run(
-      timeoutMs,
+      budget,
       "command output",
       async (signal) => [
         await command.output("stdout", { signal }),
@@ -976,19 +1057,21 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 
   private async listAll(
     params: { namePrefix: string; tags?: Record<string, string> },
-    timeoutMs: number,
+    budget: number | Deadline,
     operation: string,
     pageSize?: number,
   ): Promise<VercelSandboxListItem[]> {
     const limit = pageSize && pageSize > 0
       ? Math.ceil(pageSize)
       : this.listPageSize;
-    const deadline = Date.now() + timeoutMs;
+    // Every page draws from one budget, so a listing cannot cost pages x timeout.
+    const deadline = typeof budget === "number"
+      ? new Deadline(budget, operation)
+      : budget;
     const items: VercelSandboxListItem[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < this.maxListPages; page += 1) {
-      const remainingMs = Math.max(1, deadline - Date.now());
-      const response = await this.run(remainingMs, operation, (signal) =>
+      const response = await this.run(deadline, operation, (signal) =>
         this.api().then((api) =>
           api.list({
             ...params,
@@ -1019,20 +1102,23 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 
   private async remoteByName(
     name: string,
-    timeoutMs: number,
+    budget: number | Deadline,
   ): Promise<VercelSandboxListItem | null> {
     // `namePrefix` narrows server-side; the exact-name match is still done here
     // because a prefix query legitimately returns siblings.
     const items = await this.listAll(
       { namePrefix: name },
-      timeoutMs,
+      budget,
       `lookup for sandbox "${name}"`,
     );
     return items.find((item) => item.name === name) ?? null;
   }
 
-  private async requireRemote(name: string): Promise<VercelSandboxListItem> {
-    const item = await this.remoteByName(name, this.lookupTimeoutMs);
+  private async requireRemote(
+    name: string,
+    budget: number | Deadline = this.lookupTimeoutMs,
+  ): Promise<VercelSandboxListItem> {
+    const item = await this.remoteByName(name, budget);
     if (!item) {
       throw new Error(`Vercel sandbox "${name}" is no longer available`);
     }
@@ -1043,13 +1129,13 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     name: string,
     settled: (status: string) => boolean,
     description: string,
+    deadline: Deadline,
   ): Promise<VercelSandboxListItem> {
-    const deadline = Date.now() + this.lifecycleTimeoutMs;
     let lastState = "unknown";
     for (;;) {
       const item = await this.remoteByName(
         name,
-        Math.min(this.lookupTimeoutMs, Math.max(1, deadline - Date.now())),
+        Math.min(this.lookupTimeoutMs, Math.max(1, deadline.remaining())),
       );
       if (!item) {
         throw new Error(
@@ -1065,12 +1151,12 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
           `Vercel sandbox "${name}" became ${item.status} while waiting for ${description}`,
         );
       }
-      if (Date.now() >= deadline) {
+      if (deadline.expired()) {
         throw new VercelLifecycleTimeoutError(
           name,
           description,
           lastState,
-          this.lifecycleTimeoutMs,
+          deadline.totalMs,
         );
       }
       await delay(this.pollIntervalMs);
@@ -1088,13 +1174,13 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
    */
   private async waitUntilDeleted(
     name: string,
+    deadline: Deadline,
     createdAtMs?: number,
   ): Promise<boolean> {
-    const deadline = Date.now() + this.deleteTimeoutMs;
     for (;;) {
       const item = await this.remoteByName(
         name,
-        Math.min(this.lookupTimeoutMs, Math.max(1, deadline - Date.now())),
+        Math.min(this.lookupTimeoutMs, Math.max(1, deadline.remaining())),
       );
       if (!item) {
         return true;
@@ -1102,7 +1188,7 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       if (createdAtMs !== undefined && item.createdAt !== createdAtMs) {
         return true;
       }
-      if (Date.now() >= deadline) {
+      if (deadline.expired()) {
         return false;
       }
       await delay(this.pollIntervalMs);
@@ -1152,6 +1238,22 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 }
 
 /**
+ * The subset of a runtime the reconciliation actually inspects.
+ *
+ * Structural rather than `VercelSandboxRuntime` so the failure modes can be
+ * unit-tested with deliberately broken fakes. A reconciliation whose failure
+ * path is untestable is a reconciliation nobody has checked.
+ */
+export type VercelCapabilitySurface = {
+  getById?: unknown;
+  findAllByLabels?: unknown;
+  start?: unknown;
+  stop?: unknown;
+  destroy?: unknown;
+  listOwned?: unknown;
+};
+
+/**
  * Construction-time reconciliation between the SDK-free declarations and the
  * surface actually implemented.
  *
@@ -1162,8 +1264,8 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
  * without the implementation behind it throws here, at construction, rather
  * than surfacing as a runtime surprise at the call site.
  */
-function assertVercelCapabilityImplementation(
-  runtime: VercelSandboxRuntime,
+export function reconcileVercelCapabilities(
+  runtime: VercelCapabilitySurface,
 ): void {
   const workflowRegistry: Record<
     keyof typeof vercelWorkflowCapabilities,

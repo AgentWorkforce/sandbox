@@ -222,17 +222,17 @@ export function deadlineBoundFetch(
  * Credentials are passed explicitly on every static call rather than left to
  * the SDK's ambient resolution, which would otherwise fall back to the
  * operator's environment or an on-disk OAuth token.
+ *
+ * Note what this function does *not* do: cast. Each vendor result is assigned
+ * **through** the structural type above, so if the SDK changes a signature the
+ * build breaks here, in the one file that owns the boundary. An
+ * `as unknown as` would accept the drift silently and surface it later as a
+ * runtime failure against a live sandbox.
  */
 export async function createOfficialVercelSandboxApi(
   credentials: VercelCredentials,
 ): Promise<VercelSandboxApiLike> {
-  const { Sandbox } = (await import("@vercel/sandbox")) as unknown as {
-    Sandbox: {
-      create(params: unknown): Promise<VercelSandboxLike>;
-      get(params: unknown): Promise<VercelSandboxLike>;
-      list(params: unknown): Promise<VercelSandboxListPage>;
-    };
-  };
+  const { Sandbox } = await import("@vercel/sandbox");
   const fetch = deadlineBoundFetch();
   const auth = {
     token: credentials.token,
@@ -240,8 +240,37 @@ export async function createOfficialVercelSandboxApi(
     projectId: credentials.projectId,
   };
   return {
-    create: (params) => Sandbox.create({ ...params, ...auth, fetch }),
-    get: (params) => Sandbox.get({ ...params, ...auth, fetch }),
-    list: (params) => Sandbox.list({ ...params, ...auth, fetch }),
+    create: async (params) => {
+      const { image, runtime, ...rest } = params;
+      // `image` and `runtime` are mutually exclusive upstream, so the call is
+      // narrowed to one branch instead of handing over an object that claims
+      // both are possible.
+      const created = runtime
+        ? await Sandbox.create({ ...rest, runtime, ...auth, fetch })
+        : await Sandbox.create({
+            ...rest,
+            ...(image ? { image } : {}),
+            ...auth,
+            fetch,
+          });
+      const checked: VercelSandboxLike = created;
+      return checked;
+    },
+    get: async (params) => {
+      const checked: VercelSandboxLike = await Sandbox.get({
+        ...params,
+        ...auth,
+        fetch,
+      });
+      return checked;
+    },
+    list: async (params) => {
+      const checked: VercelSandboxListPage = await Sandbox.list({
+        ...params,
+        ...auth,
+        fetch,
+      });
+      return checked;
+    },
   };
 }

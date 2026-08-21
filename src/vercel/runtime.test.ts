@@ -22,6 +22,8 @@ import type {
   VercelSandboxListPage,
 } from "./internal/sdk.js";
 import {
+  reconcileVercelCapabilities,
+  VercelCapabilityMismatchError,
   VercelDestroyVerificationError,
   VercelForeignSandboxError,
   VercelListPageLimitError,
@@ -339,6 +341,53 @@ describe("VercelSandboxRuntime construction", () => {
     } finally {
       vercelObservedCapabilities.fork = false;
     }
+  });
+
+  it("rejects a fake runtime that claims a capability it does not implement", () => {
+    const complete = {
+      getById() {},
+      findAllByLabels() {},
+      start() {},
+      stop() {},
+      destroy() {},
+      listOwned() {},
+    };
+    // The real declarations are all conservative, so a complete surface passes.
+    reconcileVercelCapabilities(complete);
+
+    // persistentHandle is declared true, so losing getById must be caught.
+    const { getById, ...withoutGetById } = complete;
+    assert.throws(
+      () => reconcileVercelCapabilities(withoutGetById),
+      VercelCapabilityMismatchError,
+    );
+
+    // cleanupVerified is the cell queued for promotion. Prove the check that
+    // will gate that promotion actually bites before we rely on it.
+    vercelObservedCapabilities.cleanupVerified = true;
+    try {
+      reconcileVercelCapabilities(complete); // implemented: allowed
+      const { listOwned, ...withoutAudit } = complete;
+      assert.throws(
+        () => reconcileVercelCapabilities(withoutAudit),
+        VercelCapabilityMismatchError,
+        "cleanupVerified must not be claimable without an audit surface",
+      );
+    } finally {
+      vercelObservedCapabilities.cleanupVerified = false;
+    }
+  });
+
+  it("permits a conservative under-claim, which is how evidence gating works", () => {
+    // start/stop are implemented while `lifecycle` declares false. That is
+    // deliberate: the orchestrator reads the declaration, not the methods, so
+    // an under-claim is safe and is the only way a capability can wait for live
+    // evidence. Forbidding it would make the evidence discipline impossible.
+    assert.equal(vercelSandboxCapabilities.lifecycle, false);
+    const runtime = makeRuntime(new FakeVercel());
+    assert.equal(typeof runtime.start, "function");
+    assert.equal(typeof runtime.stop, "function");
+    assert.equal(resolveSandboxRuntimeCapabilities(runtime).lifecycle, false);
   });
 
   it("resolves port capabilities from the implemented surface", () => {
@@ -992,7 +1041,44 @@ describe("VercelSandboxRuntime deadlines", () => {
       runtime.getById(`${PREFIX}-any`),
       (error: unknown) =>
         error instanceof VercelOperationTimeoutError
-        && error.timeoutMs === 25,
+        && error.timeoutMs === 25
+        // The error names the cap that actually fired, so 25ms is not reported
+        // as a breach of the 60s budget.
+        && error.operation.includes("SDK retry ceiling"),
+    );
+  });
+
+  it("shares one budget across the round trips of a composite operation", async () => {
+    // Two round trips (run the command, then fetch its output) against a
+    // provider that stalls on the second. A per-call timeout would allow
+    // 2 x 40ms; one shared budget must not.
+    let outputCalls = 0;
+    const fake = new FakeVercel();
+    const runtime = makeRuntime(fake);
+    const handle = await runtime.launch({});
+    const sandbox = await (runtime as unknown as {
+      sandbox(name: string): Promise<{ runCommand: unknown }>;
+    }).sandbox(handle.id);
+    const original = sandbox.runCommand as (p: unknown) => Promise<unknown>;
+    (sandbox as { runCommand: unknown }).runCommand = async (p: unknown) => {
+      const command = (await original.call(sandbox, p)) as { output: unknown };
+      command.output = async () => {
+        outputCalls += 1;
+        return new Promise<string>(() => {});
+      };
+      return command;
+    };
+
+    const started = Date.now();
+    await assert.rejects(
+      runtime.runScript(handle, { command: "x", timeoutMs: 40 }),
+      VercelOperationTimeoutError,
+    );
+    const elapsed = Date.now() - started;
+    assert.equal(outputCalls, 1);
+    assert.ok(
+      elapsed < 200,
+      `composite op must stay inside one 40ms budget, took ${elapsed}ms`,
     );
   });
 });

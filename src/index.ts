@@ -118,9 +118,11 @@ export {
   VercelSandboxRuntime,
   VercelTagLimitError,
   VercelUnknownExitCodeError,
+  reconcileVercelCapabilities,
 } from "./vercel/runtime.js";
 export type {
   VercelAttachedSandboxOptions,
+  VercelCapabilitySurface,
   VercelBundleFile,
   VercelListOwnedOptions,
   VercelOwnedSandbox,
