@@ -25,10 +25,18 @@
     "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "peerDependencies": {
+    "@aws-sdk/client-bedrock-agentcore": ">=3.1115.0 <4.0.0",
+    "@aws-sdk/client-bedrock-agentcore-control": ">=3.1115.0 <4.0.0",
     "@daytonaio/sdk": ">=0.180.0 <0.181.0",
     "e2b": ">=2.35.0 <3.0.0"
   },
   "peerDependenciesMeta": {
+    "@aws-sdk/client-bedrock-agentcore": {
+      "optional": true
+    },
+    "@aws-sdk/client-bedrock-agentcore-control": {
+      "optional": true
+    },
     "@daytonaio/sdk": {
       "optional": true
     },
@@ -37,6 +45,8 @@
     }
   },
   "devDependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1115.0",
+    "@aws-sdk/client-bedrock-agentcore-control": "^3.1115.0",
     "@daytonaio/sdk": "^0.180.0",
     "@types/node": "^22",
     "e2b": "^2.35.0",
