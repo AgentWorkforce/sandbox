@@ -3636,7 +3636,7 @@ describe("getScriptLogs", () => {
     // caller stdout it cannot trust as if it were a verified log.
     const { sdk } = createHarness({
       get: (name) => ({ name }),
-      exec: () => ({ stdout: "maybe partial", stderr: "" }),
+      exec: () => ({ unknownCode: true, stdout: "maybe partial", stderr: "" }),
     });
     await assert.rejects(
       makeRuntime(sdk).getScriptLogs({ id: "s1" }, "sess-1", "cmd-1"),
