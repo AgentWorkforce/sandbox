@@ -128,6 +128,25 @@ export type {
   ResolvedModalRuntimeOptions,
 } from "./modal/config.js";
 export {
+  MODAL_RATES,
+  ModalBenchLedger,
+  ModalBudgetExceededError,
+  ModalLeakedSandboxError,
+  estimateModalFunctionCostUsd,
+  estimateModalSandboxCostUsd,
+  percentile,
+  runModalBenchmark,
+} from "./modal/bench.js";
+export type {
+  ModalBenchOptions,
+  ModalBenchReport,
+  ModalBenchSample,
+  ModalCostInput,
+  ModalLedgerEntry,
+  ModalLedgerEntryState,
+} from "./modal/bench.js";
+export {
+  MODAL_STRUCTURALLY_FALSE,
   modalObservedCapabilities,
   modalSandboxCapabilities,
   modalWorkflowCapabilities,

@@ -14,13 +14,29 @@ npm install modal@0.9.0
 | Version | `0.9.0`, published 2026-07-09 |
 | License | Apache-2.0 |
 | Integrity | `sha512-kCXcdJkhbJorf/q/6T9Wdlg6in9JmRnCNQnV6rVBMyeqNV/iXI6BYk4IzY4cvZ6dbauNeDMjk/Q08cbxvoIaXg==` |
-| `gitHead` | `79b729fb75abdde51d1130d3a7347416a5da75b6` |
+| Tarball SHA-1 | `c6499f7dfd87702832d1def619036d8569390f4b` — **verified** against the registry's `dist.shasum` |
+| Registry signature | **verified** (`npm audit signatures`) |
+| SLSA provenance attestation | **none published** for this version |
+| `gitHead` (packument) | `79b729fb75abdde51d1130d3a7347416a5da75b6` — **recorded but NOT verifiable**, see below |
 | Docs | <https://modal.com/docs/sdk/js/latest/Sandbox> |
 
-The tarball's SHA-1 was verified against the registry's `dist.shasum`
-(`c6499f7dfd87702832d1def619036d8569390f4b`) and the API surface mirrored in
-`src/modal/internal/sdk.ts` was read from that release's shipped `index.d.ts`,
-not from documentation prose.
+The API surface mirrored in `src/modal/internal/sdk.ts` was read from that
+release's shipped `index.d.ts`, not from documentation prose.
+
+**A provenance caveat worth carrying to other adapters.** The packument's
+`gitHead` does *not* resolve to a public commit: an authenticated lookup of
+`79b729fb…` returns "No commit found" in **both** `modal-labs/libmodal` (where
+the JS SDK's source lives) and `modal-labs/modal-client` (which is what the
+packument's `repository` field actually points at — itself a mismatch, since
+that repo is the Python client). Modal also publishes **no SLSA attestation**
+for this version, so there is no signed build-provenance path to fall back on
+either.
+
+So `gitHead` is recorded here for completeness and is explicitly **not** relied
+on. What this adapter's provenance actually rests on is the pair that *were*
+verified: the tarball hash matching the registry's `dist.shasum`, and the
+registry signature. A `gitHead` that cannot be resolved is a string, not
+evidence, and should not be quoted as one.
 
 The peer range is pinned narrowly (`>=0.9.0 <0.10.0`) because the SDK is a `0.x`
 beta whose own README states that breaking changes ship in `0.X.0` releases.
@@ -203,10 +219,72 @@ having been accepted.
 It is not part of `SandboxRuntime`, but a short-lived Node process that never
 calls it will not exit.
 
-## Evidence status
+## Live evidence: not yet collected
 
-No capability in `modalObservedCapabilities` has been promoted. The adapter and
-its 60 mocked contract tests are complete, but no live run has occurred —
-credentials were still outstanding at the time of writing. Modal authenticates
-with a **token pair** (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`), not a single
-bearer key, and the adapter never reads them from ambient process state.
+**Provider credentials pending Khaliq provisioning, 2026-08-21.** Modal is not
+yet present in 1Password — a read-only scan found zero Modal items across the
+account — so no live run has occurred and **no capability cell may be read as
+claimed**.
+
+Every cell in `modalObservedCapabilities` is `false`, including
+`cleanupVerified`. Promotion requires a dated live-canary note in this section
+quoting a measured result; nothing is promoted on the strength of an SDK
+signature.
+
+| Cell | Status | Promotable by a live run? |
+|---|---|---|
+| `cleanupVerified` | `false` | Yes |
+| `warmLease` | `false` | Yes — the top promotion target |
+| `reattach` | `false` | Yes |
+| `snapshotCapture` | `false` | Yes |
+| `lifetimeOverride` | `false` | Yes |
+| `concurrencyCeiling` | `false` | Yes |
+| `lifecycle` | `false` | **No — structurally impossible.** Modal has no stop/start. |
+| `neverIdle` | `false` | **No — structurally impossible.** Every Modal Sandbox carries a termination deadline: 5 minutes by default, 24 hours at most. |
+
+The two structural cells are also listed in `MODAL_STRUCTURALLY_FALSE`, so a
+future canary cannot mistake them for pending observations and "promote" them.
+
+Still UNKNOWN until a live run happens: cold-create p50/p95, readiness and
+first-exec latency, concurrency ceiling, cleanup verification, delivered-vs-
+requested shape, and whether the 2 vCPU / 4 GiB reference shape is grantable on
+the account's plan.
+
+Modal authenticates with a **token pair** (`MODAL_TOKEN_ID`,
+`MODAL_TOKEN_SECRET`), not a single bearer key, and the adapter never reads
+either from ambient process state.
+
+### The benchmark harness is ready and waits on credentials only
+
+`src/modal/bench.ts` implements the run; `src/modal/live.bench.test.ts` is the
+gated entry point. It fires as soon as the token pair exists:
+
+```bash
+MODAL_LIVE_BENCH=1 MODAL_BENCH_APP=<app> MODAL_BENCH_IMAGE=python:3.13 \
+MODAL_ENVIRONMENT=<non-main-env> \
+  op run --env-file=<(printf '%s\n%s\n' \
+     'MODAL_TOKEN_ID=op://AI Agents/Modal/MODAL_TOKEN_ID' \
+     'MODAL_TOKEN_SECRET=op://AI Agents/Modal/MODAL_TOKEN_SECRET') -- \
+  node --test --import tsx src/modal/live.bench.test.ts
+```
+
+It creates billable resources, so it is guarded on three independent axes, each
+sufficient alone:
+
+- **Ledger before use.** Intent is recorded *before* the create call is issued,
+  so a create that times out or dies mid-flight still leaves a record. Logging
+  only successful creates would lose precisely the sandboxes most likely to
+  leak.
+- **Bounded cost.** A projection at Modal's published sandbox rate is charged
+  against a hard cap before each create, and the run aborts rather than exceed
+  it. The projection uses the sandbox's *full configured lifetime*, not its
+  expected duration, because a leaked sandbox bills for all of it.
+- **Verified cleanup.** Teardown runs in a `finally` — including when the budget
+  guard aborts the run — and every id is re-checked against the provider
+  afterwards. A survivor raises `ModalLeakedSandboxError` rather than being
+  assumed gone. Where a runtime cannot re-resolve by id, the entry stays
+  `destroyed` rather than being upgraded to `verified-gone`.
+
+All three guards are unit-tested against a fake runtime in
+`src/modal/bench.test.ts`, so they are proven before they are trusted with a
+real account.

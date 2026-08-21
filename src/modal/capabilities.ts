@@ -84,6 +84,18 @@ export type ModalObservedCapabilities = {
   reattach: boolean;
   /** stop -> settled -> start -> exec succeeded. Structurally impossible on Modal. */
   lifecycle: boolean;
+  /**
+   * A sandbox can be kept alive indefinitely with no termination deadline.
+   *
+   * Structurally false on Modal, like {@link lifecycle}, and for the same kind
+   * of reason: *every* Modal Sandbox carries a maximum lifetime. It defaults to
+   * five minutes, it can be raised only as far as 24 hours, and the provider
+   * terminates the sandbox when it elapses. There is no "no deadline" setting.
+   * Past 24 hours Modal's own guidance is to snapshot the filesystem and
+   * restore it into a *new* sandbox, which is a rebuild rather than a
+   * continuation. No live run can promote this.
+   */
+  neverIdle: boolean;
   /** A sandbox outlived Modal's 5-minute default because we set maxLifetimeMs. */
   lifetimeOverride: boolean;
   /** Concurrent creates all reached ready without provider-side throttling. */
@@ -97,6 +109,21 @@ export const modalObservedCapabilities: ModalObservedCapabilities = {
   warmLease: false,
   reattach: false,
   lifecycle: false,
+  neverIdle: false,
   lifetimeOverride: false,
   concurrencyCeiling: false,
 };
+
+/**
+ * Cells that are **settled structural facts**, not pending observations.
+ *
+ * The distinction matters for review: everything else in
+ * {@link modalObservedCapabilities} is `false` only because no live run has
+ * happened yet and will flip when one does. These two are `false` because the
+ * provider cannot do the thing at all, so a future canary must not "promote"
+ * them and a future reader must not try to "fix" them.
+ */
+export const MODAL_STRUCTURALLY_FALSE = [
+  "lifecycle",
+  "neverIdle",
+] as const satisfies ReadonlyArray<keyof ModalObservedCapabilities>;
