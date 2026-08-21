@@ -107,6 +107,43 @@ export type {
   Agent37FetchResponse,
 } from "./agent37/client.js";
 
+export {
+  ModalCapabilityMismatchError,
+  ModalDeadlineExceededError,
+  ModalForeignSandboxError,
+  ModalRuntime,
+  ModalTagCollisionError,
+  reconcileModalCapabilities,
+} from "./modal/runtime.js";
+export {
+  MODAL_DEFAULTS,
+  MODAL_MIN_CPU_CORES,
+  resolveModalRuntimeOptions,
+} from "./modal/config.js";
+export type {
+  ModalCredentials,
+  ModalResourceShape,
+  ModalRuntimeOptions,
+  ResolvedModalRuntimeOptions,
+} from "./modal/config.js";
+export {
+  modalObservedCapabilities,
+  modalSandboxCapabilities,
+  modalWorkflowCapabilities,
+} from "./modal/capabilities.js";
+export type { ModalObservedCapabilities } from "./modal/capabilities.js";
+export type {
+  ModalClientFactory,
+  ModalClientLike,
+  ModalContainerProcessLike,
+  ModalExecParams,
+  ModalFilesystemLike,
+  ModalSandboxCreateParams,
+  ModalSandboxLike,
+  ModalSandboxListParams,
+  ModalSandboxServiceLike,
+} from "./modal/internal/sdk.js";
+
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 
