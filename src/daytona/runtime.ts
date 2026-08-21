@@ -9,6 +9,8 @@ import type {
   RuntimeHandle,
   WorkflowRuntime,
 } from '../types.js';
+import { fetchDaytonaWireSupplement } from './wire-supplement.js';
+import type { DaytonaWireSupplement } from './wire-supplement.js';
 
 export interface DaytonaRuntimeOptions {
   daytona: Daytona;
@@ -662,6 +664,14 @@ export class DaytonaRuntime implements WorkflowRuntime {
     const homeDir = await this.resolveHomeDir(sandbox);
     handle.homeDir = homeDir;
     return homeDir;
+  }
+
+  /**
+   * Fetches the sandboxClass + warmPoolId fields Daytona's wire response
+   * carries that the SDK's Sandbox class drops. See wire-supplement.ts.
+   */
+  async getWireSupplement(handle: RuntimeHandle): Promise<DaytonaWireSupplement> {
+    return fetchDaytonaWireSupplement(this.daytona, handle.id);
   }
 
   async destroy(handle: RuntimeHandle): Promise<void> {

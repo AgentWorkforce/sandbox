@@ -93,6 +93,27 @@ while the matching provider process is present. If that process disappears
 without publishing its exit sidecar, status becomes terminal with
 `E2B_ASYNC_PROCESS_LOST_EXIT_CODE` (`255`).
 
+### Daytona wire-supplement
+
+Daytona's Sandbox wire response carries two fields — `sandboxClass` (the
+sandbox's class/tier) and `warmPoolId` (set while a sandbox is an unclaimed
+warm-pool member) — that exist on the low-level `@daytona/api-client` DTOs but
+that the vendored `@daytonaio/sdk`'s `Sandbox` class does not copy onto
+itself. `DaytonaRuntime.getWireSupplement(handle)` fetches both directly via
+the SDK's low-level `sandboxApi`, the same reach pattern `runtime.ts` already
+uses for detached create.
+
+This is a narrow, deliberately temporary gap, not a fork of the SDK: the
+other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
+`spot`) already ship on the public `Sandbox` class as of `@daytonaio/sdk`
+0.200.0–0.205.0 — a dependency bump alone covers those. Tracked upstream at
+[daytona/clients#TODO](https://github.com/daytona/clients/issues/TODO)
+(precedent: [#192](https://github.com/daytona/clients/pull/192), which added
+`spot` the same way). Retire `src/daytona/wire-supplement.ts` once
+`processSandboxDto()` copies `sandboxClass`/`warmPoolId` and a subsequent SDK
+bump picks that up — `runtime.test.ts`'s `DaytonaRuntime smoke` suite has a
+load-bearing regression test that fails once that happens.
+
 ## Development
 
 ```bash

@@ -1659,6 +1659,39 @@ describe('DaytonaRuntime shared primitives', () => {
       'sbx-original-cleanup-fails',
     ]);
   });
+
+  it('getWireSupplement fetches sandboxClass and warmPoolId that the SDK Sandbox class drops', async () => {
+    const requestedIds: string[] = [];
+    const daytona = {
+      sandboxApi: {
+        getSandbox: async (id: string) => {
+          requestedIds.push(id);
+          return { data: { id, sandboxClass: 'container', warmPoolId: 'wp-123' } };
+        },
+      },
+    };
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: daytona as never });
+
+    const supplement = await runtime.getWireSupplement({ id: 'sbx-supplement' });
+
+    assert.deepEqual(supplement, { sandboxClass: 'container', warmPoolId: 'wp-123' });
+    assert.deepEqual(requestedIds, ['sbx-supplement']);
+  });
+
+  it('getWireSupplement omits fields the wire response leaves unset', async () => {
+    // warmPoolId is only set while a sandbox is an unclaimed warm-pool member;
+    // most sandboxes legitimately have neither field on the wire.
+    const daytona = {
+      sandboxApi: {
+        getSandbox: async (id: string) => ({ data: { id } }),
+      },
+    };
+    const runtime = new DaytonaRuntime({ defaultHomeDir: TEST_HOME_DIR, daytona: daytona as never });
+
+    const supplement = await runtime.getWireSupplement({ id: 'sbx-no-supplement' });
+
+    assert.deepEqual(supplement, {});
+  });
 });
 
 function fakeSandbox(input: {
@@ -1937,6 +1970,64 @@ describe('DaytonaRuntime smoke', { concurrency: false }, () => {
 
       assert.equal(result.exitCode, 0, result.output);
       assert.match(result.output, /\brestarted-ok\b/u);
+    },
+  );
+
+  // LOAD-BEARING: this must fail red if any of three premises breaks.
+  //  (a) Daytona removes sandboxClass from the wire response — the
+  //      wire-supplement layer would then silently return nothing useful.
+  //  (b) The vendored @daytonaio/sdk starts copying sandboxClass or
+  //      warmPoolId onto its Sandbox class itself — this whole module
+  //      (and the upstream PR it tracks) can be retired.
+  //  (c) The SDK drops one of the three fields (autoDestroyAt,
+  //      autoPauseInterval, spot) already exposed on Sandbox — proves
+  //      the test is checking the SDK class, not our supplement.
+  // See docs/daytona.md.
+  it(
+    'wire response still carries sandboxClass, and the SDK Sandbox class still lacks sandboxClass/warmPoolId while exposing autoDestroyAt/autoPauseInterval/spot',
+    { skip: HAS_DAYTONA ? false : 'DAYTONA_API_KEY is not set', timeout: 120_000 },
+    async () => {
+      assert.ok(runtime, 'runtime should be initialised when DAYTONA_API_KEY is set');
+      assert.ok(daytona, 'daytona client should be initialised when DAYTONA_API_KEY is set');
+      assert.ok(handle, 'the prior smoke test must have launched a sandbox');
+
+      // (a) MUST-FIRE: fails if Daytona ever drops sandboxClass from the wire.
+      // warmPoolId is intentionally not asserted here — Daytona only sets it
+      // while a sandbox is an unclaimed warm-pool member, which this
+      // ordinary launched sandbox is not; asserting it live would require
+      // creating a warm-pool sandbox, out of scope for a routine regression.
+      const supplement = await runtime!.getWireSupplement(handle!);
+      assert.ok(
+        typeof supplement.sandboxClass === 'string' && supplement.sandboxClass.length > 0,
+        `expected sandboxClass on the wire response, got: ${JSON.stringify(supplement)}`,
+      );
+
+      const sdkSandbox = await daytona!.get(handle!.id);
+
+      // (b) MUST-FIRE retirement signal: the moment the SDK's Sandbox class
+      // starts carrying either field, delete src/daytona/wire-supplement.ts
+      // and its call sites — the supplement is a temporary workaround.
+      assert.equal(
+        'sandboxClass' in sdkSandbox,
+        false,
+        'SDK Sandbox class now exposes sandboxClass; retire src/daytona/wire-supplement.ts',
+      );
+      assert.equal(
+        'warmPoolId' in sdkSandbox,
+        false,
+        'SDK Sandbox class now exposes warmPoolId; retire src/daytona/wire-supplement.ts',
+      );
+
+      // (c) MUST-NOT-FIRE control: proves the checks above are reading the
+      // SDK's own Sandbox class, not our supplement — fails if the SDK ever
+      // drops these three (all landed by 0.200.0-0.205.0; already exposed by
+      // processSandboxDto() at daytona/clients HEAD as of 2026-08-21).
+      for (const field of ['autoDestroyAt', 'autoPauseInterval', 'spot'] as const) {
+        assert.ok(
+          field in sdkSandbox,
+          `expected the SDK's Sandbox class to expose "${field}" as of @daytonaio/sdk ^0.205.x`,
+        );
+      }
     },
   );
 });
