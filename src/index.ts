@@ -30,6 +30,7 @@ export type {
   LifetimeMode,
   OutputStreamMode,
   SnapshotMode,
+  ResolvedSandboxRuntimeCapabilities,
   RunScriptResult,
   SandboxCapabilityModes,
   SandboxCountOptions,
