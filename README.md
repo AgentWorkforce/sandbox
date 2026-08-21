@@ -51,9 +51,11 @@ label — instead of discovering the answer from a failure at run time.
 `DaytonaRuntime.start()` does not trust the provider state transition alone. It
 rehydrates the SDK sandbox and runs a bounded `true` readiness probe after `start`,
 because Daytona can report `STARTED` while its Toolbox exec daemon remains
-unavailable. A healthy restart keeps the same sandbox ID.
+unavailable. A healthy restart keeps the same sandbox ID. A failure during that
+rehydration itself (auth, rate limit, or network) is not proof the exec daemon
+is dead, so it is propagated as-is and never triggers a replacement.
 
-When that post-start command fails, the runtime defaults to creating and proving
+When the post-start readiness probe fails, the runtime defaults to creating and proving
 a replacement before deleting the unusable sandbox. The returned handle is
 updated in place and can therefore have a new `id`; callers must persist that
 returned ID. The replacement preserves the configured snapshot plus provider

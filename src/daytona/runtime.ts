@@ -701,10 +701,13 @@ export class DaytonaRuntime implements WorkflowRuntime {
     };
     if (client.stop) {
       await client.stop(entry.sandbox);
-    } else {
-      await entry.sandbox.stop?.();
+      handle.state = 'STOPPED';
+      return;
     }
-    handle.state = 'STOPPED';
+    if (typeof entry.sandbox.stop === 'function') {
+      await entry.sandbox.stop();
+      handle.state = 'STOPPED';
+    }
   }
 
   async start(handle: RuntimeHandle): Promise<RuntimeHandle> {
@@ -733,7 +736,11 @@ export class DaytonaRuntime implements WorkflowRuntime {
     // A failed control-plane rehydration is not proof that this specific
     // sandbox's exec daemon is dead (it can be auth, rate limit, or network),
     // so never create a second resource for that class of failure.
-    const restartedSandbox = await this.daytona.get(handle.id);
+    const restartedSandbox = await awaitLookupOperation(
+      this.daytona.get(handle.id),
+      lookupDeadline(undefined),
+      `rehydrating sandbox ${handle.id} after start`,
+    );
     try {
       await this.assertSandboxExecHealthy(restartedSandbox);
     } catch (restartError) {
@@ -756,6 +763,13 @@ export class DaytonaRuntime implements WorkflowRuntime {
     const originalSandbox = entry.sandbox;
     const originalId = handle.id;
     let replacement: Sandbox | undefined;
+
+    // entry.sandbox can be a list-derived object registered via attachSandbox
+    // without ever going through get(), which leaves env, volumes, and
+    // network settings unpopulated until refreshData() runs. Hydrate before
+    // reading it for replacementCreateParams so those settings are not
+    // silently dropped from the replacement.
+    await (originalSandbox as unknown as { refreshData?: () => Promise<void> }).refreshData?.();
 
     try {
       // Do not copy the name: Daytona requires names to be unique while the
@@ -892,9 +906,15 @@ export class DaytonaRuntime implements WorkflowRuntime {
   private updateHandleFromSandbox(handle: RuntimeHandle, sandbox: Sandbox): void {
     handle.id = sandbox.id;
     handle.state = this.readSandboxState(sandbox)?.toUpperCase() ?? 'STARTED';
-    handle.createdAt = sandbox.createdAt;
-    handle.updatedAt = sandbox.updatedAt;
-    handle.lastActivityAt = sandbox.lastActivityAt;
+    if (sandbox.createdAt) {
+      handle.createdAt = sandbox.createdAt;
+    }
+    if (sandbox.updatedAt) {
+      handle.updatedAt = sandbox.updatedAt;
+    }
+    if (sandbox.lastActivityAt) {
+      handle.lastActivityAt = sandbox.lastActivityAt;
+    }
   }
 
   private async createSandbox(options: LaunchOptions): Promise<Sandbox> {
