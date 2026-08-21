@@ -8,6 +8,12 @@ Validated against the official JavaScript/TypeScript SDK:
 npm install modal@0.9.0
 ```
 
+**Node.js 22 or later is required.** `modal@0.9.0`'s package metadata declares
+no `engines` constraint, but its README states Node.js 22+ is required. The
+wider repository still supports Node.js 20 elsewhere, so this constraint is
+scoped to consumers who load the Modal adapter — Node.js 20 will resolve and
+install the package and then fail at import time inside `modal` itself.
+
 | Field | Value |
 |---|---|
 | Package | `modal` (modal-labs/libmodal) |
@@ -205,9 +211,10 @@ not to be conflated with Relayfile.
 
 **Networking.** `blockNetwork`, `outboundCidrAllowlist`,
 `outboundDomainAllowlist`, `inboundCidrAllowlist`, and `updateNetworkPolicy` on
-a running sandbox. The adapter surfaces `blockNetwork` and region pinning, and
-rejects the combination — a network-blocked sandbox has no reachability for
-region placement to affect.
+a running sandbox. The adapter surfaces `blockNetwork` and region pinning; both
+are forwarded to `sandboxes.create` independently. A caller who legitimately
+needs outbound isolation *and* a specific placement region — for data
+residency, latency, or capacity reasons — can set both.
 
 **Tunnels, sidecars, readiness probes, OIDC identity tokens, custom domains.**
 Present in the SDK, outside this port.
@@ -226,10 +233,17 @@ Storage (Volumes) is $0.09/GiB/month with 1 TiB/month included. One physical
 core counts as two vCPU, and the floor is 0.125 cores per container.
 
 At a 2 vCPU / 4 GiB reference shape (`cpu: 1`, `memoryMiB: 4096`) that is
-**$0.23796 per running hour**. Because there is no stop/start, a
-sleep-when-idle duty cycle is not merely expensive on Modal — it does not
-exist. The only idle strategy is terminate and recreate, which loses all state
-unless a filesystem snapshot is paid for and re-created from.
+**$0.23796 per running hour** as a *requested-resource baseline*, not a cap.
+Modal bills the greater of the requested reservation and actual usage, so
+bursting past the request raises the bill; region pinning applies a multiplier
+on top (roughly 1.5× for a broad region like `us`, 1.75× for a narrow one like
+`us-west`, per Modal's region-selection pricing). Treat the hourly figure as a
+lower bound on cost for this shape, not a ceiling.
+
+Because there is no stop/start, a sleep-when-idle duty cycle is not merely
+expensive on Modal — it does not exist. The only idle strategy is terminate and
+recreate, which loses all state unless a filesystem snapshot is paid for and
+re-created from.
 
 Rates read from <https://modal.com/pricing> on 2026-08-21. Provider pricing is
 time-unstable; re-verify before relying on these figures.
