@@ -107,7 +107,7 @@ This is a narrow, deliberately temporary gap, not a fork of the SDK: the
 other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
 `spot`) already ship on the public `Sandbox` class as of `@daytonaio/sdk`
 0.200.0–0.205.0 — a dependency bump alone covers those. Tracked upstream at
-[daytona/clients#TODO](https://github.com/daytona/clients/issues/TODO)
+[daytona/clients#207](https://github.com/daytona/clients/issues/207)
 (precedent: [#192](https://github.com/daytona/clients/pull/192), which added
 `spot` the same way). Retire `src/daytona/wire-supplement.ts` once
 `processSandboxDto()` copies `sandboxClass`/`warmPoolId` and a subsequent SDK
