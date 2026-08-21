@@ -45,6 +45,8 @@ describe("E2BSandboxRuntime public contract", () => {
         outputStreams: "unknown",
         filesystem: "unknown",
         lifetime: "unknown",
+        interactive: "unknown",
+        snapshots: "unknown",
       },
     });
   });

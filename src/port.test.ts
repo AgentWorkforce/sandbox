@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  isPendingEvidence,
   resolveSandboxRuntimeCapabilities,
   type SandboxRuntime,
 } from "./port.js";
@@ -28,6 +29,8 @@ describe("capability modes", () => {
       outputStreams: "unknown",
       filesystem: "unknown",
       lifetime: "unknown",
+      interactive: "unknown",
+      snapshots: "unknown",
     });
   });
 
@@ -65,6 +68,48 @@ describe("capability modes", () => {
     );
     const unchecked = resolveSandboxRuntimeCapabilities(runtime());
     assert.notEqual(cannot.modes.outputStreams, unchecked.modes.outputStreams);
+  });
+
+  it("separates nobody-checked from not-exposed from provider-cannot", () => {
+    // The three-way distinction is the point. A boolean gave all three the
+    // same answer, and that is how a capability gets promoted on nothing.
+    const notChecked = resolveSandboxRuntimeCapabilities(runtime());
+    const portGap = resolveSandboxRuntimeCapabilities(
+      runtime({ declaredCapabilityModes: { interactive: "not-exposed" } }),
+    );
+    const providerCannot = resolveSandboxRuntimeCapabilities(
+      runtime({ declaredCapabilityModes: { interactive: "unsupported" } }),
+    );
+    const all = [
+      notChecked.modes.interactive,
+      portGap.modes.interactive,
+      providerCannot.modes.interactive,
+    ];
+    assert.equal(new Set(all).size, 3, "all three must be distinguishable");
+  });
+
+  it("marks only unknown as pending evidence, so a probe cannot promote the rest", () => {
+    assert.equal(isPendingEvidence("unknown"), true);
+    // Proving the provider CAN do the thing is not grounds for promoting
+    // either of these: one is a fact about our port, the other about the
+    // provider. This is the guard that replaces hand-maintained
+    // "structurally false" lists.
+    assert.equal(isPendingEvidence("not-exposed"), false);
+    assert.equal(isPendingEvidence("unsupported"), false);
+    // Positive values are established, not pending.
+    assert.equal(isPendingEvidence("separate-streams"), false);
+    assert.equal(isPendingEvidence("deadline"), false);
+  });
+
+  it("lets a deadline lifetime state that never-idle is impossible", () => {
+    // Both the Vercel and Modal adapters currently spend a paragraph of prose
+    // saying their neverIdle:false is settled rather than unproven. Declaring
+    // a deadline lifetime says it in the type instead.
+    const resolved = resolveSandboxRuntimeCapabilities(
+      runtime({ declaredCapabilityModes: { lifetime: "deadline" } }),
+    );
+    assert.equal(resolved.modes.lifetime, "deadline");
+    assert.equal(isPendingEvidence(resolved.modes.lifetime), false);
   });
 
   it("memoizes the resolved descriptor per runtime", () => {

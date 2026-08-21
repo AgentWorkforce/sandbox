@@ -50,20 +50,39 @@ export type SandboxCountOptions = {
  * answer. `streamingLogs: false` conflates three genuinely different things —
  * the provider cannot stream, the provider can but this adapter does not expose
  * it, and nobody has checked — and a caller choosing a provider needs to tell
- * them apart. Each union therefore carries an explicit `"unknown"`, so a
- * provider with no live evidence can say so instead of being pushed into a
- * claim it has not earned.
+ * them apart.
  *
  * Shape adopted from the `CapabilityMode` union in opencoredev/sandbox-sdk
- * (see `chief/.briefs/sandbox-sdk-eval-2026-08-21.md`); the specific members
- * and the `"unknown"` member are this package's own.
+ * (see `chief/.briefs/sandbox-sdk-eval-2026-08-21.md`); the members below, and
+ * the absence vocabulary, are this package's own.
  */
+
+/**
+ * Why a capability is unavailable, when it is.
+ *
+ * The distinction that matters is **which of these a live probe can change**.
+ * Only `"unknown"` is pending evidence. `"not-exposed"` is a fact about this
+ * package and moves only when someone adds an operation to the port;
+ * `"unsupported"` is a fact about the provider and never moves at all.
+ *
+ * Collapsing them is how a capability gets promoted on nothing: a later canary
+ * sees `false`, reads it as "unverified", proves the provider can do the thing,
+ * and flips a cell that was never about the provider's ability in the first
+ * place. Adapters currently avoid that with prose and hand-maintained
+ * "structurally false" lists; this is that knowledge in the type.
+ */
+export type CapabilityAbsence =
+  /** Not established. A live probe can change this, and only this. */
+  | "unknown"
+  /** The provider has it; this package's ports do not reach it. */
+  | "not-exposed"
+  /** The provider cannot do it. Settled — no probe will ever change it. */
+  | "unsupported";
 
 /** How command output is surfaced. */
 export type OutputStreamMode =
-  /** Not established. Never treated as "buffered". */
-  | "unknown"
-  /** Output is buffered and returned once the command completes. */
+  | CapabilityAbsence
+  /** Buffered and returned once the command completes. */
   | "buffered"
   /** Streamed live, stdout and stderr interleaved into one channel. */
   | "combined-stream"
@@ -72,8 +91,7 @@ export type OutputStreamMode =
 
 /** How long anything written to the sandbox filesystem survives. */
 export type FilesystemMode =
-  /** Not established. */
-  | "unknown"
+  | CapabilityAbsence
   /** Lost when the sandbox stops. */
   | "ephemeral"
   /** Held in memory only; lost on any restart. */
@@ -81,16 +99,32 @@ export type FilesystemMode =
   /** Restored across stop/start of the same sandbox. */
   | "persistent";
 
-/** How a sandbox reaches the end of its life. */
+/**
+ * How a sandbox reaches the end of its life.
+ *
+ * Note that `"deadline"` is itself a settled statement: a provider that always
+ * terminates at a deadline cannot offer a never-idle tier, so declaring it says
+ * so without needing `"unsupported"`.
+ */
 export type LifetimeMode =
-  /** Not established. */
-  | "unknown"
+  | CapabilityAbsence
   /** The provider terminates it at a deadline that always exists. */
   | "deadline"
   /** Terminated after a period of inactivity. */
   | "idle-timeout"
   /** Runs until explicitly stopped. */
   | "never-idle";
+
+/** Whether an interactive terminal is reachable through this package. */
+export type InteractiveMode = CapabilityAbsence | "pty";
+
+/** Whether sandbox state can be captured and restored through this package. */
+export type SnapshotMode =
+  | CapabilityAbsence
+  /** Capture and restore. */
+  | "snapshot"
+  /** Capture, restore, and fork a running sandbox. */
+  | "snapshot-and-fork";
 
 /**
  * Modes a provider may declare. Every field is optional, and an absent field
@@ -101,7 +135,23 @@ export type SandboxCapabilityModes = {
   readonly outputStreams: OutputStreamMode;
   readonly filesystem: FilesystemMode;
   readonly lifetime: LifetimeMode;
+  readonly interactive: InteractiveMode;
+  readonly snapshots: SnapshotMode;
 };
+
+/**
+ * True when a mode is still pending evidence, i.e. a live probe could change
+ * it.
+ *
+ * This is the guard a promotion path should consult. `"not-exposed"` and
+ * `"unsupported"` are not weaker forms of `"unknown"` — proving the provider
+ * can do the thing is not grounds for promoting either of them.
+ */
+export function isPendingEvidence(
+  mode: CapabilityAbsence | (string & {}),
+): boolean {
+  return mode === "unknown";
+}
 
 export type SandboxRuntime = {
   readonly id: string;
@@ -259,6 +309,8 @@ export function resolveSandboxRuntimeCapabilities(
       outputStreams: declaredModes.outputStreams ?? "unknown",
       filesystem: declaredModes.filesystem ?? "unknown",
       lifetime: declaredModes.lifetime ?? "unknown",
+      interactive: declaredModes.interactive ?? "unknown",
+      snapshots: declaredModes.snapshots ?? "unknown",
     },
   };
   capabilitiesByRuntime.set(runtime, resolved);
