@@ -4284,6 +4284,16 @@ describe("capabilities", () => {
       detachedLaunch: true,
       warmLease: true,
       lifecycle: true,
+      // This adapter declares no capability modes, so every one resolves to
+      // "unknown". Filling them in here would be a claim about microsandbox
+      // that no live probe in this repository supports.
+      modes: {
+        outputStreams: "unknown",
+        filesystem: "unknown",
+        lifetime: "unknown",
+        interactive: "unknown",
+        snapshots: "unknown",
+      },
     });
   });
 
