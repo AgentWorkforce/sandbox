@@ -64,6 +64,8 @@ export type {
   DaytonaRuntimeOptions,
   DaytonaUploadBundleOptions,
 } from "./daytona/runtime.js";
+export { fetchDaytonaWireSupplement } from "./daytona/wire-supplement.js";
+export type { DaytonaWireSupplement } from "./daytona/wire-supplement.js";
 
 export {
   E2B_ASYNC_PROCESS_LOST_EXIT_CODE,
