@@ -1,10 +1,12 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AgentRelay } from '/tmp/agent37-proof-controller-0820/node_modules/@agent-relay/sdk/dist/index.js';
 import { Agent37Runtime } from '/Users/khaliqgant/Projects/AgentWorkforce/.worktrees/sandbox-agent37-0819/src/agent37/runtime.ts';
 
-const localRoot = '/Users/khaliqgant/Projects/AgentWorkforce/sandbox/.agent37-proof-0820';
+const localRoot = dirname(fileURLToPath(import.meta.url));
 const ledgerPath = `${localRoot}/resource-ledger.jsonl`;
 const reportPath = `${localRoot}/report.json`;
 const relayBase = 'https://cast.agentrelay.com';
@@ -186,7 +188,7 @@ async function main() {
   ledger('intent', { resource: 'agent37-instance', name: `fleet-${runId}`, maxCostUsd: 0.30 });
   state.runtime = new Agent37Runtime({ apiKey: providerKey, baseUrl: 'https://api.agent37.com', defaultHomeDir: '/root', user: 'agent37-proof' });
   const createStart = process.hrtime.bigint();
-  state.instance = await state.runtime.launch({ name: `fleet-${runId}`, labels: { purpose: 'agent37-fleet-proof', run: runId }, env: launchEnv, workdir: remoteRoot });
+  state.instance = await state.runtime.launch({ name: `fleet-${runId}`, labels: { purpose: 'agent37-fleet-proof', run: runId }, env: launchEnv, workdir: '/root' });
   const createEnd = process.hrtime.bigint();
   metrics.bare_create_ms = ms(createStart, createEnd);
   ledger('created', { resource: 'agent37-instance', id: state.instance.id, name: `fleet-${runId}` });
