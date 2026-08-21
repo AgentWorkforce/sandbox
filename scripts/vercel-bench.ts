@@ -87,30 +87,66 @@ async function main(): Promise<void> {
   if (!["canary", "full", "sweep"].includes(mode)) {
     throw new Error(`unknown mode "${mode}"; expected canary, full, or sweep`);
   }
-  const report = await runBenchmark(
-    {
-      runtime: runtime(),
-      ledger,
-      prefix: PREFIX,
-      runId: RUN_ID,
-      limits: {
-        maxSandboxes: MAX_SANDBOXES,
-        vcpus: MAX_VCPUS,
-        burstWidth: BURST_WIDTH,
+  let report: unknown;
+  let runError: unknown;
+  try {
+    report = await runBenchmark(
+      {
+        runtime: runtime(),
+        ledger,
+        prefix: PREFIX,
+        runId: RUN_ID,
+        limits: {
+          maxSandboxes: MAX_SANDBOXES,
+          vcpus: MAX_VCPUS,
+          burstWidth: BURST_WIDTH,
+        },
       },
-    },
-    mode,
-  );
+      mode,
+    );
+  } catch (error) {
+    runError = error;
+    // The audit is the only independent proof cleanup happened; losing the
+    // report when `runBenchmark` rejects would strip operators of exactly that
+    // proof. Persist a labelled failure report so the ledger, the results
+    // file, and the exit code all agree the run did not complete.
+    report = {
+      runId: RUN_ID,
+      prefix: PREFIX,
+      mode,
+      error: error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error),
+      clean: false,
+    };
+  }
 
   writeFileSync(RESULTS, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(report, null, 2));
   console.log(`\nledger:  ${LEDGER}\nresults: ${RESULTS}`);
 
-  if (!report.clean) {
+  if (runError) {
+    console.error("\nFAIL: benchmark did not complete.");
+    console.error(runError);
+    process.exitCode = 1;
+    return;
+  }
+  const finalReport = report as {
+    clean: boolean;
+    cleanup: {
+      destroyed: number;
+      verifiedGone: number;
+      survivors: string[];
+      sweepError?: string;
+    };
+  };
+  if (!finalReport.clean) {
     console.error(
-      `\nFAIL: cleanup was not clean — destroyed ${report.cleanup.destroyed}, `
-        + `verified gone ${report.cleanup.verifiedGone}, `
-        + `survivors ${report.cleanup.survivors.length}. See the ledger.`,
+      `\nFAIL: cleanup was not clean — destroyed ${finalReport.cleanup.destroyed}, `
+        + `verified gone ${finalReport.cleanup.verifiedGone}, `
+        + `survivors ${finalReport.cleanup.survivors.length}`
+        + `${finalReport.cleanup.sweepError ? `, sweep failed: ${finalReport.cleanup.sweepError}` : ""}. `
+        + `See the ledger.`,
     );
     process.exitCode = 1;
   }

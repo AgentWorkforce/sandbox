@@ -3,8 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 
 import type {
-  AsyncRunStartResult,
-  AsyncRunStatus,
   RunScriptResult,
   SandboxCountOptions,
   SandboxLookupOptions,
@@ -49,12 +47,21 @@ const DEFAULT_MAX_LIST_PAGES = 50;
 
 /** The provider caps tags per sandbox; exceeding it is rejected server-side. */
 const MAX_TAGS = 5;
+/** The provider caps exposed ports per sandbox; exceeding it is rejected. */
+const MAX_PORTS = 15;
 /**
  * Conservative client-side bound on generated sandbox names. The provider's
  * exact limit is not documented in the SDK types, so the adapter stays well
  * inside any plausible one rather than discovering it as a create failure.
  */
 const MAX_NAME_LENGTH = 63;
+/**
+ * Room the adapter reserves for its own generated suffix on a bare launch:
+ * `<prefix>-<16-hex-chars>`. Validated up front so a prefix that fits the raw
+ * name budget but not the generated one cannot slip past into a launch that
+ * only fails at the provider.
+ */
+const GENERATED_SUFFIX_LENGTH = 17;
 
 export class VercelOperationTimeoutError extends Error {
   constructor(readonly operation: string, readonly timeoutMs: number) {
@@ -289,12 +296,6 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   private readonly injectedApiFactory?: VercelSandboxApiFactory;
   private readonly registrations = new Map<string, RegisteredSandbox>();
   private readonly instances = new Map<string, VercelSandboxLike>();
-  /**
-   * Commands started in this process, kept so status/log reads do not need the
-   * SDK's re-resolution path when the live object is right here. Re-resolution
-   * still exists for reattach after a restart.
-   */
-  private readonly commands = new Map<string, VercelCommandLike>();
 
   constructor(
     options: VercelRuntimeOptions,
@@ -455,9 +456,19 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     options: SandboxLookupOptions = {},
   ): Promise<RuntimeHandle[]> {
     const wanted = validateTags(labels);
+    const limit = options.limit;
+    // A non-positive cap means "zero handles wanted": short-circuit before we
+    // spend any pages proving the obvious.
+    if (limit !== undefined && limit <= 0) {
+      return [];
+    }
     const states = options.states === undefined ? ["STARTED"] : options.states;
     const excluded = new Set(options.excludeIds ?? []);
-    const items = await this.listAll(
+    const handles: RuntimeHandle[] = [];
+    // Iterate pages one at a time and filter as they arrive: with a small
+    // `limit` the first candidate on page one lets us skip the rest of the
+    // listing entirely, instead of materialising every page and truncating.
+    for await (const page of this.listPages(
       {
         namePrefix: this.namePrefix,
         ...(hasEntries(wanted) ? { tags: { ...wanted } } : {}),
@@ -465,31 +476,31 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       options.timeoutMs ?? this.lookupTimeoutMs,
       "label lookup",
       options.pageSize,
-    );
-    const handles: RuntimeHandle[] = [];
-    for (const item of items) {
-      if (!this.isOwnedName(item.name) || excluded.has(item.name)) {
-        continue;
-      }
-      // Re-check the tags client-side. The `tags` query parameter is a server
-      // filter this adapter has not yet proven; if the provider were to ignore
-      // it, an unchecked result would hand the caller someone else's sandbox as
-      // a warm lease. Verifying locally costs nothing and removes that class.
-      if (!matchesAllTags(item.tags, wanted)) {
-        continue;
-      }
-      if (!matchesState(item.status, states)) {
-        continue;
-      }
-      this.register(item.name, {
-        owned: options.owned ?? true,
-        labels: item.tags ?? {},
-        state: normalizeState(item.status),
-        createdAtMs: item.createdAt,
-      });
-      handles.push(this.toHandle(item));
-      if (options.limit && handles.length >= options.limit) {
-        break;
+    )) {
+      for (const item of page) {
+        if (!this.isOwnedName(item.name) || excluded.has(item.name)) {
+          continue;
+        }
+        // Re-check the tags client-side. The `tags` query parameter is a
+        // server filter this adapter has not yet proven; if the provider were
+        // to ignore it, an unchecked result would hand the caller someone
+        // else's sandbox as a warm lease. Verifying locally costs nothing.
+        if (!matchesAllTags(item.tags, wanted)) {
+          continue;
+        }
+        if (!matchesState(item.status, states)) {
+          continue;
+        }
+        this.register(item.name, {
+          owned: options.owned ?? true,
+          labels: item.tags ?? {},
+          state: normalizeState(item.status),
+          createdAtMs: item.createdAt,
+        });
+        handles.push(this.toHandle(item));
+        if (limit !== undefined && handles.length >= limit) {
+          return handles;
+        }
       }
     }
     return handles;
@@ -499,10 +510,16 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     labels: Record<string, string>,
     options: SandboxCountOptions = {},
   ): Promise<number> {
+    const maxCount = options.maxCount;
+    // Zero is a legitimate ask ("do I already have any?") and must not turn
+    // into a full paginated listing that returns every match.
+    if (maxCount !== undefined && maxCount <= 0) {
+      return 0;
+    }
+    const effectiveLimit = maxCount ?? options.limit;
     const matches = await this.findAllByLabels(labels, {
       states: options.states,
-      ...(options.limit !== undefined ? { limit: options.limit } : {}),
-      ...(options.maxCount !== undefined ? { limit: options.maxCount } : {}),
+      ...(effectiveLimit !== undefined ? { limit: effectiveLimit } : {}),
       ...(options.pageSize !== undefined ? { pageSize: options.pageSize } : {}),
       ...(options.timeoutMs !== undefined
         ? { timeoutMs: options.timeoutMs }
@@ -579,21 +596,41 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     handle: RuntimeHandle,
     options: VercelRunScriptOptions,
   ): Promise<RunScriptResult> {
-    this.requireRegistered(handle);
     const timeoutMs = options.timeoutMs && options.timeoutMs > 0
       ? Math.ceil(options.timeoutMs)
       : this.execTimeoutMs;
     // One budget for the whole call. Fetching the output is a second round
     // trip, and giving it a fresh `timeoutMs` would let a caller who asked for
     // 60s wait 120s.
-    const deadline = new Deadline(timeoutMs, "command");
+    return this.runScriptWithDeadline(
+      handle,
+      options,
+      new Deadline(timeoutMs, "command"),
+      timeoutMs,
+    );
+  }
+
+  /**
+   * Same as `runScript` but reuses an existing operation deadline.
+   *
+   * `uploadBundle` calls in from behind its own bundle-wide budget; giving the
+   * verification step a fresh `runScript` deadline would let a partly-consumed
+   * upload silently extend past its promised total. `sandboxTimeoutMs` is the
+   * script's sandbox-side cap and is passed through separately: the provider
+   * is timing the process, not our round trips.
+   */
+  private async runScriptWithDeadline(
+    handle: RuntimeHandle,
+    options: VercelRunScriptOptions,
+    deadline: Deadline,
+    sandboxTimeoutMs: number,
+  ): Promise<RunScriptResult> {
+    this.requireRegistered(handle);
     const command = await this.run(deadline, "command", (signal) =>
       this.sandbox(handle.id).then((sandbox) =>
         sandbox.runCommand({
           ...this.commandParams(options),
-          // The sandbox-side cap stays the caller's full timeout: the provider
-          // is timing the process, not our round trips.
-          timeoutMs,
+          timeoutMs: sandboxTimeoutMs,
           signal,
         }),
       ),
@@ -613,52 +650,16 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     return { output: result.output, exitCode: result.exitCode };
   }
 
-  async startScript(
-    handle: RuntimeHandle,
-    options: VercelRunScriptOptions & { suppressInputEcho?: boolean },
-  ): Promise<AsyncRunStartResult> {
-    this.requireRegistered(handle);
-    const timeoutMs = options.timeoutMs && options.timeoutMs > 0
-      ? Math.ceil(options.timeoutMs)
-      : this.execTimeoutMs;
-    const sandbox = await this.sandbox(handle.id);
-    const command = await this.run(this.requestTimeoutMs, "detached command", (
-      signal,
-    ) =>
-      sandbox.runCommand({
-        ...this.commandParams(options),
-        // The provider enforces the command timeout inside the sandbox, so it
-        // still applies to a detached command nobody is awaiting. That matters:
-        // a detached run whose caller dies would otherwise burn CPU forever.
-        timeoutMs,
-        detached: true,
-        signal,
-      }),
-    );
-    this.commands.set(command.cmdId, command);
-    return {
-      sessionId: this.sessionIdOf(sandbox, options.sessionId),
-      commandId: command.cmdId,
-    };
-  }
-
-  async getScriptStatus(
-    handle: RuntimeHandle,
-    _sessionId: string,
-    commandId: string,
-  ): Promise<AsyncRunStatus> {
-    const command = await this.resolveCommand(handle, commandId);
-    return { exitCode: command.exitCode };
-  }
-
-  async getScriptLogs(
-    handle: RuntimeHandle,
-    _sessionId: string,
-    commandId: string,
-  ): Promise<RunScriptResult> {
-    const command = await this.resolveCommand(handle, commandId);
-    return this.collect(command, this.requestTimeoutMs);
-  }
+  // Detached submit + poll is deliberately not exposed. The port's `asyncExec`
+  // capability is all-or-nothing (see `resolveSandboxRuntimeCapabilities`), and
+  // Vercel's `runCommand` has no admission key: a `startScript` retry after a
+  // lost response would submit a second command against the same sandbox rather
+  // than reconcile with the first. Until the SDK offers idempotent submission —
+  // or this adapter builds durable reconciliation on top of it — the honest
+  // shape is to omit the trio and let the resolver report `asyncExec: false`.
+  declare readonly startScript?: undefined;
+  declare readonly getScriptStatus?: undefined;
+  declare readonly getScriptLogs?: undefined;
 
   // --- files ----------------------------------------------------------------
 
@@ -714,12 +715,19 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     // The write API reports success without telling us what landed. Verify the
     // destinations exist, because a bundle that half-uploaded and reported
     // success is indistinguishable from a working one until the workload fails.
-    const verified = await this.runScript(handle, {
-      command: files
-        .map((file) => `test -f ${shellSingleQuote(file.path)}`)
-        .join(" && "),
-      timeoutMs: deadline.require(),
-    });
+    // Route through the shared bundle deadline rather than starting a fresh
+    // `runScript` budget — the mkdirs and the write may already have consumed
+    // most of the caller's `fileTimeoutMs`.
+    const verified = await this.runScriptWithDeadline(
+      handle,
+      {
+        command: files
+          .map((file) => `test -f ${shellSingleQuote(file.path)}`)
+          .join(" && "),
+      },
+      deadline,
+      deadline.require(),
+    );
     if (verified.exitCode !== 0) {
       throw new Error("Failed to verify uploaded Vercel bundle files");
     }
@@ -993,37 +1001,6 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     };
   }
 
-  private async resolveCommand(
-    handle: RuntimeHandle,
-    commandId: string,
-  ): Promise<VercelCommandLike> {
-    this.requireRegistered(handle);
-    const live = this.commands.get(commandId);
-    if (live && live.exitCode !== null) {
-      return live;
-    }
-    const sandbox = await this.sandbox(handle.id);
-    const resolved = await this.run(
-      this.requestTimeoutMs,
-      "command lookup",
-      (signal) => sandbox.getCommand(commandId, { signal }),
-    );
-    this.commands.set(commandId, resolved);
-    return resolved;
-  }
-
-  private sessionIdOf(sandbox: VercelSandboxLike, fallback?: string): string {
-    try {
-      const session = sandbox.currentSession();
-      if (session && typeof session.sessionId === "string" && session.sessionId) {
-        return session.sessionId;
-      }
-    } catch {
-      // A sandbox with no live session cannot report one. Fall through.
-    }
-    return fallback ?? sandbox.name;
-  }
-
   private register(name: string, next: RegisteredSandbox): void {
     const existing = this.registrations.get(name);
     this.registrations.set(name, {
@@ -1055,20 +1032,26 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     }
   }
 
-  private async listAll(
+  /**
+   * Walk the sandbox listing one page at a time.
+   *
+   * A generator so callers can consume pages incrementally: a single-result
+   * lookup can stop after the first candidate on page one instead of forcing
+   * every page in the project to load before filtering. Every page still draws
+   * from one shared budget, so a listing cannot cost pages x timeout.
+   */
+  private async *listPages(
     params: { namePrefix: string; tags?: Record<string, string> },
     budget: number | Deadline,
     operation: string,
     pageSize?: number,
-  ): Promise<VercelSandboxListItem[]> {
+  ): AsyncGenerator<VercelSandboxListItem[]> {
     const limit = pageSize && pageSize > 0
       ? Math.ceil(pageSize)
       : this.listPageSize;
-    // Every page draws from one budget, so a listing cannot cost pages x timeout.
     const deadline = typeof budget === "number"
       ? new Deadline(budget, operation)
       : budget;
-    const items: VercelSandboxListItem[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < this.maxListPages; page += 1) {
       const response = await this.run(deadline, operation, (signal) =>
@@ -1090,14 +1073,27 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
       if (malformed !== -1) {
         throw new Error(`Vercel sandbox list item ${malformed} is malformed`);
       }
-      items.push(...response.sandboxes);
+      yield response.sandboxes;
       const next = response.pagination?.next;
       if (!next) {
-        return items;
+        return;
       }
       cursor = next;
     }
     throw new VercelListPageLimitError(this.maxListPages, operation);
+  }
+
+  private async listAll(
+    params: { namePrefix: string; tags?: Record<string, string> },
+    budget: number | Deadline,
+    operation: string,
+    pageSize?: number,
+  ): Promise<VercelSandboxListItem[]> {
+    const items: VercelSandboxListItem[] = [];
+    for await (const page of this.listPages(params, budget, operation, pageSize)) {
+      items.push(...page);
+    }
+    return items;
   }
 
   private async remoteByName(
@@ -1336,9 +1332,10 @@ function validateNamePrefix(value: string): string {
       "Vercel name prefix must be lowercase alphanumeric, optionally hyphenated",
     );
   }
-  if (prefix.length > MAX_NAME_LENGTH - 10) {
+  if (prefix.length > MAX_NAME_LENGTH - GENERATED_SUFFIX_LENGTH) {
     throw new Error(
-      `Vercel name prefix must leave room for a suffix within ${MAX_NAME_LENGTH} characters`,
+      `Vercel name prefix must leave ${GENERATED_SUFFIX_LENGTH} characters of room `
+        + `for the generated suffix within ${MAX_NAME_LENGTH} characters`,
     );
   }
   return prefix;
@@ -1376,6 +1373,11 @@ function validateVcpus(value?: number): number | undefined {
 function validatePorts(ports?: readonly number[]): number[] | undefined {
   if (!ports) {
     return undefined;
+  }
+  if (ports.length > MAX_PORTS) {
+    throw new Error(
+      `Vercel sandboxes expose at most ${MAX_PORTS} ports; received ${ports.length}`,
+    );
   }
   for (const port of ports) {
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {

@@ -27,8 +27,9 @@ export interface VercelCredentials {
 }
 
 /**
- * Sandbox environment selection. Exactly one of the two forms, mirroring the
- * provider's own mutual exclusion between the legacy runtime and VCR images.
+ * Sandbox environment selection. Exactly one of the three forms — a
+ * caller-chosen image, the deprecated legacy runtime, or the provider default
+ * — mirroring the provider's own mutual exclusion between them.
  */
 export type VercelSandboxSource =
   | { type: "image"; image: string }

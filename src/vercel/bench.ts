@@ -47,6 +47,8 @@ export type LedgerEvent = {
     | "error"
     | "destroyed-verified"
     | "destroy-unverified"
+    | "destroy-submit-failed"
+    | "sweep-failed"
     | "burst-start"
     | "survivor"
     | "run-end";
@@ -187,6 +189,16 @@ export async function measureOne(
     sample.execExitCode = exec.exitCode;
     sample.execOutput = exec.output.trim();
 
+    // Fail fast on a readiness probe that did not report a clean exit: a
+    // nonzero or null code would otherwise be recorded as a valid latency
+    // sample, hiding a broken sandbox behind a green-looking report.
+    if (exec.exitCode !== 0) {
+      throw new Error(
+        `readiness probe exited with ${exec.exitCode ?? "no exit code"}: `
+          + `${sample.execOutput || "(no output)"}`,
+      );
+    }
+
     const owned = await deps.runtime.listOwned({ includeTerminated: true });
     const row = owned.find((entry) => entry.name === handle!.id);
     sample.vcpus = row?.vcpus;
@@ -209,10 +221,16 @@ export async function measureOne(
         sample.verifiedGone = true;
         deps.ledger({ event: "destroyed-verified", name: handle.id });
       } catch (error) {
-        sample.destroyed = true;
+        // Only `VercelDestroyVerificationError` means the delete was accepted
+        // by the provider but absence was not proven — that is the case where
+        // `destroyed=true, verifiedGone=false` is honest. Any other error is a
+        // submission failure and must leave `destroyed=false`, or the cleanup
+        // summary would count a still-live sandbox as torn down.
+        const verificationFailed = isVerificationFailure(error);
+        sample.destroyed = verificationFailed;
         sample.verifiedGone = false;
         deps.ledger({
-          event: "destroy-unverified",
+          event: verificationFailed ? "destroy-unverified" : "destroy-submit-failed",
           name: handle.id,
           error: describe(error),
         });
@@ -262,8 +280,9 @@ export async function burstProbe(deps: BenchDeps): Promise<BurstResult> {
         burst: true,
       });
     } catch (error) {
+      const verificationFailed = isVerificationFailure(error);
       deps.ledger({
-        event: "destroy-unverified",
+        event: verificationFailed ? "destroy-unverified" : "destroy-submit-failed",
         name: result.value.id,
         burst: true,
         error: describe(error),
@@ -315,6 +334,8 @@ export interface BenchReport {
     destroyed: number;
     verifiedGone: number;
     survivors: string[];
+    /** Present when the independent sweep itself failed to run. */
+    sweepError?: string;
   };
   burst: BurstResult | null;
   costProjection: {
@@ -346,6 +367,8 @@ export async function runBenchmark(
 
   const samples: Sample[] = [];
   let burst: BurstResult | null = null;
+  let survivors: string[] = [];
+  let sweepError: string | undefined;
   try {
     for (let i = 0; i < n; i += 1) {
       samples.push(await measureOne(deps, i));
@@ -354,10 +377,31 @@ export async function runBenchmark(
       burst = await burstProbe(deps);
     }
   } finally {
-    deps.ledger({ event: "run-end", name: deps.prefix });
+    // `run-end` and `sweep` must both attempt regardless of what the main body
+    // did — an uncaught error there would otherwise strand admitted burst
+    // sandboxes and leave the cleanup audit that was the whole point of the
+    // ledger unfinished. Ledger failure must not preempt the audit either.
+    try {
+      deps.ledger({ event: "run-end", name: deps.prefix });
+    } catch {
+      // deliberately swallowed; the sweep is what matters here
+    }
+    try {
+      survivors = await sweep(deps);
+    } catch (error) {
+      sweepError = describe(error);
+      try {
+        deps.ledger({
+          event: "sweep-failed",
+          name: deps.prefix,
+          error: sweepError,
+        });
+      } catch {
+        // deliberately swallowed; the error is captured in the report
+      }
+    }
   }
 
-  const survivors = await sweep(deps);
   const createMs = samples.map((s) => s.createMs);
   const observedVcpus = samples.find((s) => s.vcpus)?.vcpus
     ?? deps.limits.vcpus;
@@ -365,6 +409,11 @@ export async function runBenchmark(
     + (burst?.admitted ?? 0);
   const verifiedGone = samples.filter((s) => s.verifiedGone).length
     + (burst?.verifiedGone ?? 0);
+  // `created` counts everything admitted by the provider — sequential probes
+  // plus burst admits — so it is a coherent denominator for `destroyed` and
+  // `verifiedGone`, which already include both.
+  const created = samples.filter((s) => Number.isFinite(s.createMs)).length
+    + (burst?.admitted ?? 0);
 
   return {
     runId: deps.runId,
@@ -386,10 +435,11 @@ export async function runBenchmark(
       documented: "1 or even 2-32 vCPUs, default 2; 2 GB memory per vCPU",
     },
     cleanup: {
-      created: samples.filter((s) => Number.isFinite(s.createMs)).length,
+      created,
       destroyed,
       verifiedGone,
       survivors,
+      ...(sweepError ? { sweepError } : {}),
     },
     burst,
     costProjection: {
@@ -402,7 +452,11 @@ export async function runBenchmark(
     errors: samples
       .filter((s) => s.error)
       .map((s) => ({ index: s.index, error: s.error! })),
-    clean: survivors.length === 0 && destroyed === verifiedGone,
+    // A sweep that never ran cannot certify a clean run.
+    clean:
+      sweepError === undefined
+      && survivors.length === 0
+      && destroyed === verifiedGone,
   };
 }
 
@@ -414,4 +468,17 @@ function describe(error: unknown): string {
   return error instanceof Error
     ? `${error.name}: ${error.message}`
     : String(error);
+}
+
+/**
+ * The one destroy error where the sandbox may already be gone but we cannot
+ * prove it. Matched on name to keep the harness decoupled from the provider
+ * error class — a benchmark shim over a different runtime can raise the same
+ * name and get the same accounting.
+ */
+function isVerificationFailure(error: unknown): boolean {
+  return (
+    error instanceof Error
+    && error.name === "VercelDestroyVerificationError"
+  );
 }

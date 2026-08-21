@@ -313,6 +313,35 @@ describe("VercelSandboxRuntime construction", () => {
     );
   });
 
+  it("rejects more than the provider's 15-port limit", () => {
+    // A configuration the provider will reject at create time is caught here
+    // so the failure is visible against the port that set it, not the launch.
+    const tooMany = Array.from({ length: 16 }, (_, i) => 3_000 + i);
+    assert.throws(
+      () => new VercelSandboxRuntime(options({ ports: tooMany })),
+      /at most 15 ports/,
+    );
+    // The exact 15 must still pass.
+    const okay = Array.from({ length: 15 }, (_, i) => 3_000 + i);
+    assert.doesNotThrow(() => new VercelSandboxRuntime(options({ ports: okay })));
+  });
+
+  it("rejects a name prefix that leaves no room for the generated suffix", () => {
+    // The bare launch appends `-<16 hex>` (17 chars) to the prefix. A prefix
+    // longer than 46 characters would push a generated name past the 63-char
+    // budget, so validation catches it here rather than at the provider.
+    const tooLong = "a".repeat(47);
+    assert.throws(
+      () => new VercelSandboxRuntime(options({ namePrefix: tooLong })),
+      /leave 17 characters of room/,
+    );
+    // The exact 46-character boundary must still pass.
+    const okay = "a".repeat(46);
+    assert.doesNotThrow(
+      () => new VercelSandboxRuntime(options({ namePrefix: okay })),
+    );
+  });
+
   it("declares capabilities conservatively pending live evidence", () => {
     assert.deepEqual(vercelSandboxCapabilities, {
       warmLease: false,
@@ -393,7 +422,12 @@ describe("VercelSandboxRuntime construction", () => {
   it("resolves port capabilities from the implemented surface", () => {
     const runtime = makeRuntime(new FakeVercel());
     const capabilities = resolveSandboxRuntimeCapabilities(runtime);
-    assert.equal(capabilities.asyncExec, true);
+    // Async submit + poll would be reachable through the SDK, but Vercel's
+    // `runCommand` has no admission key, so a `startScript` retry after a lost
+    // response cannot be reconciled with the first submission and would
+    // duplicate the workload. The adapter deliberately omits the trio until
+    // that guarantee exists.
+    assert.equal(capabilities.asyncExec, false);
     assert.equal(capabilities.reattach, true);
     // Create resolves only when the sandbox is running, so there is no
     // mid-boot handle and the method is deliberately absent.
@@ -780,55 +814,23 @@ describe("VercelSandboxRuntime exec", () => {
     );
   });
 
-  it("starts a detached command with the sandbox-enforced timeout intact", async () => {
-    const fake = new FakeVercel();
-    const { runtime, handle } = await launched(fake);
-
-    const started = await runtime.startScript(handle, {
-      command: "sleep 30",
-      timeoutMs: 9_000,
-    });
-
-    const command = fake.commands[0]!;
-    assert.equal(command.params.detached, true);
+  it("does not expose detached submit + poll until admission is idempotent", async () => {
+    // Vercel's `runCommand` has no admission key, so a `startScript` retry
+    // after a lost response would submit a second command against the same
+    // sandbox rather than reconcile with the first. Until the SDK offers
+    // idempotent submission — or this adapter builds reconciliation on top of
+    // it — the trio is omitted so the resolver reports `asyncExec: false`
+    // rather than promising a guarantee we cannot keep.
+    const runtime = makeRuntime(new FakeVercel());
+    assert.equal((runtime as unknown as { startScript?: unknown }).startScript, undefined);
     assert.equal(
-      command.params.timeoutMs,
-      9_000,
-      "a detached command nobody awaits must still be bounded inside the sandbox",
+      (runtime as unknown as { getScriptStatus?: unknown }).getScriptStatus,
+      undefined,
     );
-    assert.equal(started.commandId, "cmd-1");
-    assert.equal(started.sessionId, `session-${handle.id}`);
-  });
-
-  it("polls status and logs for a detached command, including after reattach", async () => {
-    const fake = new FakeVercel();
-    const { runtime, handle } = await launched(fake);
-    const started = await runtime.startScript(handle, { command: "sleep 1" });
-
-    const running = await runtime.getScriptStatus(
-      handle,
-      started.sessionId,
-      started.commandId,
+    assert.equal(
+      (runtime as unknown as { getScriptLogs?: unknown }).getScriptLogs,
+      undefined,
     );
-    assert.equal(running.exitCode, null);
-
-    fake.commands[0]!.exitCode = 0;
-    fake.commands[0]!.stdout = "done\n";
-
-    const finished = await runtime.getScriptStatus(
-      handle,
-      started.sessionId,
-      started.commandId,
-    );
-    assert.equal(finished.exitCode, 0);
-
-    const logs = await runtime.getScriptLogs(
-      handle,
-      started.sessionId,
-      started.commandId,
-    );
-    assert.equal(logs.output, "done\n");
-    assert.equal(logs.exitCode, 0);
   });
 });
 
@@ -1050,8 +1052,11 @@ describe("VercelSandboxRuntime deadlines", () => {
 
   it("shares one budget across the round trips of a composite operation", async () => {
     // Two round trips (run the command, then fetch its output) against a
-    // provider that stalls on the second. A per-call timeout would allow
-    // 2 x 40ms; one shared budget must not.
+    // provider that stalls on the second. A per-call timeout would allow the
+    // stall to consume its own fresh 40ms budget; one shared budget must
+    // report the whole operation's timeout as the one that fired, and must
+    // only invoke `output` once — the same shared deadline that admitted the
+    // first call must be already expired for the second.
     let outputCalls = 0;
     const fake = new FakeVercel();
     const runtime = makeRuntime(fake);
@@ -1069,16 +1074,21 @@ describe("VercelSandboxRuntime deadlines", () => {
       return command;
     };
 
-    const started = Date.now();
     await assert.rejects(
       runtime.runScript(handle, { command: "x", timeoutMs: 40 }),
-      VercelOperationTimeoutError,
+      (error: unknown) =>
+        error instanceof VercelOperationTimeoutError
+        // The error must name the shared budget the caller asked for (40ms),
+        // not a fresh 40ms budget spawned inside the second round trip.
+        && error.timeoutMs === 40
+        && error.operation === "command",
     );
-    const elapsed = Date.now() - started;
-    assert.equal(outputCalls, 1);
-    assert.ok(
-      elapsed < 200,
-      `composite op must stay inside one 40ms budget, took ${elapsed}ms`,
+    // Exactly one `output` call — the second round trip never got its own
+    // 40ms allowance because the first drained the shared deadline.
+    assert.equal(
+      outputCalls,
+      1,
+      "output must be attempted once against one shared budget, not twice",
     );
   });
 });

@@ -22,10 +22,28 @@ import {
 type FakeOptions = {
   failCreateFor?: (name: string) => boolean;
   failExec?: boolean;
-  failDestroyFor?: (name: string) => boolean;
+  /** Override the readiness probe result so a bad exit code can be exercised. */
+  execResult?: () => { output: string; exitCode: number | null };
+  /** Throw from `listOwned`, which is what the sweep calls. */
+  failListOwned?: boolean;
+  /**
+   * Choose the *shape* of the destroy failure per sandbox:
+   * `null` never fails; `"verification"` throws an error whose name matches
+   * `VercelDestroyVerificationError` (accepted delete, unproven absence);
+   * `"submit"` throws a plain error (submission never accepted).
+   */
+  destroyFailureFor?: (name: string) => "verification" | "submit" | null;
   /** Names that stay behind after destroy, i.e. a leak the sweep must catch. */
   survivors?: string[];
 };
+
+/** Mirror the runtime's typed error by name so the bench harness can classify it. */
+class FakeDestroyVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VercelDestroyVerificationError";
+  }
+}
 
 class FakeRuntime implements BenchRuntime {
   readonly live = new Set<string>();
@@ -50,10 +68,16 @@ class FakeRuntime implements BenchRuntime {
       throw new Error("exec blew up");
     }
     this.tick += 1;
+    if (this.options.execResult) {
+      return this.options.execResult();
+    }
     return { output: `2\n4096\nREADY`, exitCode: 0 };
   }
 
   async listOwned() {
+    if (this.options.failListOwned) {
+      throw new Error("provider list is unreachable");
+    }
     return [...this.live].map((name) => ({
       name,
       providerStatus: "running",
@@ -66,8 +90,14 @@ class FakeRuntime implements BenchRuntime {
 
   async destroy(handle: RuntimeHandle): Promise<void> {
     this.destroyed.push(handle.id);
-    if (this.options.failDestroyFor?.(handle.id)) {
-      throw new Error(`absence not verified for ${handle.id}`);
+    const failure = this.options.destroyFailureFor?.(handle.id) ?? null;
+    if (failure === "verification") {
+      throw new FakeDestroyVerificationError(
+        `absence not verified for ${handle.id}`,
+      );
+    }
+    if (failure === "submit") {
+      throw new Error(`delete request rejected for ${handle.id}`);
     }
     if (!this.options.survivors?.includes(handle.id)) {
       this.live.delete(handle.id);
@@ -194,7 +224,7 @@ describe("bench guard: verified cleanup", () => {
   it("reports destroyed and verifiedGone separately when verification fails", async () => {
     const log: LedgerEvent[] = [];
     const runtime = new FakeRuntime({
-      failDestroyFor: (name) => name.endsWith("s0"),
+      destroyFailureFor: (name) => (name.endsWith("s0") ? "verification" : null),
       survivors: ["awf-bench-t-s0"],
     });
     const report = await runBenchmark(deps(runtime, log), "canary");
@@ -208,6 +238,30 @@ describe("bench guard: verified cleanup", () => {
     assert.deepEqual(report.cleanup.survivors, ["awf-bench-t-s0"]);
     assert.equal(report.clean, false);
     assert.ok(log.some((e) => e.event === "destroy-unverified"));
+    assert.ok(log.some((e) => e.event === "survivor"));
+  });
+
+  it("does not count a failed delete submission as destroyed", async () => {
+    // Submission failure means the provider never accepted the delete, so the
+    // sandbox is presumed still alive — the cleanup counter cannot claim it as
+    // torn down. The sweep is what confirms it, and it MUST be able to run
+    // even when destroy rejected before submission.
+    const log: LedgerEvent[] = [];
+    const runtime = new FakeRuntime({
+      destroyFailureFor: (name) => (name.endsWith("s0") ? "submit" : null),
+      survivors: ["awf-bench-t-s0"],
+    });
+    const report = await runBenchmark(deps(runtime, log), "canary");
+
+    assert.equal(
+      report.cleanup.destroyed,
+      0,
+      "a rejected submit must not be counted as destroyed",
+    );
+    assert.equal(report.cleanup.verifiedGone, 0);
+    assert.deepEqual(report.cleanup.survivors, ["awf-bench-t-s0"]);
+    assert.equal(report.clean, false);
+    assert.ok(log.some((e) => e.event === "destroy-submit-failed"));
     assert.ok(log.some((e) => e.event === "survivor"));
   });
 
@@ -241,6 +295,60 @@ describe("bench guard: burst probe", () => {
     assert.equal(report.burst?.verifiedGone, 2);
     assert.deepEqual(report.cleanup.survivors, []);
     assert.match(report.burst!.caveat, /not a fixed cap/);
+  });
+
+  it("counts burst admits inside cleanup.created", async () => {
+    // `destroyed` and `verifiedGone` include burst admits, so `created` must
+    // include them too, or the cleanup summary is internally inconsistent.
+    const log: LedgerEvent[] = [];
+    const runtime = new FakeRuntime();
+    const report = await runBenchmark(deps(runtime, log), "full");
+    assert.equal(report.cleanup.created, report.n + (report.burst?.admitted ?? 0));
+    assert.equal(report.cleanup.created, report.cleanup.destroyed);
+  });
+});
+
+describe("bench guard: readiness probe", () => {
+  it("fails the sample when the readiness probe exits nonzero", async () => {
+    // A green-looking latency for a sandbox that never became ready would let
+    // the harness publish a "shape and speed" report against a broken box.
+    const log: LedgerEvent[] = [];
+    const runtime = new FakeRuntime({
+      execResult: () => ({ output: "boom", exitCode: 1 }),
+    });
+    const report = await runBenchmark(deps(runtime, log), "canary");
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0]!.error, /readiness probe/);
+    // Cleanup still ran: the sandbox we created must not survive the failure.
+    assert.deepEqual(report.cleanup.survivors, []);
+  });
+
+  it("fails the sample when the readiness probe returns no exit code", async () => {
+    const log: LedgerEvent[] = [];
+    const runtime = new FakeRuntime({
+      execResult: () => ({ output: "", exitCode: null }),
+    });
+    const report = await runBenchmark(deps(runtime, log), "canary");
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0]!.error, /no exit code/);
+  });
+});
+
+describe("bench guard: sweep in finally", () => {
+  it("captures a sweep-failure in the report instead of losing it", async () => {
+    // The sweep is the independent proof of cleanup; a rejection that stops
+    // the whole `runBenchmark` promise from resolving would strip operators
+    // of both the report and the exit-code signal.
+    const log: LedgerEvent[] = [];
+    const runtime = new FakeRuntime({ failListOwned: true });
+    const report = await runBenchmark(deps(runtime, log), "canary");
+    assert.match(report.cleanup.sweepError ?? "", /provider list is unreachable/);
+    assert.equal(
+      report.clean,
+      false,
+      "a sweep that never ran cannot certify a clean run",
+    );
+    assert.ok(log.some((e) => e.event === "sweep-failed"));
   });
 });
 

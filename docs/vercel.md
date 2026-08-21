@@ -146,7 +146,7 @@ crash path.
 
 | Capability | Declared | Basis |
 | --- | --- | --- |
-| `asyncExec` | true | Derived from method presence; detached `runCommand` plus `getCommand` re-resolution. |
+| `asyncExec` | false | Vercel's `runCommand` has no admission key, so a `startScript` retry after a lost response cannot be reconciled with the first submission and would duplicate the workload. The trio is deliberately omitted until the SDK offers idempotent submission (or this adapter builds durable reconciliation on top of it). |
 | `reattach` | true | `getById` over `list`. |
 | `detachedLaunch` | false | `Sandbox.create` resolves only once the sandbox is running (DOCUMENTED), so there is no mid-boot handle to hand back. The optional method is omitted rather than faked. |
 | `warmLease` | false | Implemented over the `tags` filter; awaiting live proof the filter filters. |
