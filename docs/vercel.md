@@ -266,14 +266,51 @@ two disagree, that disagreement is the finding.
   `sha512-q/Ne1UaqZ4PWmOj0kTl/KByAR9ZRxOgJCH8WNWcV3ERgb00lO6TQKwS1dSsypHSBHHDfjihByMKX/mlfjIw/cg==`
 - tarball shasum: `30a7a6d9d6366b20ed46fa59a157274455419227` (207 files, 1.5 MB
   unpacked)
-- upstream commit: `d7c3bf55d520c6e5b5381ed87285967b30ecc083`
+- upstream commit: `d7c3bf55d520c6e5b5381ed87285967b30ecc083` — **resolved**,
+  see the ladder below
 
-  The npm packument carries no `gitHead` for this package — it is published from
-  a monorepo by a release bot. The commit above is not a guess: it is the
-  `gitCommit` of the resolved `git+https://github.com/vercel/sandbox` dependency
-  recorded in the package's SLSA v1 provenance attestation, built from
-  `refs/heads/main` via `.github/workflows/publish.yml`. Attestation:
-  <https://registry.npmjs.org/-/npm/v1/attestations/@vercel%2fsandbox@3.0.1>
+### Provenance ladder
+
+Verified 2026-08-21, strongest rung first. This is recorded as a ladder rather
+than a single fact because provenance mechanisms are not universally available,
+and a comparison that assumes the strongest one will silently degrade to nothing
+on the next provider.
+
+1. **SLSA / npm provenance attestation** — PRESENT. Built from
+   `refs/heads/main` of `https://github.com/vercel/sandbox` via
+   `.github/workflows/publish.yml`; the resolved git dependency records
+   `gitCommit d7c3bf55d520c6e5b5381ed87285967b30ecc083`. Attestation:
+   <https://registry.npmjs.org/-/npm/v1/attestations/@vercel%2fsandbox@3.0.1>
+
+   Not universal: `npm audit signatures` over this tree reports **69 of 241**
+   packages with verified attestations. Do not assume the next provider has one.
+
+2. **Registry signature** — VERIFIED. `npm audit signatures`: 241 of 241
+   packages have verified registry signatures. Broad coverage and cheap.
+
+3. **Tarball hash** — VERIFIED by download. The published tarball hashes to
+   SHA-1 `30a7a6d9d6366b20ed46fa59a157274455419227` and SHA-512
+   `q/Ne1UaqZ4PWmOj0kTl/KByAR9ZRxOgJCH8WNWcV3ERgb00lO6TQKwS1dSsypHSBHHDfjihByMKX/mlfjIw/cg==`,
+   both matching the packument. Always available, so this is the floor.
+
+4. **`gitHead`** — ABSENT from the packument (monorepo release-bot publish),
+   which is why rung 1 is doing the work here.
+
+   A `gitHead` must be **resolved before it is quoted as evidence**. A present
+   but unresolvable one is worse than a missing one: it reads as provenance and
+   is not. The commit above was resolved with
+   `gh api repos/vercel/sandbox/commits/d7c3bf55…` → "Version Packages (#284)",
+   committed 2026-08-20T08:54:45Z, consistent with a publish roughly a day
+   before this was written.
+
+   The `repository` field was also checked against the attestation rather than
+   trusted: both name `github.com/vercel/sandbox` (directory
+   `packages/vercel-sandbox`), so there is no repo mismatch here. That check is
+   not redundant — a sibling adapter in this repo found a package whose
+   `repository` pointed at a different language's client entirely.
+
+   (Ladder framing contributed by `modal-adapter-0821`, whose lane hit the
+   present-but-unresolvable case.)
 - SDK docs: <https://vercel.com/docs/vercel-sandbox/sdk-reference>
 - pricing and limits: <https://vercel.com/docs/vercel-sandbox/pricing>
 - lockfile: `package-lock.json` records the resolved tarball and integrity
