@@ -304,6 +304,27 @@ export function resolveModalRuntimeOptions(
       );
     }
   }
+  // Hard limits are validated on their own before any comparison with a
+  // reservation. Otherwise `cpuLimit: NaN` or `memoryLimitMiB: -1` slips
+  // through whenever the matching reservation is omitted, and the failure
+  // resurfaces at `sandboxes.create` with a message that no longer names the
+  // real cause.
+  if (resources?.cpuLimit !== undefined) {
+    if (!Number.isFinite(resources.cpuLimit) || resources.cpuLimit < MODAL_MIN_CPU_CORES) {
+      throw new Error(
+        `ModalRuntime resources.cpuLimit must be a finite number >= ${MODAL_MIN_CPU_CORES} `
+          + `physical cores; got ${String(resources.cpuLimit)}`,
+      );
+    }
+  }
+  if (resources?.memoryLimitMiB !== undefined) {
+    if (!Number.isFinite(resources.memoryLimitMiB) || resources.memoryLimitMiB <= 0) {
+      throw new Error(
+        `ModalRuntime resources.memoryLimitMiB must be a finite, positive number; `
+          + `got ${String(resources.memoryLimitMiB)}`,
+      );
+    }
+  }
   if (
     resources?.cpu !== undefined && resources.cpuLimit !== undefined
     && resources.cpuLimit < resources.cpu
@@ -322,14 +343,10 @@ export function resolveModalRuntimeOptions(
     );
   }
 
-  if (options.blockNetwork === true && options.regions?.length) {
-    // Region pinning is meaningless with no network, and the combination
-    // usually means one of the two was set by mistake.
-    throw new Error(
-      "ModalRuntime cannot combine blockNetwork with regions: a network-blocked sandbox "
-        + "has no reachability for region placement to affect",
-    );
-  }
+  // `blockNetwork` and `regions` are independent Modal parameters: a
+  // sandbox can legitimately need outbound-network isolation *and* placement
+  // in a specific region for data residency, latency, or capacity reasons.
+  // Blocking network access does not make physical placement meaningless.
 
   return {
     credentials: { tokenId, tokenSecret },

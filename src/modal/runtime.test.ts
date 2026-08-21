@@ -336,10 +336,28 @@ describe("Modal config", () => {
     );
   });
 
-  it("rejects blockNetwork combined with region pinning", () => {
-    assert.throws(
+  it("accepts blockNetwork combined with region pinning", () => {
+    // Modal supports both flags independently. A sandbox can legitimately
+    // need outbound isolation *and* placement in a specific region for data
+    // residency, latency, or capacity reasons, and both values are forwarded
+    // to `sandboxes.create` on their own.
+    assert.doesNotThrow(
       () => resolveModalRuntimeOptions(options({ blockNetwork: true, regions: ["us-east-1"] })),
-      /blockNetwork/,
+    );
+  });
+
+  it("rejects a hard limit that is finite-but-non-positive on its own", () => {
+    // Independent of the reservation: `cpuLimit: 0` and `memoryLimitMiB: -1`
+    // reach `sandboxes.create` untouched today because the resolver only
+    // compares each limit against its matching reservation. Reject them here
+    // so the failure names the real cause.
+    assert.throws(
+      () => resolveModalRuntimeOptions(options({ resources: { cpuLimit: Number.NaN } })),
+      /cpuLimit/,
+    );
+    assert.throws(
+      () => resolveModalRuntimeOptions(options({ resources: { memoryLimitMiB: -1 } })),
+      /memoryLimitMiB/,
     );
   });
 
@@ -540,6 +558,28 @@ describe("Modal launch", () => {
     );
   });
 
+  it("reconciles a create that outlives its deadline instead of leaking it", async () => {
+    // The failure mode: the client-side deadline fires, `launch` rejects, and
+    // the create keeps going. Once it lands, the sandbox is billed with no
+    // handle in reach. The runtime must terminate what it eventually got.
+    const h = harness({ createDelayMs: 60 });
+    const rt = runtime(h);
+    await assert.rejects(
+      () => rt.launch({ createTimeoutSeconds: 0.02 }),
+      (error: unknown) => error instanceof ModalDeadlineExceededError,
+    );
+    // `close()` drains reconciliations before releasing the channel, so the
+    // orphan is terminated once the create finally resolves.
+    await rt.close();
+    assert.equal(h.creates.length, 1, "the create call was issued");
+    const survivors = [...h.sandboxes.values()].filter((s) => s.terminateCalls.length === 0);
+    assert.equal(
+      survivors.length,
+      0,
+      "every provisioned sandbox must have been terminated by the orphan reconciler",
+    );
+  });
+
   it("does not cache a failed client factory", async () => {
     let attempts = 0;
     const h = harness();
@@ -627,6 +667,16 @@ describe("Modal lookup", () => {
     assert.equal(await runtime(h).findByLabels({ lane: "absent" }), null);
   });
 
+  it("findByLabels preserves limit:0 rather than coercing it to a one-result lookup", async () => {
+    // A caller who asks for zero results is asking a valid question. Overriding
+    // that to `limit: 1` would return a match where the caller expected none.
+    const h = harness({
+      sandboxes: [{ id: "sb-1", tags: { [OWNER_TAG]: PREFIX } }],
+    });
+    assert.equal(await runtime(h).findByLabels({}, { limit: 0 }), null);
+    assert.equal(h.lists.length, 0, "no list call should be issued for a zero-result lookup");
+  });
+
   it("countByLabels stops early at maxCount", async () => {
     const h = harness({
       sandboxes: Array.from({ length: 5 }, (_, i) => ({
@@ -635,6 +685,36 @@ describe("Modal lookup", () => {
       })),
     });
     assert.equal(await runtime(h).countByLabels({}, { maxCount: 2 }), 2);
+  });
+
+  it("countByLabels does not treat limit as a count ceiling", async () => {
+    // `limit` elsewhere in the port is a page-size hint. Treating it as a
+    // count clamp here would silently under-report matching sandboxes.
+    const h = harness({
+      sandboxes: Array.from({ length: 4 }, (_, i) => ({
+        id: `sb-${i}`,
+        tags: { [OWNER_TAG]: PREFIX },
+      })),
+    });
+    assert.equal(await runtime(h).countByLabels({}, { limit: 2 }), 4);
+  });
+
+  it("treats a sandbox that vanishes before tag verification as a non-match", async () => {
+    // The tag-verification round trip races against the sandbox's own
+    // termination. If `getTags` throws NotFound, the scan must skip that
+    // candidate rather than abort the whole lookup.
+    const h = harness({
+      sandboxes: [
+        { id: "gone", tags: { [OWNER_TAG]: PREFIX } },
+        { id: "here", tags: { [OWNER_TAG]: PREFIX } },
+      ],
+    });
+    const gone = h.sandboxes.get("gone")!;
+    gone.getTags = async () => {
+      throw new NotFoundError("gone between list and tag verify");
+    };
+    const found = await runtime(h).findAllByLabels({});
+    assert.deepEqual(found.map((f) => f.id), ["here"]);
   });
 
   it("rejects a foreign sandbox even when the server-side filter is ignored", async () => {
@@ -721,6 +801,29 @@ describe("Modal runScript", () => {
     );
   });
 
+  it("hands sandbox.exec the trimmed command, not the raw input", async () => {
+    // Trimming validated the command but the original spread the un-trimmed
+    // input into exec. Regression pin for that split.
+    const h = harness({ sandboxes: [{ id: "sb", tags: { [OWNER_TAG]: PREFIX } }] });
+    await runtime(h).runScript({ id: "sb" }, { command: "  echo trimmed\n" });
+    assert.deepEqual(
+      h.sandboxes.get("sb")?.execCalls[0]?.command,
+      ["sh", "-lc", "echo trimmed"],
+    );
+  });
+
+  it("refuses to exec against a foreign sandbox", async () => {
+    // Without an ownership check on the reattach path, a stale or synthesized
+    // handle would let the caller run arbitrary commands in another lane's
+    // sandbox.
+    const h = harness({ sandboxes: [{ id: "theirs", tags: { [OWNER_TAG]: "other-lane" } }] });
+    await assert.rejects(
+      () => runtime(h).runScript({ id: "theirs" }, { command: "id" }),
+      (error: unknown) => error instanceof ModalForeignSandboxError,
+    );
+    assert.equal(h.sandboxes.get("theirs")?.execCalls.length, 0);
+  });
+
   it("returns stdout, stderr, and the exit code separately and combined", async () => {
     const h = harness({
       sandboxes: [{ id: "sb", tags: { [OWNER_TAG]: PREFIX }, stdout: "out", stderr: "err", exitCode: 3 }],
@@ -802,6 +905,20 @@ describe("Modal uploadBundle", () => {
     const h = harness({ sandboxes: [{ id: "sb", tags: { [OWNER_TAG]: PREFIX } }] });
     await runtime(h).uploadBundle({ id: "sb" }, { files: [] });
     assert.equal(h.sandboxes.get("sb")?.writes.length, 0);
+  });
+
+  it("refuses to write to a foreign sandbox", async () => {
+    // Without an ownership check on the reattach path, a stale or synthesized
+    // handle would let the caller write files into another lane's sandbox.
+    const h = harness({ sandboxes: [{ id: "theirs", tags: { [OWNER_TAG]: "other-lane" } }] });
+    await assert.rejects(
+      () => runtime(h).uploadBundle(
+        { id: "theirs" },
+        { files: [{ source: "x", destination: "/tmp/a.txt" }] },
+      ),
+      (error: unknown) => error instanceof ModalForeignSandboxError,
+    );
+    assert.equal(h.sandboxes.get("theirs")?.writes.length, 0);
   });
 });
 
