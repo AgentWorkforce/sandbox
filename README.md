@@ -46,6 +46,23 @@ so a caller learns up front whether a provider can reattach to a sandbox by id,
 poll a background command, hand back a still-booting sandbox, or search by
 label — instead of discovering the answer from a failure at run time.
 
+### Daytona restart recovery
+
+`DaytonaRuntime.start()` does not trust the provider state transition alone. It
+rehydrates the SDK sandbox and runs a bounded `true` readiness probe after `start`,
+because Daytona can report `STARTED` while its Toolbox exec daemon remains
+unavailable. A healthy restart keeps the same sandbox ID. A failure during that
+rehydration itself (auth, rate limit, or network) is not proof the exec daemon
+is dead, so it is propagated as-is and never triggers a replacement.
+
+When the post-start readiness probe fails, the runtime defaults to creating and proving
+a replacement before deleting the unusable sandbox. The returned handle is
+updated in place and can therefore have a new `id`; callers must persist that
+returned ID. The replacement preserves the configured snapshot plus provider
+labels, environment, lifecycle, volume, and network settings, but non-volume
+filesystem changes in the old sandbox are not copied. Stateful callers that
+prefer a hard failure to that trade-off can set `recreateOnFailedStart: false`.
+
 ### E2B runtime contract
 
 `E2BSandboxRuntime` implements both the outer orchestration port and the live
