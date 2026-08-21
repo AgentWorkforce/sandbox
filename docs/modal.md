@@ -38,6 +38,33 @@ verified: the tarball hash matching the registry's `dist.shasum`, and the
 registry signature. A `gitHead` that cannot be resolved is a string, not
 evidence, and should not be quoted as one.
 
+### The provenance ladder
+
+Generalised from this package and cross-checked against the Vercel adapter,
+whose npm publish pipeline produces a different — and luckier — shape. No single
+mechanism is available everywhere, so provenance is established by descending
+until something verifies, and by recording which rung actually held:
+
+| Rung | Mechanism | Availability |
+|---|---|---|
+| 1 | SLSA / npm provenance attestation | **Not universal.** Absent for `modal@0.9.0`. Across our two dependency trees it covered 67/235 and 69/241 packages — under a third. |
+| 2 | Registry signature (`npm audit signatures`) | Broad. Verified for all 235 packages in this tree. |
+| 3 | Tarball hash vs the packument's `dist.shasum` | Always available; requires downloading the tarball. |
+| 4 | `gitHead` | **Resolve before quoting.** One `gh api repos/<owner>/<repo>/commits/<sha>` settles it. |
+
+Two failure modes this package hit that the ladder is shaped around:
+
+- **A present-but-unresolvable `gitHead` is worse than a missing one**, because
+  it reads as provenance in a table and is not.
+- **The `repository` field cannot be trusted to name the repo the package is
+  built from.** Modal's points at `modal-labs/modal-client` — the *Python*
+  client — while the JS SDK lives in `modal-labs/libmodal`. Checking the SHA
+  against both is what surfaced it.
+
+Rung 1 is the strongest when present, and is exactly the rung that was
+unavailable here — which is why the pattern is a ladder rather than a
+technique.
+
 The peer range is pinned narrowly (`>=0.9.0 <0.10.0`) because the SDK is a `0.x`
 beta whose own README states that breaking changes ship in `0.X.0` releases.
 
