@@ -21,6 +21,8 @@ npm install @agent-relay/sandbox
 
 Provider SDKs are peer dependencies: install the one you intend to use. A
 consumer that only runs local sandboxes does not need a remote provider SDK.
+Adapters for providers that publish no JavaScript SDK speak their HTTP API
+directly and add no dependency at all; they take an injectable `fetch` instead.
 
 ## Design
 
@@ -37,6 +39,12 @@ templates, endpoints, hostnames, or credentials: anything environment-specific
 is a required argument supplied by the caller. This keeps the package usable
 outside the environment it was extracted from, and keeps credential handling in
 the caller where it belongs.
+
+Each adapter also declares what it genuinely supports rather than what its
+method names imply. `resolveSandboxRuntimeCapabilities` reads that declaration,
+so a caller learns up front whether a provider can reattach to a sandbox by id,
+poll a background command, hand back a still-booting sandbox, or search by
+label — instead of discovering the answer from a failure at run time.
 
 ### Daytona restart recovery
 
