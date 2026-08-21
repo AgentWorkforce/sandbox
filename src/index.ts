@@ -23,14 +23,21 @@ export const PACKAGE_NAME = "@agent-relay/sandbox";
 export type {
   AsyncRunStartResult,
   AsyncRunStatus,
+  CapabilityAbsence,
   DeclaredSandboxRuntimeCapabilities,
+  FilesystemMode,
+  InteractiveMode,
+  LifetimeMode,
+  OutputStreamMode,
+  SnapshotMode,
   RunScriptResult,
+  SandboxCapabilityModes,
   SandboxCountOptions,
   SandboxLookupOptions,
   SandboxRuntime,
   SandboxRuntimeCapabilities,
 } from "./port.js";
-export { resolveSandboxRuntimeCapabilities } from "./port.js";
+export { isPendingEvidence, resolveSandboxRuntimeCapabilities } from "./port.js";
 
 // --- bootstrap plane (live in-sandbox session) -----------------------------
 export type {
