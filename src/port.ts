@@ -43,6 +43,66 @@ export type SandboxCountOptions = {
   timeoutMs?: number;
 };
 
+/**
+ * How a capability is provided, for the cases where a boolean cannot say it.
+ *
+ * A boolean forces every provider to answer a question it may not be able to
+ * answer. `streamingLogs: false` conflates three genuinely different things —
+ * the provider cannot stream, the provider can but this adapter does not expose
+ * it, and nobody has checked — and a caller choosing a provider needs to tell
+ * them apart. Each union therefore carries an explicit `"unknown"`, so a
+ * provider with no live evidence can say so instead of being pushed into a
+ * claim it has not earned.
+ *
+ * Shape adopted from the `CapabilityMode` union in opencoredev/sandbox-sdk
+ * (see `chief/.briefs/sandbox-sdk-eval-2026-08-21.md`); the specific members
+ * and the `"unknown"` member are this package's own.
+ */
+
+/** How command output is surfaced. */
+export type OutputStreamMode =
+  /** Not established. Never treated as "buffered". */
+  | "unknown"
+  /** Output is buffered and returned once the command completes. */
+  | "buffered"
+  /** Streamed live, stdout and stderr interleaved into one channel. */
+  | "combined-stream"
+  /** Streamed live, stdout and stderr separable by the caller. */
+  | "separate-streams";
+
+/** How long anything written to the sandbox filesystem survives. */
+export type FilesystemMode =
+  /** Not established. */
+  | "unknown"
+  /** Lost when the sandbox stops. */
+  | "ephemeral"
+  /** Held in memory only; lost on any restart. */
+  | "memory"
+  /** Restored across stop/start of the same sandbox. */
+  | "persistent";
+
+/** How a sandbox reaches the end of its life. */
+export type LifetimeMode =
+  /** Not established. */
+  | "unknown"
+  /** The provider terminates it at a deadline that always exists. */
+  | "deadline"
+  /** Terminated after a period of inactivity. */
+  | "idle-timeout"
+  /** Runs until explicitly stopped. */
+  | "never-idle";
+
+/**
+ * Modes a provider may declare. Every field is optional, and an absent field
+ * resolves to `"unknown"` — so an existing runtime that declares nothing keeps
+ * exactly today's behavior and makes no new claim.
+ */
+export type SandboxCapabilityModes = {
+  readonly outputStreams: OutputStreamMode;
+  readonly filesystem: FilesystemMode;
+  readonly lifetime: LifetimeMode;
+};
+
 export type SandboxRuntime = {
   readonly id: string;
   findByLabels(
@@ -108,6 +168,11 @@ export type SandboxRuntime = {
    * nothing behaves exactly as it did before the descriptor existed.
    */
   readonly declaredCapabilities?: Partial<DeclaredSandboxRuntimeCapabilities>;
+  /**
+   * Structured modes for the capabilities a boolean cannot express. Additive
+   * and entirely optional: omitted fields resolve to `"unknown"`.
+   */
+  readonly declaredCapabilityModes?: Partial<SandboxCapabilityModes>;
 };
 
 /**
@@ -133,6 +198,11 @@ export type SandboxRuntimeCapabilities = {
   readonly warmLease: boolean;
   /** `start`/`stop` actually change sandbox state rather than no-opping. */
   readonly lifecycle: boolean;
+  /**
+   * Structured detail for the capabilities a boolean flattens. Always present
+   * after resolution, defaulting to `"unknown"` rather than to a claim.
+   */
+  readonly modes: SandboxCapabilityModes;
 };
 
 /**
@@ -168,6 +238,7 @@ export function resolveSandboxRuntimeCapabilities(
     return cached;
   }
   const declared = runtime.declaredCapabilities ?? {};
+  const declaredModes = runtime.declaredCapabilityModes ?? {};
   // All-or-nothing: a runtime that can submit but cannot poll would strand a
   // live command inside the sandbox with no way to ever observe or reap it.
   const asyncExec = typeof runtime.startScript === "function"
@@ -180,6 +251,15 @@ export function resolveSandboxRuntimeCapabilities(
     detachedLaunch: typeof runtime.launchDetached === "function",
     warmLease: declared.warmLease ?? true,
     lifecycle: declared.lifecycle ?? true,
+    // Modes default to "unknown", not to a plausible-looking value. An
+    // undeclared mode means nobody has established it, and inventing one here
+    // would manufacture exactly the false confidence the booleans already cost
+    // us.
+    modes: {
+      outputStreams: declaredModes.outputStreams ?? "unknown",
+      filesystem: declaredModes.filesystem ?? "unknown",
+      lifetime: declaredModes.lifetime ?? "unknown",
+    },
   };
   capabilitiesByRuntime.set(runtime, resolved);
   return resolved;
