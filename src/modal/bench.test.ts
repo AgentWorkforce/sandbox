@@ -337,4 +337,94 @@ describe("Modal benchmark run", () => {
       /positive integer/,
     );
   });
+
+  it("rejects a fractional count rather than silently under-running", async () => {
+    // `Math.floor(2.7)` would silently run 2 sandboxes for a request that
+    // named 2.7 — a benchmark for a shape the caller never asked for.
+    const { runtime } = fakeRuntime();
+    await assert.rejects(
+      () =>
+        runModalBenchmark(runtime, {
+          count: 2.7,
+          budgetUsd: 1,
+          shape: SHAPE,
+          projectedLifetimeSeconds: 120,
+        }),
+      /positive integer/,
+    );
+  });
+
+  it("rejects a non-positive projectedLifetimeSeconds", async () => {
+    // Zero seconds reserves $0 in the ledger but still creates sandboxes with
+    // a positive provider lifetime, so the budget guard cannot stop the run.
+    const { runtime } = fakeRuntime();
+    await assert.rejects(
+      () =>
+        runModalBenchmark(runtime, {
+          count: 1,
+          budgetUsd: 1,
+          shape: SHAPE,
+          projectedLifetimeSeconds: 0,
+        }),
+      /projectedLifetimeSeconds/,
+    );
+  });
+
+  it("does not record firstExecMs when the canary command exits nonzero", async () => {
+    // A first-exec measurement for a command that failed is a green latency
+    // on a red canary — exactly the shape a promotion decision should NOT
+    // rest on.
+    const { runtime } = fakeRuntime();
+    const failingRuntime = {
+      ...runtime,
+      runScript: async () => ({ output: "", exitCode: 1 }),
+    };
+    const report = await runModalBenchmark(failingRuntime, {
+      count: 1,
+      budgetUsd: 1,
+      shape: SHAPE,
+      projectedLifetimeSeconds: 120,
+      measureFirstExec: true,
+      now: () => 0,
+    });
+    assert.equal(report.firstExecMsP50, null);
+    assert.equal(report.samples[0]?.firstExecMs, undefined);
+    assert.match(report.samples[0]?.error ?? "", /exit(ed)? with code 1/);
+  });
+
+  it("reconciles a launch that threw with a stray sandbox from the label sweep", async () => {
+    // Simulates the failure mode: launch rejects but the provider had already
+    // provisioned a sandbox; the label sweep in teardown must catch it.
+    let attempts = 0;
+    const strayId = "sb-orphaned-42";
+    const destroyed: string[] = [];
+    const runtime: SandboxRuntime = {
+      id: "modal-fake-reconcile",
+      launch: async () => {
+        attempts += 1;
+        throw new Error("client-side deadline fired but the create landed anyway");
+      },
+      findByLabels: async () => null,
+      findAllByLabels: async () => attempts > 0 ? [{ id: strayId } as RuntimeHandle] : [],
+      countByLabels: async () => 0,
+      runScript: async () => ({ output: "", exitCode: 0 }),
+      uploadBundle: async () => {},
+      destroy: async (handle) => {
+        destroyed.push(handle.id);
+      },
+      getById: async () => null,
+    };
+    const report = await runModalBenchmark(runtime, {
+      count: 1,
+      budgetUsd: 1,
+      shape: SHAPE,
+      projectedLifetimeSeconds: 120,
+      labels: { lane: "reconcile-test" },
+      now: () => 0,
+    });
+    assert.deepEqual(destroyed, [strayId], "the stray must be destroyed");
+    assert.equal(report.leaked.length, 0);
+    assert.equal(report.ledger[0]?.sandboxId, strayId);
+    assert.equal(report.ledger[0]?.state, "verified-gone");
+  });
 });

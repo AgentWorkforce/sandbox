@@ -148,22 +148,29 @@ describe("Modal live benchmark (BILLABLE — creates real sandboxes)", () => {
     const labels = { lane: "modal-adapter-0821", probe: "warmlease" };
     let sandboxId: string | undefined;
     try {
-      const handle = await runtime.launch({ labels });
-      sandboxId = handle.id;
-      const found = await runtime.findAllByLabels(labels);
-      assert.ok(
-        found.some((candidate) => candidate.id === handle.id),
-        "a sandbox tagged at create must come back from a tag-filtered list",
-      );
-    } finally {
-      if (sandboxId) {
-        await runtime.destroy({ id: sandboxId });
-        assert.equal(
-          await runtime.getById(sandboxId),
-          null,
-          "the probe sandbox must be verifiably gone",
+      try {
+        const handle = await runtime.launch({ labels });
+        sandboxId = handle.id;
+        const found = await runtime.findAllByLabels(labels);
+        assert.ok(
+          found.some((candidate) => candidate.id === handle.id),
+          "a sandbox tagged at create must come back from a tag-filtered list",
         );
+      } finally {
+        // Destroy sits in its own try/finally so that a throw here — or a
+        // failing absent-assertion — cannot skip the outer `close()`. Losing
+        // the gRPC channel would leak it and mask any original error with a
+        // teardown error.
+        if (sandboxId) {
+          await runtime.destroy({ id: sandboxId });
+          assert.equal(
+            await runtime.getById(sandboxId),
+            null,
+            "the probe sandbox must be verifiably gone",
+          );
+        }
       }
+    } finally {
       await runtime.close();
     }
   });
