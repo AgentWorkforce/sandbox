@@ -252,12 +252,18 @@ shape — are pending credential provisioning. Until that run lands, every
 behavioral cell in the capability table above stays `false`, and this section
 must not be read as if it contained measurements.
 
-The harness is written and ready to fire: `scripts/vercel-bench.ts`. It ledgers
-each sandbox name and fsyncs it *before* the create call goes out, so a crash
-between submit and response still leaves a reapable record; it caps count,
-vCPUs, and sandbox lifetime; and it ends every run with an independent prefix
-audit that reports `destroyed` and `verifiedGone` as separate numbers. If those
-two disagree, that disagreement is the finding.
+The harness is written, ready to fire, and its guards are unit-tested against a
+fake runtime — `src/vercel/bench.ts` with `scripts/vercel-bench.ts` as a thin
+CLI over it. Guards that have never been exercised are not guards, and a real
+billing account is the wrong place to discover that. It ledgers each sandbox name and
+fsyncs it *before* the create call goes out, so a crash between submit and
+response still leaves a reapable record; it refuses up front to exceed its
+sandbox cap, because a bound checked after the fact is not a bound; it tears
+down in a `finally`, so a failed measurement still cleans up; and it ends every
+run with an independent prefix audit reporting `destroyed` and `verifiedGone` as
+separate numbers. If those two disagree, that disagreement is the finding — and
+the audit is the only thing that can catch a delete which returned success and
+left the sandbox running.
 
 ## Dependency provenance
 
