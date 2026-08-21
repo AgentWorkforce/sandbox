@@ -107,6 +107,38 @@ export type {
   Agent37FetchResponse,
 } from "./agent37/client.js";
 
+export {
+  VercelCapabilityMismatchError,
+  VercelDestroyVerificationError,
+  VercelDetachedLaunchUnsupportedError,
+  VercelForeignSandboxError,
+  VercelLifecycleTimeoutError,
+  VercelListPageLimitError,
+  VercelOperationTimeoutError,
+  VercelSandboxRuntime,
+  VercelTagLimitError,
+  VercelUnknownExitCodeError,
+} from "./vercel/runtime.js";
+export type {
+  VercelAttachedSandboxOptions,
+  VercelBundleFile,
+  VercelListOwnedOptions,
+  VercelOwnedSandbox,
+  VercelRunScriptOptions,
+  VercelUploadBundleOptions,
+} from "./vercel/runtime.js";
+export {
+  vercelObservedCapabilities,
+  vercelSandboxCapabilities,
+  vercelWorkflowCapabilities,
+} from "./vercel/capabilities.js";
+export type { VercelObservedCapabilities } from "./vercel/capabilities.js";
+export type {
+  VercelCredentials,
+  VercelRuntimeOptions,
+  VercelSandboxSource,
+} from "./vercel/config.js";
+
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 

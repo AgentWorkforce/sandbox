@@ -26,10 +26,14 @@
   },
   "peerDependencies": {
     "@daytonaio/sdk": ">=0.180.0 <0.181.0",
+    "@vercel/sandbox": "3.0.1",
     "e2b": ">=2.35.0 <3.0.0"
   },
   "peerDependenciesMeta": {
     "@daytonaio/sdk": {
+      "optional": true
+    },
+    "@vercel/sandbox": {
       "optional": true
     },
     "e2b": {
@@ -39,6 +43,7 @@
   "devDependencies": {
     "@daytonaio/sdk": "^0.180.0",
     "@types/node": "^22",
+    "@vercel/sandbox": "3.0.1",
     "e2b": "^2.35.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
