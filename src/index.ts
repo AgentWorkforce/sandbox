@@ -117,6 +117,7 @@ export {
 } from "./modal/runtime.js";
 export {
   MODAL_DEFAULTS,
+  MODAL_MAX_LIFETIME_MS,
   MODAL_MIN_CPU_CORES,
   resolveModalRuntimeOptions,
 } from "./modal/config.js";

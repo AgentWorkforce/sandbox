@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { describe, it } from "node:test";
 
 import {
+  MODAL_MAX_LIFETIME_MS,
   MODAL_MIN_CPU_CORES,
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
@@ -281,6 +282,17 @@ describe("Modal config", () => {
     assert.throws(
       () => resolveModalRuntimeOptions(options({ maxLifetimeMs: 1_000, idleTimeoutMs: 5_000 })),
       /could never fire/,
+    );
+  });
+
+  it("rejects a lifetime beyond Modal's documented 24-hour ceiling", () => {
+    assert.throws(
+      () => resolveModalRuntimeOptions(options({ maxLifetimeMs: MODAL_MAX_LIFETIME_MS + 1 })),
+      /24-hour ceiling/,
+    );
+    // Exactly 24 hours is allowed: it is a ceiling, not an exclusive bound.
+    assert.doesNotThrow(
+      () => resolveModalRuntimeOptions(options({ maxLifetimeMs: MODAL_MAX_LIFETIME_MS })),
     );
   });
 

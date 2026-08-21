@@ -56,6 +56,13 @@ provider this package adapts treats a sandbox as living until told otherwise, so
 Silently inheriting a five-minute cap is the single largest footgun in this
 provider.
 
+Modal also imposes a **hard 24-hour ceiling** on that lifetime, and
+`MODAL_MAX_LIFETIME_MS` rejects anything above it at construction. Past 24 hours
+the provider offers no continuous-run option at all — its own guidance is to take
+a filesystem snapshot and restore it into a *new* sandbox. A genuinely persistent
+sandbox is therefore not something Modal can be configured into; it is something
+a caller must rebuild daily, losing anything not captured in the snapshot.
+
 `createTimeoutSeconds` on `launch` is a **client-side deadline on the create
 call** and is deliberately *not* forwarded to Modal's `timeoutMs`. Conflating
 them would give a caller who asked to wait 30 s for provisioning a sandbox that
@@ -199,7 +206,7 @@ calls it will not exit.
 ## Evidence status
 
 No capability in `modalObservedCapabilities` has been promoted. The adapter and
-its 59 mocked contract tests are complete, but no live run has occurred —
+its 60 mocked contract tests are complete, but no live run has occurred —
 credentials were still outstanding at the time of writing. Modal authenticates
 with a **token pair** (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`), not a single
 bearer key, and the adapter never reads them from ambient process state.

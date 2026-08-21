@@ -179,6 +179,16 @@ export const MODAL_DEFAULTS = {
  */
 export const MODAL_MIN_CPU_CORES = 0.125;
 
+/**
+ * Modal's documented hard ceiling on a sandbox's maximum lifetime: 24 hours.
+ *
+ * Beyond this the provider offers no continuous-run option at all — its own
+ * guidance is to take a filesystem snapshot and restore it into a *new*
+ * sandbox. So a request for a longer-lived sandbox is not merely optimistic,
+ * it is unsatisfiable, and it fails here rather than at create time.
+ */
+export const MODAL_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
 /** Config with every optional field resolved. */
 export type ResolvedModalRuntimeOptions =
   & Omit<ModalRuntimeOptions, keyof typeof MODAL_DEFAULTS | "workdir">
@@ -236,6 +246,13 @@ export function resolveModalRuntimeOptions(
     );
   }
   const maxLifetimeMs = requirePositiveMs(options.maxLifetimeMs, Number.NaN, "maxLifetimeMs");
+  if (maxLifetimeMs > MODAL_MAX_LIFETIME_MS) {
+    throw new Error(
+      `ModalRuntime maxLifetimeMs (${maxLifetimeMs}) exceeds Modal's documented 24-hour ceiling `
+        + `(${MODAL_MAX_LIFETIME_MS}). Modal has no longer-lived sandbox: past 24 hours its own `
+        + "guidance is to snapshot the filesystem and restore into a new sandbox.",
+    );
+  }
 
   const idleTimeoutMs = options.idleTimeoutMs === undefined
     ? undefined
