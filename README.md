@@ -21,6 +21,8 @@ npm install @agent-relay/sandbox
 
 Provider SDKs are peer dependencies: install the one you intend to use. A
 consumer that only runs local sandboxes does not need a remote provider SDK.
+Adapters for providers that publish no JavaScript SDK speak their HTTP API
+directly and add no dependency at all; they take an injectable `fetch` instead.
 
 ### Provider constraints
 
@@ -77,6 +79,29 @@ is a required argument supplied by the caller. This keeps the package usable
 outside the environment it was extracted from, and keeps credential handling in
 the caller where it belongs.
 
+Each adapter also declares what it genuinely supports rather than what its
+method names imply. `resolveSandboxRuntimeCapabilities` reads that declaration,
+so a caller learns up front whether a provider can reattach to a sandbox by id,
+poll a background command, hand back a still-booting sandbox, or search by
+label — instead of discovering the answer from a failure at run time.
+
+### Daytona restart recovery
+
+`DaytonaRuntime.start()` does not trust the provider state transition alone. It
+rehydrates the SDK sandbox and runs a bounded `true` readiness probe after `start`,
+because Daytona can report `STARTED` while its Toolbox exec daemon remains
+unavailable. A healthy restart keeps the same sandbox ID. A failure during that
+rehydration itself (auth, rate limit, or network) is not proof the exec daemon
+is dead, so it is propagated as-is and never triggers a replacement.
+
+When the post-start readiness probe fails, the runtime defaults to creating and proving
+a replacement before deleting the unusable sandbox. The returned handle is
+updated in place and can therefore have a new `id`; callers must persist that
+returned ID. The replacement preserves the configured snapshot plus provider
+labels, environment, lifecycle, volume, and network settings, but non-volume
+filesystem changes in the old sandbox are not copied. Stateful callers that
+prefer a hard failure to that trade-off can set `recreateOnFailedStart: false`.
+
 ### E2B runtime contract
 
 `E2BSandboxRuntime` implements both the outer orchestration port and the live
@@ -106,6 +131,27 @@ erase the session directory or submit another copy. Status is pending only
 while the matching provider process is present. If that process disappears
 without publishing its exit sidecar, status becomes terminal with
 `E2B_ASYNC_PROCESS_LOST_EXIT_CODE` (`255`).
+
+### Daytona wire-supplement
+
+Daytona's Sandbox wire response carries two fields — `sandboxClass` (the
+sandbox's class/tier) and `warmPoolId` (set while a sandbox is an unclaimed
+warm-pool member) — that exist on the low-level `@daytona/api-client` DTOs but
+that the vendored `@daytonaio/sdk`'s `Sandbox` class does not copy onto
+itself. `DaytonaRuntime.getWireSupplement(handle)` fetches both directly via
+the SDK's low-level `sandboxApi`, the same reach pattern `runtime.ts` already
+uses for detached create.
+
+This is a narrow, deliberately temporary gap, not a fork of the SDK: the
+other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
+`spot`) already ship on the public `Sandbox` class as of `@daytonaio/sdk`
+0.200.0–0.205.0 — a dependency bump alone covers those. Tracked upstream at
+[daytona/clients#207](https://github.com/daytona/clients/issues/207)
+(precedent: [#192](https://github.com/daytona/clients/pull/192), which added
+`spot` the same way). Retire `src/daytona/wire-supplement.ts` once
+`processSandboxDto()` copies `sandboxClass`/`warmPoolId` and a subsequent SDK
+bump picks that up — `runtime.test.ts`'s `DaytonaRuntime smoke` suite has a
+load-bearing regression test that fails once that happens.
 
 ## Development
 

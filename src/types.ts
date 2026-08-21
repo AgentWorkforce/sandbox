@@ -48,12 +48,11 @@ export interface ExecResult {
   output: string;
   exitCode: number;
   /**
-   * True when `output` is a TAIL of the real output rather than all of it.
-   *
-   * Present only when the adapter actually bounds the read. Absent means the
-   * output is complete — never "unknown". A silently shortened log reads as a
-   * command that simply printed less, which is the one reading that cannot be
-   * distinguished from the truth by looking at the value.
+   * True when the provider capped captured output and `output` is therefore
+   * incomplete. Optional and additive; `undefined` means the provider did not
+   * report truncation, not that the output is known to be complete. A given
+   * adapter may guarantee more than this baseline for its own reads — see
+   * that adapter's implementation for the stronger claim, if any.
    */
   truncated?: boolean;
 }
