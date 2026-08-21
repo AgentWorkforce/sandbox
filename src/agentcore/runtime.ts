@@ -47,6 +47,8 @@ const DEFAULT_SESSION_TIMEOUT_SECONDS = 900;
 const MAX_SESSION_TIMEOUT_SECONDS = 28_800;
 
 const SYSTEM_INTERPRETER_ID = "aws.codeinterpreter.v1";
+/** Bound on pages walked while searching for an owned interpreter to adopt by name. */
+const MAX_ADOPT_LIST_PAGES = 10;
 
 export class AgentCoreOperationTimeoutError extends Error {
   constructor(readonly operation: string, readonly timeoutMs: number) {
@@ -614,6 +616,23 @@ export class AgentCoreSandboxRuntime implements SandboxRuntime, WorkflowRuntime 
       "create code interpreter",
     );
     const api = await this.api();
+    // Adopt first: the name is fixed and deterministic precisely so a fresh
+    // process instance (or a second runtime pointed at the same
+    // configuration) rediscovers and reuses the interpreter a prior one
+    // created, instead of every instance independently creating its own —
+    // which would leave each instance's sessions unreachable from every
+    // other instance's `getById`, since a session can only be looked up
+    // through the `codeInterpreterIdentifier` that created it.
+    const existing = await this.findExistingInterpreterByName(api, source.name, deadline);
+    if (existing) {
+      const ready = await this.waitUntilInterpreterReady(
+        existing.codeInterpreterId,
+        existing.status ?? "CREATING",
+        deadline,
+      );
+      this.resolvedInterpreterId = ready;
+      return ready;
+    }
     const network = toNetworkConfigParams(source.network);
     const created = await api.control.createCodeInterpreter({
       name: source.name,
@@ -631,6 +650,40 @@ export class AgentCoreSandboxRuntime implements SandboxRuntime, WorkflowRuntime 
     );
     this.resolvedInterpreterId = ready;
     return ready;
+  }
+
+  /**
+   * Search for an already-created interpreter with this exact name.
+   *
+   * Bounded at `MAX_ADOPT_LIST_PAGES` pages so a large or pathologically
+   * paginated account cannot turn adoption into an unbounded crawl. Falling
+   * through to `createCodeInterpreter` when the search is inconclusive is
+   * safe rather than silent: a genuine duplicate name beyond the search
+   * window surfaces as a loud `ConflictException` from the create call
+   * (names are unique per account), not a silently-adopted wrong resource.
+   */
+  private async findExistingInterpreterByName(
+    api: AgentCoreApi,
+    name: string,
+    deadline: Deadline,
+  ): Promise<{ codeInterpreterId: string; status?: string } | null> {
+    let nextToken: string | undefined;
+    for (let page = 0; page < MAX_ADOPT_LIST_PAGES; page += 1) {
+      const result = await api.control.listCodeInterpreters({
+        maxResults: 100,
+        ...(nextToken ? { nextToken } : {}),
+        abortSignal: deadline.signal(),
+      });
+      const match = result.items.find((item) => item.name === name);
+      if (match) {
+        return { codeInterpreterId: match.codeInterpreterId, ...(match.status ? { status: match.status } : {}) };
+      }
+      if (!result.nextToken) {
+        return null;
+      }
+      nextToken = result.nextToken;
+    }
+    return null;
   }
 
   private async waitUntilInterpreterReady(

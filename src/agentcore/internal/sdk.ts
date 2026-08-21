@@ -138,7 +138,12 @@ export interface AgentCoreInvokeContentItem {
  * `listFiles`) report only `content`/`isError`.
  */
 export interface AgentCoreInvokeResult {
-  isError: boolean;
+  /**
+   * Optional in the vendor type (`CodeInterpreterResult.isError?: boolean`),
+   * not just here — an absent value means "not reported", and callers treat
+   * it as falsy rather than assuming success.
+   */
+  isError?: boolean;
   content: AgentCoreInvokeContentItem[];
   structuredContent?: {
     stdout?: string;
@@ -380,7 +385,12 @@ export async function createOfficialAgentCoreApi(
         new InvokeCodeInterpreterCommand({
           codeInterpreterIdentifier: params.codeInterpreterIdentifier,
           sessionId: params.sessionId,
-          name: params.name,
+          // `ToolName` is a closed enum in the vendor types (no `(string &
+          // {})` escape hatch), but `AgentCoreInvokeParams.name` stays a
+          // plain `string` on this side of the boundary so fakes in tests
+          // aren't forced to import the vendor enum. The cast lives here,
+          // at the one place that constructs the vendor command.
+          name: params.name as ConstructorParameters<typeof InvokeCodeInterpreterCommand>[0]["name"],
           arguments: params.arguments,
         }),
         { abortSignal: params.abortSignal },
@@ -393,20 +403,43 @@ export async function createOfficialAgentCoreApi(
 }
 
 /**
- * `InvokeCodeInterpreter` returns an AWS SDK event stream. Every event
- * observed in AWS's own examples carries a `result` field shaped like
- * `AgentCoreInvokeResult`; this drains the whole stream (so the underlying
- * HTTP/2 stream is not left half-read) and keeps the last result event,
- * which is where a multi-chunk response's final `structuredContent` lands.
+ * `InvokeCodeInterpreter` returns an AWS SDK event stream whose events are a
+ * discriminated union: a success `result` member, or one of several
+ * exception members (`accessDeniedException`, `conflictException`,
+ * `internalServerException`, `resourceNotFoundException`,
+ * `serviceQuotaExceededException`, `throttlingException`,
+ * `validationException`). The AWS SDK is expected to throw these as
+ * rejected promises rather than deliver them as stream data, but the vendor
+ * type models them as reachable stream events regardless — this drains the
+ * whole stream (so the underlying HTTP/2 stream is not left half-read),
+ * surfaces any exception member it finds explicitly rather than silently
+ * skipping it, and keeps the last `result` event otherwise, which is where
+ * a multi-chunk response's final `structuredContent` lands.
  */
 async function collectInvokeStream(
-  stream: AsyncIterable<{ result?: AgentCoreInvokeResult }> | undefined,
+  // Typed loosely and inspected defensively on purpose: the vendor union
+  // (`CodeInterpreterStreamOutput`) has no index signature, and this
+  // function's job is precisely to duck-type across its members without
+  // depending on which one showed up.
+  stream: AsyncIterable<unknown> | undefined,
 ): Promise<AgentCoreInvokeResult> {
   let last: AgentCoreInvokeResult | undefined;
   if (stream) {
-    for await (const event of stream) {
+    for await (const raw of stream) {
+      const event = raw as Record<string, unknown>;
       if (event.result) {
-        last = event.result;
+        last = event.result as AgentCoreInvokeResult;
+        continue;
+      }
+      const exceptionKey = Object.keys(event).find(
+        (key) => key !== "$unknown" && event[key] !== undefined,
+      );
+      if (exceptionKey) {
+        const detail = event[exceptionKey] as { message?: string } | undefined;
+        throw new Error(
+          `AgentCore InvokeCodeInterpreter stream reported ${exceptionKey}: `
+            + `${detail?.message ?? "(no message)"}`,
+        );
       }
     }
   }

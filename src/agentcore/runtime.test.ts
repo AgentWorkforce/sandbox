@@ -36,14 +36,14 @@ function fakeApi(overrides: Partial<{
   const calls = { control: [] as string[], data: [] as string[] };
   let interpreterCounter = 0;
   let sessionCounter = 0;
-  const interpreters = new Map<string, AgentCoreGetInterpreterResult>();
+  const interpreters = new Map<string, AgentCoreGetInterpreterResult & { name: string }>();
   const sessions = new Map<string, AgentCoreGetSessionResult & { codeInterpreterIdentifier: string }>();
 
   const control: AgentCoreControlApiLike = {
     createCodeInterpreter: async (params) => {
       calls.control.push("createCodeInterpreter");
       const id = `ci-${++interpreterCounter}`;
-      interpreters.set(id, { codeInterpreterId: id, status: "READY" });
+      interpreters.set(id, { codeInterpreterId: id, status: "READY", name: params.name });
       return { codeInterpreterArn: `arn:aws:bedrock-agentcore:${TEST_REGION}::code-interpreter/${id}`, codeInterpreterId: id, status: "READY" };
     },
     getCodeInterpreter: async ({ codeInterpreterId }) => {
@@ -63,7 +63,13 @@ function fakeApi(overrides: Partial<{
     },
     listCodeInterpreters: async () => {
       calls.control.push("listCodeInterpreters");
-      return { items: [] };
+      return {
+        items: [...interpreters.values()].map((item) => ({
+          codeInterpreterId: item.codeInterpreterId,
+          name: item.name,
+          status: item.status,
+        })),
+      };
     },
     ...overrides.control,
   };
