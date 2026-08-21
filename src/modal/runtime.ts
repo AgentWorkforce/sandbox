@@ -121,6 +121,9 @@ export class ModalRuntime implements SandboxRuntime {
       if (excluded.has(sandbox.sandboxId)) {
         continue;
       }
+      if (!(await this.tagsReallyMatch(sandbox, tags, deadline))) {
+        continue;
+      }
       if (states === null) {
         matches.push(this.toHandle(sandbox.sandboxId));
       } else {
@@ -157,6 +160,9 @@ export class ModalRuntime implements SandboxRuntime {
     let count = 0;
     for await (const sandbox of context.client.sandboxes.list(this.listParams(context, tags))) {
       deadline.assertNotExpired();
+      if (!(await this.tagsReallyMatch(sandbox, tags, deadline))) {
+        continue;
+      }
       if (states !== null) {
         const state = await deadline.run(sandbox.poll().then(exitCodeToState));
         if (!states.includes(state)) {
@@ -454,6 +460,34 @@ export class ModalRuntime implements SandboxRuntime {
     };
   }
 
+  /**
+   * Confirm in-process that a listed sandbox really carries the tags we
+   * filtered on.
+   *
+   * The server-side filter is the mechanism this adapter's ownership rests on,
+   * and it has not yet been proven live — `warmLease` is still `false`. A
+   * filter that is silently ignored or partially applied would return a foreign
+   * sandbox, and handing that back as a warm lease is worse than returning
+   * nothing: the caller would exec into another tenant's container. So the
+   * claim is re-checked against the sandbox's own tags rather than trusted.
+   *
+   * Skipped when there is nothing to check, so an unfiltered audit listing
+   * (`owned: false` with no labels) does not pay for a round trip that could
+   * not reject anything.
+   */
+  private async tagsReallyMatch(
+    sandbox: ModalSandboxLike,
+    wanted: Record<string, string>,
+    deadline: Deadline,
+  ): Promise<boolean> {
+    const entries = Object.entries(wanted);
+    if (!this.options.verifyTagsClientSide || entries.length === 0) {
+      return true;
+    }
+    const actual = await deadline.run(sandbox.getTags());
+    return entries.every(([key, value]) => actual[key] === value);
+  }
+
   private async isOwned(sandbox: ModalSandboxLike, deadline: Deadline): Promise<boolean> {
     const tags = await deadline.run(sandbox.getTags());
     return tags[this.options.ownerTagKey] === this.options.namePrefix;
@@ -485,7 +519,7 @@ export class ModalRuntime implements SandboxRuntime {
   }
 
   private deadline(totalMs: number, operation: string): Deadline {
-    return new Deadline(totalMs, operation);
+    return new Deadline(totalMs, operation, this.options.requestTimeoutMs);
   }
 
   private client(): Promise<ModalClientLike> {
@@ -580,16 +614,35 @@ export class ModalTagCollisionError extends Error {
   }
 }
 
-/** An operation exceeded its explicit client-side deadline. */
+/**
+ * An operation exceeded its explicit client-side deadline.
+ *
+ * Two independent caps bound any Modal call: this per-operation budget, and
+ * the SDK's own per-request `requestTimeoutMs`. They fail differently on
+ * purpose — the SDK's cap surfaces as a gRPC error from the vendor, this one
+ * as `ModalDeadlineExceededError` — so the error *type* already says which
+ * fired. The message names the sibling cap anyway, because a reader looking at
+ * a timeout usually needs to check both numbers before concluding the network
+ * was slow.
+ */
 export class ModalDeadlineExceededError extends Error {
   readonly operation: string;
   readonly timeoutMs: number;
+  /** The SDK's per-request cap, when the runtime knew it. */
+  readonly requestTimeoutMs: number | undefined;
 
-  constructor(operation: string, timeoutMs: number) {
-    super(`Modal ${operation} exceeded its ${timeoutMs}ms deadline`);
+  constructor(operation: string, timeoutMs: number, requestTimeoutMs?: number) {
+    super(
+      `Modal ${operation} exceeded its ${timeoutMs}ms operation deadline`
+        + (requestTimeoutMs === undefined
+          ? ""
+          : ` (the SDK's per-request cap is ${requestTimeoutMs}ms and fails separately, `
+            + "as a gRPC error rather than this one)"),
+    );
     this.name = "ModalDeadlineExceededError";
     this.operation = operation;
     this.timeoutMs = timeoutMs;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 }
 
@@ -631,10 +684,26 @@ export function reconcileModalCapabilities(runtime: SandboxRuntime): void {
         + "(Modal exposes no stop/start for a Sandbox; terminate is terminal)",
     );
   }
+  // Scoped to Modal on purpose, and NOT a general rule.
+  //
+  // For most providers, `start`/`stop` present with `lifecycle: false` is the
+  // legitimate shape of a real implementation awaiting a live probe — the
+  // orchestrator reads the declaration, not method presence, so the under-claim
+  // is safe and is the only way a capability can wait for evidence. Forbidding
+  // it would make evidence-gating impossible.
+  //
+  // Modal is the narrow case where the check still holds: the SDK exposes no
+  // stop/start for a Sandbox *at all*, so a `start`/`stop` appearing on this
+  // class could not be an unproven implementation. It could only be a
+  // fabrication or a no-op, and either would tell the orchestrator a Modal
+  // sandbox can be suspended when nothing can suspend it.
   if (declared.lifecycle !== true && (has("start") || has("stop"))) {
     mismatches.push(
-      "declaredCapabilities.lifecycle is not true but start/stop are implemented: "
-        + "a no-op lifecycle method is worse than an absent one",
+      "declaredCapabilities.lifecycle is not true but start/stop are implemented. "
+        + "Modal exposes no stop/start for a Sandbox, so these cannot be a real "
+        + "implementation awaiting a live probe — only a no-op or a fabrication. "
+        + "(This check is Modal-specific: elsewhere, methods present with "
+        + "lifecycle:false is the correct way to gate a capability on evidence.)",
     );
   }
 
@@ -697,8 +766,16 @@ export function reconcileModalCapabilities(runtime: SandboxRuntime): void {
 class Deadline {
   private readonly expiresAt: number;
 
-  constructor(private readonly totalMs: number, private readonly operation: string) {
+  constructor(
+    private readonly totalMs: number,
+    private readonly operation: string,
+    private readonly requestTimeoutMs?: number,
+  ) {
     this.expiresAt = Date.now() + totalMs;
+  }
+
+  private expired(): ModalDeadlineExceededError {
+    return new ModalDeadlineExceededError(this.operation, this.totalMs, this.requestTimeoutMs);
   }
 
   remainingMs(): number {
@@ -707,24 +784,21 @@ class Deadline {
 
   assertNotExpired(): void {
     if (this.remainingMs() <= 0) {
-      throw new ModalDeadlineExceededError(this.operation, this.totalMs);
+      throw this.expired();
     }
   }
 
   async run<T>(work: Promise<T>): Promise<T> {
     const remaining = this.remainingMs();
     if (remaining <= 0) {
-      throw new ModalDeadlineExceededError(this.operation, this.totalMs);
+      throw this.expired();
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         work,
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new ModalDeadlineExceededError(this.operation, this.totalMs)),
-            remaining,
-          );
+          timer = setTimeout(() => reject(this.expired()), remaining);
         }),
       ]);
     } finally {

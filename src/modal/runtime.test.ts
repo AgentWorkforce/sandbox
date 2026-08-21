@@ -142,6 +142,11 @@ type FakeClientSpec = {
   fromIdError?: Error;
   appError?: Error;
   createDelayMs?: number;
+  /**
+   * Simulate a provider whose server-side tag filter is silently ignored:
+   * `list` yields every sandbox regardless of the requested tags.
+   */
+  listIgnoresTagFilter?: boolean;
 };
 
 type Harness = {
@@ -213,9 +218,11 @@ function harness(spec: FakeClientSpec = {}): Harness {
       list: (params) => {
         h.lists.push(params ?? {});
         const wanted = params?.tags ?? {};
-        const matching = [...sandboxes.values()].filter((sb) =>
-          Object.entries(wanted).every(([k, v]) => sb.tags[k] === v)
-        );
+        const matching = spec.listIgnoresTagFilter
+          ? [...sandboxes.values()]
+          : [...sandboxes.values()].filter((sb) =>
+            Object.entries(wanted).every(([k, v]) => sb.tags[k] === v)
+          );
         return (async function* () {
           for (const sb of matching) {
             yield sb;
@@ -389,7 +396,7 @@ describe("Modal capabilities", () => {
     }
   });
 
-  it("construction-time reconciliation rejects a no-op lifecycle method", () => {
+  it("rejects start/stop on Modal specifically, since no real one could exist", () => {
     const lying = {
       ...(runtime(harness()) as unknown as Record<string, unknown>),
       declaredCapabilities: { lifecycle: false },
@@ -407,7 +414,7 @@ describe("Modal capabilities", () => {
       () => reconcileModalCapabilities(lying),
       (error: unknown) =>
         error instanceof ModalCapabilityMismatchError
-        && error.mismatches.some((m) => m.includes("no-op lifecycle method")),
+        && error.mismatches.some((m) => m.includes("only a no-op or a fabrication")),
     );
   });
 
@@ -628,6 +635,61 @@ describe("Modal lookup", () => {
       })),
     });
     assert.equal(await runtime(h).countByLabels({}, { maxCount: 2 }), 2);
+  });
+
+  it("rejects a foreign sandbox even when the server-side filter is ignored", async () => {
+    // The attack this guards: a filter that silently stops working would hand
+    // back another lane's sandbox as a warm lease, and the caller would exec
+    // into it. Worse than returning no lease at all.
+    const h = harness({
+      listIgnoresTagFilter: true,
+      sandboxes: [
+        { id: "mine", tags: { [OWNER_TAG]: PREFIX } },
+        { id: "theirs", tags: { [OWNER_TAG]: "other-lane" } },
+      ],
+    });
+    const found = await runtime(h).findAllByLabels({});
+    assert.deepEqual(found.map((f) => f.id), ["mine"]);
+  });
+
+  it("re-checks caller labels too, not just the ownership tag", async () => {
+    const h = harness({
+      listIgnoresTagFilter: true,
+      sandboxes: [
+        { id: "right-lane", tags: { [OWNER_TAG]: PREFIX, lane: "bench" } },
+        { id: "wrong-lane", tags: { [OWNER_TAG]: PREFIX, lane: "other" } },
+      ],
+    });
+    const found = await runtime(h).findAllByLabels({ lane: "bench" });
+    assert.deepEqual(found.map((f) => f.id), ["right-lane"]);
+  });
+
+  it("does not miscount when the server-side filter is ignored", async () => {
+    const h = harness({
+      listIgnoresTagFilter: true,
+      sandboxes: [
+        { id: "mine", tags: { [OWNER_TAG]: PREFIX } },
+        { id: "theirs", tags: { [OWNER_TAG]: "other-lane" } },
+      ],
+    });
+    assert.equal(await runtime(h).countByLabels({}), 1);
+  });
+
+  it("skips the verification round trip when there is nothing to check", async () => {
+    const h = harness({ sandboxes: [{ id: "any", tags: {} }] });
+    // owned:false with no labels cannot reject anything, so it must not pay.
+    await runtime(h).findAllByLabels({}, { owned: false });
+    assert.equal(h.sandboxes.get("any")?.getTagsCalls, 0);
+  });
+
+  it("can be opted out of by a caller who has measured the filter", async () => {
+    const h = harness({ sandboxes: [{ id: "mine", tags: { [OWNER_TAG]: PREFIX } }] });
+    await runtime(h, { verifyTagsClientSide: false }).findAllByLabels({});
+    assert.equal(
+      h.sandboxes.get("mine")?.getTagsCalls,
+      0,
+      "opting out must actually skip the extra round trip",
+    );
   });
 
   it("getById refuses to reattach to a foreign sandbox", async () => {

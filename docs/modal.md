@@ -127,6 +127,18 @@ than on a naming convention.
 Sandbox names are additionally prefixed (`<namePrefix>-<name|uuid>`), because
 Modal requires a sandbox name to be unique within an App.
 
+**The server-side filter is re-checked in process.** Every sandbox a listing
+returns has its tags verified against what was asked for, controlled by
+`verifyTagsClientSide` (default `true`). Ownership here rests entirely on
+Modal's tag filter, and that filter has not been proven live — `warmLease` is
+still `false`. A filter that is silently ignored, partially applied, or changed
+in a future release would hand back a foreign sandbox **as a warm lease**, which
+is strictly worse than returning no lease: the caller would exec into another
+tenant's container. Unlike providers that return tags inline with the listing,
+Modal exposes `getTags()` as a separate call, so this costs one extra round trip
+per candidate; verification is skipped when there is nothing to check, and a
+caller who has measured the filter can opt out.
+
 ## Capabilities
 
 House rule: a behavioral claim stays `false` until a live probe establishes it.

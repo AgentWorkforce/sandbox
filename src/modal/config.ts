@@ -158,12 +158,34 @@ export interface ModalRuntimeOptions {
 
   /** Polling interval for delete verification. Default 500. */
   pollIntervalMs?: number;
+
+  /**
+   * Re-check each listed sandbox's tags in-process instead of trusting the
+   * server-side filter. Defaults to `true`.
+   *
+   * `sandboxes.list({ tags })` is documented to return only sandboxes carrying
+   * all the requested tags, and this adapter's whole ownership model rests on
+   * that. But a filter that is silently ignored, partially applied, or changed
+   * by a future release would hand a caller a **foreign sandbox as a warm
+   * lease** — strictly worse than returning no lease at all, because the caller
+   * would then exec into someone else's container. Until `warmLease` is
+   * promoted by a live probe, the filter is an unproven claim, and this adapter
+   * does not build ownership on unproven claims.
+   *
+   * The cost is real and worth stating: unlike providers that return tags
+   * inline with the listing, Modal's `Sandbox` object exposes `getTags()` as a
+   * separate call, so verification costs **one extra round trip per candidate**.
+   * Callers who have measured the filter and accept the risk can set this to
+   * `false`; the default errs toward correctness.
+   */
+  verifyTagsClientSide?: boolean;
 }
 
 /** Defaults applied by {@link resolveModalRuntimeOptions}. */
 export const MODAL_DEFAULTS = {
   ownerTagKey: "agentRelayOwner",
   createAppIfMissing: false,
+  verifyTagsClientSide: true,
   requestTimeoutMs: 30_000,
   createTimeoutMs: 120_000,
   lookupTimeoutMs: 30_000,
@@ -318,6 +340,8 @@ export function resolveModalRuntimeOptions(
     namePrefix,
     ownerTagKey,
     createAppIfMissing: options.createAppIfMissing ?? MODAL_DEFAULTS.createAppIfMissing,
+    verifyTagsClientSide: options.verifyTagsClientSide
+      ?? MODAL_DEFAULTS.verifyTagsClientSide,
     maxLifetimeMs,
     ...(idleTimeoutMs === undefined ? {} : { idleTimeoutMs }),
     ...(options.environment === undefined ? {} : { environment: options.environment }),
