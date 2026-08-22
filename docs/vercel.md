@@ -178,6 +178,51 @@ declared, observed — and throws `VercelCapabilityMismatchError` if any `true`
 claim lacks the implementation behind it. Under-claiming is always allowed; that
 is how a capability stays false until live evidence promotes it.
 
+### Structured modes
+
+The booleans above cannot say *why* a capability is absent, and for this adapter
+that distinction is rule 1 of `capabilities.ts`. `vercelCapabilityModes`
+declares it through the port's `declaredCapabilityModes` field.
+
+| Mode | Value | Basis |
+| --- | --- | --- |
+| `outputStreams` | `buffered` | `Command.logs()` is an async iterator, so the SDK can stream. This adapter awaits `output("stdout")`/`output("stderr")` to completion and the port exposes no streaming operation. Both streaming members of the union mean *streamed live*. |
+| `lifetime` | `deadline` | Settled. Every Vercel sandbox carries a wall-clock termination deadline; this is the `neverIdle` row above, stated in the type. |
+| `interactive` | `not-exposed` | `openInteractive()` is real; no port operation reaches it. |
+| `snapshots` | `not-exposed` | `snapshot()`/`fork()` are real; no port operation reaches them. |
+| `filesystem` | *(undeclared → `unknown`)* | See below. |
+
+The `not-exposed` pair are facts about **this package's port**, not pending
+observations about Vercel, so `isPendingEvidence()` returns `false` for them.
+A live probe proving Vercel has PTY must not promote either; they move only if
+someone adds an operation to the port. Their siblings in
+`vercelObservedCapabilities` (`ptySurvival`, `snapshotCapture`) are the
+promotable claims, and are deliberately separate.
+
+**Why `filesystem` is left undeclared.** Unlike the others, this is not a fact
+this adapter is in a position to state, for two compounding reasons. It is
+*per-instance configuration* — `VercelRuntimeOptions.persistent` selects the
+durability contract, so no single static value is right for every
+`VercelSandboxRuntime`. And even for a `persistent: true` instance, the union's
+`"persistent"` means *restored across stop/start of the same sandbox*, which is
+exactly the round trip `lifecycle` is still holding `false` for want of a live
+probe. Declaring it would promote through a mode the very behavior the boolean
+is withholding. `"unknown"` is both accurate and the only value that keeps
+`isPendingEvidence()` truthful here — a live stop → resume → read-back probe
+genuinely can settle it, and should be what does.
+
+`reconcileVercelCapabilities` guards the modes on the same terms as the
+booleans, and for a sharper reason: a boolean can only over-claim *whether* a
+capability exists, while a mode can over-claim its *shape* — and an over-claimed
+mode reads as settled, so `isPendingEvidence()` reports `false` and nothing
+downstream revisits it. A streaming `outputStreams`, a `never-idle` lifetime, or
+an `interactive`/`snapshots` value other than `not-exposed` each throw at
+construction. The failure paths are unit-tested by mutating the table, not
+merely asserted to exist. Note the guard reads the modes through the wide port
+type: `vercelCapabilityModes` is `as const`, so comparing its literals directly
+is a compile error today and would silently become dead code the moment someone
+edited a value.
+
 ## Provider shape and pricing
 
 DOCUMENTED, from <https://vercel.com/docs/vercel-sandbox/pricing> (page last

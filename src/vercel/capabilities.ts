@@ -1,4 +1,7 @@
-import type { DeclaredSandboxRuntimeCapabilities } from "../port.js";
+import type {
+  DeclaredSandboxRuntimeCapabilities,
+  SandboxCapabilityModes,
+} from "../port.js";
 import type { RuntimeCapabilities } from "../types.js";
 
 /**
@@ -76,3 +79,72 @@ export const vercelObservedCapabilities: VercelObservedCapabilities = {
   streamingExec: false,
   warmLease: false,
 };
+
+/**
+ * Structured capability modes for the Vercel Sandbox adapter.
+ *
+ * These restate, in the type system, distinctions this file already draws in
+ * prose. The booleans above cannot separate "the provider cannot do this" from
+ * "the provider can, but this package's port exposes no operation reaching it"
+ * from "nobody has checked yet" — and rule 1 of this file is precisely that
+ * distinction. `not-exposed` is that rule as a type.
+ *
+ * Note which cell is **missing**: `filesystem`. See below.
+ */
+export const vercelCapabilityModes = {
+  /**
+   * `Command.logs()` is an async iterator, so the SDK can genuinely stream. This
+   * adapter awaits `output("stdout")` and `output("stderr")` to completion and
+   * returns a finished `RunScriptResult`, and the port exposes no streaming
+   * operation. Both streaming members of the union mean *streamed live*, so
+   * `buffered` is the honest shape for this port.
+   */
+  outputStreams: "buffered",
+  /**
+   * Settled, not pending. A Vercel sandbox always carries a wall-clock
+   * termination deadline (`sandboxTimeoutMs`) — there is no never-idle tier to
+   * promote to, which is the same fact recorded against
+   * {@link vercelObservedCapabilities.neverIdle}. Per the union's own note,
+   * `deadline` says this without needing `unsupported`.
+   */
+  lifetime: "deadline",
+  /**
+   * `sandbox.openInteractive()` exists in the SDK; `WorkflowRuntime` exposes no
+   * PTY operation, so it is unreachable *here*. `not-exposed` rather than
+   * `unsupported`: this is a fact about our port, and it moves only if someone
+   * adds an operation — never on the strength of a live probe against Vercel.
+   */
+  interactive: "not-exposed",
+  /**
+   * `sandbox.snapshot()` and `Sandbox.fork()` exist in the SDK and are likewise
+   * unreachable through this port. Note this is a *different* claim from
+   * {@link vercelObservedCapabilities.snapshotCapture}, which is a pending
+   * observation about Vercel: a canary may promote that one and must never
+   * promote this one.
+   */
+  snapshots: "not-exposed",
+} as const satisfies Partial<SandboxCapabilityModes>;
+
+/**
+ * Why `filesystem` is deliberately left undeclared, and so resolves to
+ * `"unknown"`.
+ *
+ * Unlike the cells above, this one is not a fact this adapter is in a position
+ * to state. Two reasons compound:
+ *
+ *  1. It is **configurable per instance**, not a property of the provider.
+ *     `VercelSandboxRuntimeOptions.persistent` selects the durability contract,
+ *     so no single static value is correct for every `VercelSandboxRuntime`.
+ *  2. Even for a `persistent: true` instance, the union's `"persistent"` means
+ *     *restored across stop/start of the same sandbox* — which is exactly the
+ *     round trip that `vercelSandboxCapabilities.lifecycle` is still waiting on
+ *     a live probe to establish. Declaring it would promote, through a mode,
+ *     the very behavior the boolean is holding back for lack of evidence.
+ *
+ * `"unknown"` is the accurate answer and the only one that keeps
+ * `isPendingEvidence()` truthful: a live stop -> resume -> read-back probe
+ * genuinely can settle this, and should be what does.
+ */
+export const VERCEL_FILESYSTEM_MODE_UNDECLARED =
+  "filesystem durability is per-instance (options.persistent) and its across-restart "
+  + "behavior is gated on the same unproven live probe as lifecycle";

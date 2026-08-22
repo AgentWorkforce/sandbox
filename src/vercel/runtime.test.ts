@@ -3,9 +3,11 @@ import { Buffer } from "node:buffer";
 import { describe, it } from "node:test";
 
 import * as pkg from "../index.js";
-import { resolveSandboxRuntimeCapabilities } from "../port.js";
+import { isPendingEvidence, resolveSandboxRuntimeCapabilities } from "../port.js";
 import type { RuntimeHandle } from "../types.js";
 import {
+  VERCEL_FILESYSTEM_MODE_UNDECLARED,
+  vercelCapabilityModes,
   vercelObservedCapabilities,
   vercelSandboxCapabilities,
   vercelWorkflowCapabilities,
@@ -434,6 +436,77 @@ describe("VercelSandboxRuntime construction", () => {
     assert.equal(capabilities.detachedLaunch, false);
     assert.equal(capabilities.warmLease, false);
     assert.equal(capabilities.lifecycle, false);
+  });
+});
+
+describe("VercelSandboxRuntime capability modes", () => {
+  it("resolves the four modes the adapter can evidence", () => {
+    const capabilities = resolveSandboxRuntimeCapabilities(makeRuntime(new FakeVercel()));
+    assert.equal(capabilities.modes.outputStreams, "buffered");
+    assert.equal(capabilities.modes.lifetime, "deadline");
+    assert.equal(capabilities.modes.interactive, "not-exposed");
+    assert.equal(capabilities.modes.snapshots, "not-exposed");
+  });
+
+  it("leaves filesystem unknown, because it is per-instance and unproven", () => {
+    // Two compounding reasons, both in VERCEL_FILESYSTEM_MODE_UNDECLARED:
+    // `options.persistent` selects the durability contract per instance, and
+    // "persistent" means surviving stop/start — the exact round trip that
+    // `lifecycle` is still holding false for lack of a live probe. Declaring it
+    // would promote through a mode what the boolean is deliberately withholding.
+    const capabilities = resolveSandboxRuntimeCapabilities(makeRuntime(new FakeVercel()));
+    assert.equal(capabilities.modes.filesystem, "unknown");
+    assert.equal(isPendingEvidence(capabilities.modes.filesystem), true);
+    assert.ok(VERCEL_FILESYSTEM_MODE_UNDECLARED.includes("options.persistent"));
+    assert.equal("filesystem" in vercelCapabilityModes, false);
+  });
+
+  it("marks pty and snapshots not-exposed, which no canary may promote", () => {
+    // These are facts about this package's port, not pending observations about
+    // Vercel. `openInteractive()`, `snapshot()` and `fork()` are all real in the
+    // SDK; nothing here reaches them.
+    assert.equal(isPendingEvidence(vercelCapabilityModes.interactive), false);
+    assert.equal(isPendingEvidence(vercelCapabilityModes.snapshots), false);
+    // The sibling observed cell IS promotable, and is a different claim.
+    assert.equal(vercelObservedCapabilities.snapshotCapture, false);
+  });
+
+  it("keeps the deadline lifetime aligned with the settled neverIdle cell", () => {
+    assert.equal(vercelCapabilityModes.lifetime, "deadline");
+    assert.equal(vercelObservedCapabilities.neverIdle, false);
+  });
+
+  it("does not launder warmLease or lifecycle through a mode", () => {
+    // Modes describe shape, not verification state. Both booleans stay false.
+    const capabilities = resolveSandboxRuntimeCapabilities(makeRuntime(new FakeVercel()));
+    assert.equal(capabilities.warmLease, false);
+    assert.equal(capabilities.lifecycle, false);
+  });
+
+  it("rejects a mode table that over-claims, at construction", () => {
+    const original = { ...vercelCapabilityModes } as Record<string, string>;
+    const table = vercelCapabilityModes as unknown as Record<string, string>;
+    for (const [key, bad] of [
+      ["interactive", "pty"],
+      ["snapshots", "snapshot-and-fork"],
+      ["lifetime", "never-idle"],
+      ["outputStreams", "separate-streams"],
+    ] as const) {
+      table[key] = bad;
+      try {
+        assert.throws(
+          () => makeRuntime(new FakeVercel()),
+          (error: unknown) =>
+            error instanceof pkg.VercelCapabilityMismatchError
+            && error.message.includes(`modes.${key}`),
+          `an over-claimed modes.${key} must fail reconciliation`,
+        );
+      } finally {
+        table[key] = original[key]!;
+      }
+    }
+    // And the honest table still constructs.
+    assert.doesNotThrow(() => makeRuntime(new FakeVercel()));
   });
 });
 

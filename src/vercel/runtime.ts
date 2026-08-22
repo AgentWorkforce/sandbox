@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 
 import type {
   RunScriptResult,
+  SandboxCapabilityModes,
   SandboxCountOptions,
   SandboxLookupOptions,
   SandboxRuntime,
@@ -16,6 +17,7 @@ import type {
   WorkflowRuntime,
 } from "../types.js";
 import {
+  vercelCapabilityModes,
   vercelObservedCapabilities,
   vercelSandboxCapabilities,
   vercelWorkflowCapabilities,
@@ -267,6 +269,8 @@ export class VercelSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   readonly id = "vercel";
   readonly capabilities = vercelWorkflowCapabilities;
   readonly declaredCapabilities = vercelSandboxCapabilities;
+
+  readonly declaredCapabilityModes = vercelCapabilityModes;
   readonly observedCapabilities = vercelObservedCapabilities;
 
   private readonly credentials: {
@@ -1294,6 +1298,47 @@ export function reconcileVercelCapabilities(
   }
   if (vercelSandboxCapabilities.lifecycle && !outerRegistry.lifecycle) {
     throw new VercelCapabilityMismatchError("lifecycle");
+  }
+
+  // --- modes ---------------------------------------------------------------
+  //
+  // A boolean can only over-claim *whether* a capability exists; a mode can
+  // over-claim its *shape*, which is harder to catch later. An over-claimed mode
+  // reads as a settled fact, `isPendingEvidence()` reports false for it, and so
+  // nothing downstream ever revisits it. Each check below is a shape this
+  // adapter would be lying about.
+  //
+  // `filesystem` is intentionally absent from this table and from the declared
+  // modes — see VERCEL_FILESYSTEM_MODE_UNDECLARED. It is per-instance
+  // configuration whose across-restart behavior rides on the same unproven live
+  // probe as `lifecycle`, so "unknown" is the accurate answer.
+  // Read through the wide port type on purpose. `vercelCapabilityModes` is
+  // `as const`, so comparing its literals directly is a compile error today and
+  // would silently become dead code the moment someone edits a value. Widening
+  // keeps these checks live against whatever the table actually says.
+  const modes: Partial<SandboxCapabilityModes> = vercelCapabilityModes;
+  if (
+    modes.outputStreams === "combined-stream"
+    || modes.outputStreams === "separate-streams"
+  ) {
+    // `runScript` awaits output("stdout")/output("stderr") to completion; there
+    // is no incremental channel on this port to back a streaming claim.
+    throw new VercelCapabilityMismatchError("modes.outputStreams");
+  }
+  if (modes.lifetime === "never-idle") {
+    // Every Vercel sandbox carries a wall-clock termination deadline.
+    throw new VercelCapabilityMismatchError("modes.lifetime");
+  }
+  if (modes.interactive !== "not-exposed") {
+    // openInteractive() is real in the SDK and unreachable through this port.
+    // Both a positive claim and a bare "unknown" would misdescribe that: the
+    // port's lack of a PTY operation is settled, not pending evidence.
+    throw new VercelCapabilityMismatchError("modes.interactive");
+  }
+  if (modes.snapshots !== "not-exposed") {
+    // Same for snapshot()/fork(): real in the SDK, no port operation reaches
+    // them. Distinct from observed.snapshotCapture, which a canary may promote.
+    throw new VercelCapabilityMismatchError("modes.snapshots");
   }
 
   const observedRegistry: Record<

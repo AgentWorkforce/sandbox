@@ -147,6 +147,14 @@ SDK is isolated under `src/vercel/internal/`. See
 [the Vercel adapter notes](./docs/vercel.md) for dependency provenance,
 capability evidence, and the active-CPU-versus-wall-clock pricing analysis.
 
+Capabilities are also declared structurally. PTY and snapshots resolve to
+`"not-exposed"` — real in the SDK, unreachable through this port, and so not
+something a live probe may promote — while `lifetime` resolves to `"deadline"`,
+the settled reason a Vercel sandbox has no never-idle tier. `filesystem` is
+deliberately left `"unknown"`: durability is per-instance configuration
+(`persistent`), and surviving a stop/resume is the same round trip `lifecycle`
+is still awaiting live proof of.
+
 ## Development
 
 ```bash

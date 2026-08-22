@@ -139,6 +139,7 @@ export type {
   VercelUploadBundleOptions,
 } from "./vercel/runtime.js";
 export {
+  vercelCapabilityModes,
   vercelObservedCapabilities,
   vercelSandboxCapabilities,
   vercelWorkflowCapabilities,
