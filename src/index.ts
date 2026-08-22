@@ -23,14 +23,21 @@ export const PACKAGE_NAME = "@agent-relay/sandbox";
 export type {
   AsyncRunStartResult,
   AsyncRunStatus,
+  CapabilityAbsence,
   DeclaredSandboxRuntimeCapabilities,
+  FilesystemMode,
+  InteractiveMode,
+  LifetimeMode,
+  OutputStreamMode,
+  SnapshotMode,
   RunScriptResult,
+  SandboxCapabilityModes,
   SandboxCountOptions,
   SandboxLookupOptions,
   SandboxRuntime,
   SandboxRuntimeCapabilities,
 } from "./port.js";
-export { resolveSandboxRuntimeCapabilities } from "./port.js";
+export { isPendingEvidence, resolveSandboxRuntimeCapabilities } from "./port.js";
 
 // --- bootstrap plane (live in-sandbox session) -----------------------------
 export type {
@@ -57,6 +64,8 @@ export type {
   DaytonaRuntimeOptions,
   DaytonaUploadBundleOptions,
 } from "./daytona/runtime.js";
+export { fetchDaytonaWireSupplement } from "./daytona/wire-supplement.js";
+export type { DaytonaWireSupplement } from "./daytona/wire-supplement.js";
 
 export {
   E2B_ASYNC_PROCESS_LOST_EXIT_CODE,
