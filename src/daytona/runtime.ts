@@ -778,8 +778,19 @@ export class DaytonaRuntime implements WorkflowRuntime {
     // without ever going through get(), which leaves env, volumes, and
     // network settings unpopulated until refreshData() runs. Hydrate before
     // reading it for replacementCreateParams so those settings are not
-    // silently dropped from the replacement.
-    await (originalSandbox as unknown as { refreshData?: () => Promise<void> }).refreshData?.();
+    // silently dropped from the replacement. Bound the refresh with the same
+    // lookup deadline used elsewhere so a hanging SDK call cannot leave
+    // recreateAfterFailedStart wedged before the replacement is ever created.
+    const refreshableSandbox = originalSandbox as unknown as {
+      refreshData?: () => Promise<void>;
+    };
+    if (typeof refreshableSandbox.refreshData === 'function') {
+      await awaitLookupOperation(
+        Promise.resolve(refreshableSandbox.refreshData.call(originalSandbox)),
+        lookupDeadline(undefined),
+        `refreshing sandbox ${originalId} before replacement`,
+      );
+    }
 
     try {
       // Do not copy the name: Daytona requires names to be unique while the

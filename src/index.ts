@@ -30,6 +30,7 @@ export type {
   LifetimeMode,
   OutputStreamMode,
   SnapshotMode,
+  ResolvedSandboxRuntimeCapabilities,
   RunScriptResult,
   SandboxCapabilityModes,
   SandboxCountOptions,
@@ -81,6 +82,29 @@ export type {
   E2BSandboxStatics,
   E2BUploadBundleOptions,
 } from "./e2b/runtime.js";
+
+export {
+  MicrosandboxBackendBusyError,
+  MicrosandboxBackendPoisonedError,
+  MicrosandboxCreateTimeoutError,
+  MicrosandboxLogReadError,
+  MicrosandboxLookupTimeoutError,
+  MicrosandboxNameTooLongError,
+  MicrosandboxPaginationError,
+  MicrosandboxRunLostError,
+  MicrosandboxRunNotFinishedError,
+  MicrosandboxRunTimeoutUnsupportedError,
+  MicrosandboxRuntime,
+  MicrosandboxSessionConflictError,
+  MicrosandboxStatusProbeError,
+  MicrosandboxUnknownOutcomeError,
+} from "./microsandbox/runtime.js";
+export type {
+  MicrosandboxBackend,
+  MicrosandboxRuntimeOptions,
+  MicrosandboxSdk,
+  MicrosandboxStatus,
+} from "./microsandbox/runtime.js";
 
 export {
   AGENT37_COMMAND_CAP_MS,
@@ -143,6 +167,99 @@ export {
   freestyleWorkflowCapabilities,
 } from "./freestyle/capabilities.js";
 export type { FreestyleObservedCapabilities } from "./freestyle/capabilities.js";
+
+export {
+  VercelCapabilityMismatchError,
+  VercelDestroyVerificationError,
+  VercelDetachedLaunchUnsupportedError,
+  VercelForeignSandboxError,
+  VercelLifecycleTimeoutError,
+  VercelListPageLimitError,
+  VercelOperationTimeoutError,
+  VercelSandboxRuntime,
+  VercelTagLimitError,
+  VercelUnknownExitCodeError,
+  reconcileVercelCapabilities,
+} from "./vercel/runtime.js";
+export type {
+  VercelAttachedSandboxOptions,
+  VercelCapabilitySurface,
+  VercelBundleFile,
+  VercelListOwnedOptions,
+  VercelOwnedSandbox,
+  VercelRunScriptOptions,
+  VercelUploadBundleOptions,
+} from "./vercel/runtime.js";
+export {
+  vercelCapabilityModes,
+  vercelObservedCapabilities,
+  vercelSandboxCapabilities,
+  vercelWorkflowCapabilities,
+} from "./vercel/capabilities.js";
+export type { VercelObservedCapabilities } from "./vercel/capabilities.js";
+export type {
+  VercelCredentials,
+  VercelRuntimeOptions,
+  VercelSandboxSource,
+} from "./vercel/config.js";
+
+export {
+  ModalCapabilityMismatchError,
+  ModalDeadlineExceededError,
+  ModalForeignSandboxError,
+  ModalRuntime,
+  ModalTagCollisionError,
+  reconcileModalCapabilities,
+} from "./modal/runtime.js";
+export {
+  MODAL_DEFAULTS,
+  MODAL_MAX_LIFETIME_MS,
+  MODAL_MIN_CPU_CORES,
+  resolveModalRuntimeOptions,
+} from "./modal/config.js";
+export type {
+  ModalCredentials,
+  ModalResourceShape,
+  ModalRuntimeOptions,
+  ResolvedModalRuntimeOptions,
+} from "./modal/config.js";
+export {
+  MODAL_RATES,
+  ModalBenchLedger,
+  ModalBudgetExceededError,
+  ModalLeakedSandboxError,
+  estimateModalFunctionCostUsd,
+  estimateModalSandboxCostUsd,
+  percentile,
+  runModalBenchmark,
+} from "./modal/bench.js";
+export type {
+  ModalBenchOptions,
+  ModalBenchReport,
+  ModalBenchSample,
+  ModalCostInput,
+  ModalLedgerEntry,
+  ModalLedgerEntryState,
+} from "./modal/bench.js";
+export {
+  MODAL_STRUCTURALLY_FALSE,
+  modalCapabilityModes,
+  modalObservedCapabilities,
+  modalSandboxCapabilities,
+  modalWorkflowCapabilities,
+} from "./modal/capabilities.js";
+export type { ModalObservedCapabilities } from "./modal/capabilities.js";
+export type {
+  ModalClientFactory,
+  ModalClientLike,
+  ModalContainerProcessLike,
+  ModalExecParams,
+  ModalFilesystemLike,
+  ModalSandboxCreateParams,
+  ModalSandboxLike,
+  ModalSandboxListParams,
+  ModalSandboxServiceLike,
+} from "./modal/internal/sdk.js";
 
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
