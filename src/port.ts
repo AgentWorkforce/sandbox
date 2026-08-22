@@ -12,7 +12,10 @@ export type RunScriptResult = {
    * True when the provider capped captured output and `output` is therefore
    * incomplete. Optional and additive: a provider that either never truncates
    * or cannot tell simply omits it, and `undefined` means "not reported",
-   * never "complete".
+   * never "complete". Mirrors `ExecResult.truncated` deliberately: an adapter
+   * that bounds a log read should report the bound on both planes or on
+   * neither, because a caller that moves between them would otherwise see the
+   * same shortened log described two different ways.
    */
   truncated?: boolean;
 };
@@ -20,6 +23,12 @@ export type RunScriptResult = {
 export type AsyncRunStartResult = {
   sessionId: string;
   commandId: string;
+  /**
+   * True when a submit whose outcome was unknown resolved to the run that was
+   * already admitted for this exact session and command, rather than starting
+   * a second one.
+   */
+  reconciled?: true;
 };
 
 export type AsyncRunStatus = {
