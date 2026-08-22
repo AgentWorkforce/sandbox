@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert";
 import {
   buildRelayfileMountStartShell,
   buildRelayfileMountFlushShell,
+  buildRelayfileMountInitialSyncShell,
 } from "./mount-script.js";
 
 const TOKEN = "relay_pa_thisisasecrettoken_do_not_leak";
@@ -82,5 +83,84 @@ describe("mount-script token ingress", () => {
       const start = buildRelayfileMountStartShell({ ...BASE, tokenIngress: "env" });
       assert.match(start, /RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped/);
     });
+  });
+});
+
+/**
+ * The idle watchdog around the initial sync kills the sync with `exit 124`
+ * when none of the files it watches changes for `idleTimeoutSeconds`. That is
+ * only a liveness signal if the daemon actually writes those files.
+ *
+ * It did not, for unscoped mounts. The watch list named
+ * `<state-dir>/.relayfile-mount-state.json` — the LEGACY *local-root* state
+ * filename, written by nothing under a state dir — while the daemon, given
+ * only `--state-dir`, checkpoints into a content-hashed
+ * `<state-dir>/<mount-id>/state.json` this module cannot compute. The marker
+ * never advanced, so a healthy-but-slow first sync (a 202MB cold
+ * materialization of a whole workspace) was killed at exactly the idle
+ * timeout, surfacing as HTTP 500 from POST /api/v1/fleet/nodes/sandbox/ensure
+ * whenever `mountRelayfile: true`.
+ */
+describe("mount-script initial-sync idle watchdog", () => {
+  const IDLE = { idleTimeoutSeconds: 60 } as const;
+
+  /** The watchdog renders its watch list as a positional-parameter set. */
+  function watchedProgressFiles(shell: string): string[] {
+    const match = shell.match(/set -- ((?:'[^']*'\s*)+);/);
+    assert.ok(match, `no watchdog watch list in emitted shell: ${shell.slice(0, 200)}`);
+    return [...match[1]!.matchAll(/'([^']*)'/g)].map((entry) => entry[1]!);
+  }
+
+  function declaredStateFiles(shell: string): string[] {
+    return [...shell.matchAll(/--state-file '([^']*)'/g)].map((entry) => entry[1]!);
+  }
+
+  it("watches only files the same command tells the daemon to write (unscoped)", () => {
+    const shell = buildRelayfileMountInitialSyncShell({ ...BASE, ...IDLE });
+    const watched = watchedProgressFiles(shell);
+    const declared = new Set(declaredStateFiles(shell));
+
+    assert.ok(watched.length > 0, "watchdog must watch at least one progress file");
+    for (const file of watched) {
+      assert.ok(
+        declared.has(file),
+        `watchdog watches ${file}, which no --state-file in the command declares; ` +
+          `declared: ${[...declared].join(", ") || "(none)"}`,
+      );
+    }
+  });
+
+  it("watches only files the same command tells the daemon to write (scoped)", () => {
+    const shell = buildRelayfileMountInitialSyncShell({
+      ...BASE,
+      ...IDLE,
+      paths: ["/github/AgentWorkforce/sandbox", "/slack/channels"],
+    });
+    const watched = watchedProgressFiles(shell);
+    const declared = new Set(declaredStateFiles(shell));
+
+    assert.equal(watched.length, 2, "one progress file per emitted per-root sync");
+    for (const file of watched) {
+      assert.ok(declared.has(file), `watchdog watches undeclared ${file}`);
+    }
+  });
+
+  it("never names the legacy local-root state file, which no state dir holds", () => {
+    const shell = buildRelayfileMountInitialSyncShell({ ...BASE, ...IDLE });
+    assert.ok(
+      !shell.includes(".relayfile-mount-state.json"),
+      "emitted shell still references the legacy local-root state filename",
+    );
+  });
+
+  it("gives the unscoped initial sync its own state file, not the daemon's", () => {
+    const shell = buildRelayfileMountInitialSyncShell({ ...BASE, ...IDLE });
+    for (const file of declaredStateFiles(shell)) {
+      assert.ok(
+        !file.startsWith(BASE.stateDir),
+        `initial sync state file ${file} sits inside the daemon's --state-dir; ` +
+          "the two processes run concurrently and must not share one state file",
+      );
+    }
   });
 });

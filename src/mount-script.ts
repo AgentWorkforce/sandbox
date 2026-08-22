@@ -256,7 +256,7 @@ export function buildRelayfileMountInitialSyncShell(
   if (opts.idleTimeoutSeconds && opts.idleTimeoutSeconds > 0) {
     return buildIdleWatchedCommand(
       command,
-      initialSyncProgressFiles(opts),
+      initialSyncStateFiles(opts),
       opts.idleTimeoutSeconds,
     );
   }
@@ -501,8 +501,12 @@ function buildMountArgs(opts: RelayfileMountShellOptions): string[] {
 
 function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): string[] {
   const roots = scopedRemoteRoots(opts.paths ?? []);
+  const stateFiles = initialSyncStateFiles(opts);
   if (roots.length === 0) {
-    return [buildRelayfileMountFlushShell(opts)];
+    // Unscoped: one whole-workspace `--once`. It carries an explicit
+    // --state-file for the same reason the scoped commands below do — see
+    // initialSyncStateFiles.
+    return [`${buildRelayfileMountFlushShell(opts)} --state-file ${shellQuote(stateFiles[0]!)}`];
   }
   const localDir = unscopedLocalDir(opts.localDir, roots);
   return roots
@@ -510,22 +514,42 @@ function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): strin
       const args = [
         ...buildMountArgs({ ...opts, localDir, paths: [] }),
         `--remote-path ${shellQuote(remoteRoot)}`,
-        `--state-file ${shellQuote(`/tmp/relayfile-mount-initial-sync-${index}.json`)}`,
+        `--state-file ${shellQuote(stateFiles[index]!)}`,
       ];
       return [`${mountEnvPrefix(opts)}relayfile-mount --once`, ...args].join(" ");
     });
 }
 
-function initialSyncProgressFiles(opts: RelayfileMountInitialSyncOptions): string[] {
+/**
+ * Private state file for each command {@link buildInitialSyncCommands} emits —
+ * one per command, in the same order — and, because they are the same list, the
+ * exact set of files the idle watchdog watches for progress.
+ *
+ * Every initial-sync command must therefore pass an explicit `--state-file`.
+ * Given only `--state-dir`, the daemon derives its own private state path as
+ * `<state-dir>/<MountStateID(workspace, remoteRoot, localRoot, kind)>/state.json`
+ * (relayfile `internal/mountsync/state_path.go`) — a content-hashed directory
+ * this module cannot compute. It is emphatically NOT
+ * `<state-dir>/.relayfile-mount-state.json`, which is the LEGACY *local-root*
+ * state filename and is written by nothing at all under a state dir. The
+ * unscoped branch used to watch that phantom path, which left the watchdog
+ * permanently blind: its marker never advanced, so it killed every unscoped
+ * first sync that outlived the idle timeout — a healthy 202MB cold
+ * materialization included — with `exit 124`.
+ *
+ * An explicit per-sync state file also keeps the `--once` initial sync from
+ * sharing one state file with the concurrently running daemon, which under a
+ * bare `--state-dir` resolves to the same path for both (neither passes
+ * `--mount-kind`).
+ *
+ * Deriving both the flag and the watch list from this one function is what
+ * stops them drifting apart again.
+ */
+function initialSyncStateFiles(opts: RelayfileMountInitialSyncOptions): string[] {
   const roots = scopedRemoteRoots(opts.paths ?? []);
-  if (roots.length === 0) {
-    const stateDir = opts.stateDir;
-    return [
-      `${stateDir.replace(/\/+$/u, "")}/.relayfile-mount-state.json`,
-    ];
-  }
-  return roots.map((_remoteRoot, index) =>
-    `/tmp/relayfile-mount-initial-sync-${index}.json`
+  return Array.from(
+    { length: Math.max(1, roots.length) },
+    (_entry, index) => `/tmp/relayfile-mount-initial-sync-${index}.json`,
   );
 }
 
