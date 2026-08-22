@@ -37,20 +37,19 @@ bump. `origin/main` head: `288b767`.
 | PR | State | Notes |
 |---|---|---|
 | #10 Micro Sandbox | MERGEABLE/CLEAN, 0 unresolved threads | Concurrent-writer corruption from two nights ago has been repaired by sandbox10-micro-conflict-0821; ready for Khaliq to merge. |
-| #15 Modal | CLEAN | Rebase owned by sandbox-rebase-3-0822 (chief-broker). |
-| #16 Vercel | CONFLICTING | Rebase owned by sandbox-rebase-3-0822. `git merge-tree` shows zero real conflicts; 3 commits behind. |
-| #19 AgentCore | CONFLICTING | Same as #16. |
+| #15 Modal | CLEAN, rebase landed | Verified: declares structured `capabilityModes` in `src/modal/capabilities.ts`, `runtime.ts:73` wires `declaredCapabilityModes`, and 876-920 add explicit assertions cross-checking the declaration against actual behaviour. Capability-modes migration is correct. |
+| #16 Vercel | CLEAN, rebase landed | Verified: declares structured `capabilityModes` in `src/vercel/capabilities.ts`; `filesystem` deliberately omitted (documented — it's per-instance configurable, resolves to `"unknown"`), and `runtime.ts:273` wires `declaredCapabilityModes = vercelCapabilityModes`. Capability-modes migration is correct. |
+| #19 AgentCore | CONFLICTING | sandbox-rebase-3-0822 still working; last updated 2026-08-21T15:32. Capability-modes verification pending rebase completion. |
 | #20 | CLEAN | Post-merge thread cleanup for #14 + #17. |
 | #22 Freestyle | CLEAN | freestyle-adapter-0822. |
 | #23 | CLEAN | lifecycle-verify-0822 — Daytona live smoke cleanup no longer fails on its own delete race. |
 
-**Capability-modes defect class to watch on #15/#16/#19:** #17 introduced
-structured capability modes alongside the boolean flags. A clean `git`
-three-way merge on a rebase can still leave an adapter declaring capabilities
-the OLD way while `main` now expects the new form. This is a real semantic
-defect, not a merge artifact. Verify after sandbox-rebase-3-0822 lands each
-rebase — see [[reference_sandbox_economics_doc]] for the four-provider
-economics context that motivates the modes.
+**Capability-modes defect class:** #17 introduced structured capability modes
+alongside the boolean flags. A clean `git` three-way merge on a rebase can
+still leave an adapter declaring capabilities the OLD way while `main` now
+expects the new form. **Verified clean on #15 and #16** as of this update.
+**Still to verify on #19** once rebased. See [[reference_sandbox_economics_doc]]
+for the four-provider economics context that motivates the modes.
 
 ### `AgentWorkforce/sandbox-router`
 
@@ -98,16 +97,30 @@ Three threads from `chatgpt-codex-connector` on `src/process-manifest.ts`:
 My review will land these as review comments on the PR — I am not fixing them
 myself, and I am not merging.
 
-## Supervisees
+## Supervisees — judged by artifact
 
-Judge by artifact, not by DM.
-
-- **supercharged-demo-0822** (chief-broker) — sandbox-router #10.
-- **sandbox-rebase-3-0822** (chief-broker) — rebasing sandbox #15 / #16 / #19.
-- **freestyle-adapter-0822** — sandbox #22 MERGEABLE/CLEAN.
-- **lifecycle-verify-0822** — sandbox #23 MERGEABLE/CLEAN.
-- **daytona-delete-storm-investigator-0821** — landed docs in sandbox-router #5.
-- **mount-script-token-argv-fix-0821** — argv token leak fix; artifact TBD-checked.
+- **supercharged-demo-0822** — sandbox-router #10, +3,181 lines, MERGEABLE/CLEAN,
+  updated 08:29. Massive scope for one PR; deferring my review pass until
+  Khaliq has weighed in on scope (owned demo MVP, likely intentional). It also
+  produced the ephemeral-instance find that fed [[project_ephemeral_leak_diagnosis_2026-08-22]] —
+  that's a real defensive artifact, not just code.
+- **sandbox-rebase-3-0822** — delivered on 2 of 3: #15 and #16 rebased CLEAN with
+  the capability-modes conversion correct in both. #19 (AgentCore) still
+  CONFLICTING — job is not finished.
+- **freestyle-adapter-0822** — sandbox #22, +1,961 lines, MERGEABLE/CLEAN. Full
+  adapter shipped; needs its own review pass, not blocking anything else.
+- **lifecycle-verify-0822** — sandbox #23, 27 lines, MERGEABLE/CLEAN. Small,
+  focused, addresses the Daytona live-smoke cleanup self-race. Textbook
+  scoped fix.
+- **daytona-delete-storm-investigator-0821** — sandbox-router #5 landed and
+  passed my review pass; three chatgpt-codex-connector threads resolved via #8.
+  Delivered.
+- **mount-script-token-argv-fix-0821** — **no artifact located**. Searched
+  branches, PRs and open branches across sandbox/relay/chief with patterns
+  `mount|token|argv|0821`; nothing matches. Either the agent is dead, still
+  scoping, or working under a branch name that doesn't include any of those
+  tokens. Not DMing. Flag for Khaliq — see [[reference_chief_identities]] for
+  routing.
 
 ## Two open judgement calls
 
