@@ -14,6 +14,7 @@
   },
   "files": [
     "dist",
+    "docs/freestyle.md",
     "README.md",
     "LICENSE",
     "package.json"
@@ -28,7 +29,11 @@
     "@aws-sdk/client-bedrock-agentcore": ">=3.1115.0 <4.0.0",
     "@aws-sdk/client-bedrock-agentcore-control": ">=3.1115.0 <4.0.0",
     "@daytonaio/sdk": ">=0.205.0 <0.206.0",
-    "e2b": ">=2.35.0 <3.0.0"
+    "@vercel/sandbox": ">=3.0.1 <4.0.0",
+    "e2b": ">=2.35.0 <3.0.0",
+    "freestyle": "0.1.63",
+    "microsandbox": ">=0.6.11 <0.7.0",
+    "modal": ">=0.9.0 <0.10.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-bedrock-agentcore": {
@@ -40,7 +45,19 @@
     "@daytonaio/sdk": {
       "optional": true
     },
+    "@vercel/sandbox": {
+      "optional": true
+    },
     "e2b": {
+      "optional": true
+    },
+    "freestyle": {
+      "optional": true
+    },
+    "microsandbox": {
+      "optional": true
+    },
+    "modal": {
       "optional": true
     }
   },
@@ -49,7 +66,11 @@
     "@aws-sdk/client-bedrock-agentcore-control": "^3.1115.0",
     "@daytonaio/sdk": "^0.205.1",
     "@types/node": "^22",
+    "@vercel/sandbox": "3.0.1",
     "e2b": "^2.35.0",
+    "freestyle": "0.1.63",
+    "microsandbox": "^0.6.11",
+    "modal": "^0.9.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },

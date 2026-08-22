@@ -24,6 +24,45 @@ consumer that only runs local sandboxes does not need a remote provider SDK.
 Adapters for providers that publish no JavaScript SDK speak their HTTP API
 directly and add no dependency at all; they take an injectable `fetch` instead.
 
+### Provider constraints
+
+Each adapter inherits its provider SDK's requirements, and they are not all the
+same as this package's:
+
+| Adapter | Peer dependency | Requirements beyond this package's |
+| --- | --- | --- |
+| `DaytonaRuntime` | `@daytonaio/sdk` | — |
+| `E2BSandboxRuntime` | `e2b` | — |
+| `MicrosandboxRuntime` | `microsandbox` | **Node.js 22+**, a platform-specific native addon (macOS arm64, Linux x64/arm64, Windows x64/arm64), and — for its `local` backend — hardware virtualization: KVM on Linux, Apple Silicon on macOS, or WHP on Windows 10+ |
+| `LocalSandboxRuntime` | — | A reachable local sandbox service |
+
+The package itself keeps a Node 20 floor, because a consumer that never touches
+the microsandbox adapter never loads that SDK: it is imported lazily, at first
+use, and a load failure is reported with the constraint that most often
+explains it.
+
+### Microsandbox capabilities are backend-sensitive
+
+`MicrosandboxRuntime.capabilities` is derived from the backend the instance is
+bound to, not reported as a single process-wide constant:
+
+| Capability | `local` | `cloud` | Why |
+| --- | --- | --- | --- |
+| `snapshots` | `true` | `false` | A snapshot is a host-local artifact: the installed SDK's typings describe `Snapshot` as an artifact on disk and resolve one under `~/.microsandbox/snapshots/<name>/`. This adapter consumes such an artifact from the calling host and never transfers it, so a create issued against a remote backend has nothing to resolve. Configuring `snapshot` with a cloud backend is refused in the constructor, before any SDK call. |
+| `isolation` | `'strong'` | `'unknown'` | Locally the SDK boots a microVM with its own guest kernel on a virtualization-capable host, and the installed package states that requirement itself, so `'strong'` rests on something checkable here. This adapter observes and measures nothing about the cloud backend's isolation. |
+
+Both values describe what this package has **established**, not what any
+provider documents. `'unknown'` is not a synonym for weak and is not a claim
+that the guarantee is missing — it means this package has not established one,
+so a caller that requires a specific guarantee must decide for itself rather
+than read an unverified `'strong'`.
+
+Cloud region placement and resource enforcement are likewise not represented as
+measured facts. Custom or published **ports are not supported**: the SDK builder
+exposes `port()`/`portBind()`, but the ports this package targets have no
+public-port surface, so the adapter never calls them and never implies a
+reachable port.
+
 ## Design
 
 Two pieces, deliberately kept apart:
@@ -113,6 +152,113 @@ other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
 `processSandboxDto()` copies `sandboxClass`/`warmPoolId` and a subsequent SDK
 bump picks that up — `runtime.test.ts`'s `DaytonaRuntime smoke` suite has a
 load-bearing regression test that fails once that happens.
+### Freestyle runtime contract
+
+`FreestyleRuntime` uses an explicit API key, home directory, ownership-name
+prefix, and persistence policy. It never reads ambient credentials. Freestyle
+does not expose labels on VM creation, so label lookup and warm leasing remain
+unsupported; ownership and cleanup are scoped to collision-safe names under the
+configured prefix. Deleted list rows are treated as gone only when the provider
+sets `deleted: true`.
+
+The adapter exposes buffered exec, file transfer, reattachment, owned-resource
+listing, and verified deletion. Stop/start methods exist as a conservative
+probe surface, but lifecycle remains undeclared because the live validation
+account could not create a persistent VM. PTY, snapshots, streaming logs, fork,
+and never-idle behavior are likewise not advertised without the required live
+proof through this package's public port.
+
+The official SDK is isolated under `src/freestyle/internal/`; public
+configuration and capability metadata do not import vendor types. All create,
+lookup, exec, lifecycle, and deletion operations have explicit deadlines. See
+[the Freestyle adapter notes](./docs/freestyle.md) for dependency provenance,
+provider constraints, and capability evidence.
+
+### Vercel Sandbox runtime contract
+
+`VercelSandboxRuntime` takes an explicit token, team id, project id, ownership
+name prefix, and home directory, and passes credentials on every SDK call so the
+vendor's own environment and on-disk OAuth fallbacks can never supply an
+operator's identity.
+
+A Vercel sandbox is addressed by its **name**, not an opaque id, so
+`RuntimeHandle.id` carries the name and the configured prefix is a real
+ownership boundary: stop, start, and delete refuse any name outside it.
+`Sandbox.list` supports server-side `namePrefix` and `tags` filters, so label
+lookup is a real search here — but every row is re-checked against the requested
+tags in process, because a server filter that were ever ignored would hand back
+someone else's sandbox as a warm lease. `getById` is implemented over `list`
+rather than `Sandbox.get`, which resumes and bills the sandbox as a side effect.
+
+Deletion is verified by absence, and a row that reappears under the same name
+with a different `createdAt` counts as proof our sandbox is gone rather than as
+a survivor. Failed verification retains the registration so cleanup stays
+retryable. `acquire()` returns an `AsyncDisposable` for `await using` scopes.
+
+Commands run as `sh -c` with `cwd` and `env` passed through provider fields, so
+no caller value is spliced into a command string. Every operation carries its
+own deadline, under an absolute `retryDeadlineMs` ceiling that spans the SDK's
+internal retries.
+
+Warm leasing, lifecycle, PTY, snapshots, streaming logs, fork, and verified
+cleanup are all declared `false` pending live evidence; never-idle is settled
+false, because every Vercel sandbox carries a termination deadline. The official
+SDK is isolated under `src/vercel/internal/`. See
+[the Vercel adapter notes](./docs/vercel.md) for dependency provenance,
+capability evidence, and the active-CPU-versus-wall-clock pricing analysis.
+
+Capabilities are also declared structurally. PTY and snapshots resolve to
+`"not-exposed"` — real in the SDK, unreachable through this port, and so not
+something a live probe may promote — while `lifetime` resolves to `"deadline"`,
+the settled reason a Vercel sandbox has no never-idle tier. `filesystem` is
+deliberately left `"unknown"`: durability is per-instance configuration
+(`persistent`), and surviving a stop/resume is the same round trip `lifecycle`
+is still awaiting live proof of.
+
+### Modal runtime contract
+
+`ModalRuntime` takes an explicit Modal **token pair** (`tokenId` and
+`tokenSecret` — Modal does not use a single bearer key), an App name, an image
+tag, a home directory, and an ownership-name prefix. It never reads ambient
+credentials or a local Modal profile.
+
+A Modal Sandbox is a child of an App, built from an Image, and it has a
+**maximum lifetime after which the provider terminates it** — the SDK's own
+default is five minutes. `maxLifetimeMs` is therefore required configuration and
+is always sent explicitly. `createTimeoutSeconds` on `launch` is a deadline on
+the create call and is deliberately not forwarded to that lifetime.
+
+Modal exposes no stop/start for a Sandbox; `terminate` is the only lifecycle
+transition and it is terminal. `start` and `stop` are absent rather than
+no-ops, and `lifecycle` is declared false permanently. Async exec is likewise
+not implemented: Modal cannot re-resolve a running exec by id, so the
+`startScript`/`getScriptStatus`/`getScriptLogs` trio is omitted entirely instead
+of being half-supported.
+
+Ownership rides on Modal's native server-side tags rather than on a naming
+convention. Every sandbox carries an ownership tag, every lookup filters on it
+server-side, and reattachment and deletion both re-check it. Warm leasing is
+implemented against that real tag filter but remains undeclared until a live
+probe confirms it. Snapshots, volumes, PTY, and tunnels exist in the provider
+and are documented, but are not advertised because this package's port exposes
+no operation for them.
+
+That last distinction is now stated structurally rather than in prose. The
+adapter declares `declaredCapabilityModes`, so PTY and snapshots resolve to
+`"not-exposed"` — a fact about this package's port, which `isPendingEvidence()`
+reports as unmovable — rather than to a bare `false` a later canary might read
+as merely unverified. `lifetime` resolves to `"deadline"`, which is the
+structural reason a Modal sandbox can never be never-idle. Output is
+`"buffered"`: Modal streams, the adapter drains. Warm leasing deliberately gets
+no mode, because modes describe a capability's shape and not its verification
+state.
+
+The official SDK is isolated under `src/modal/internal/`, and because that SDK
+speaks gRPC rather than HTTP there is no injectable transport seam; the boundary
+is a structural mirror that is checked at build time instead. All create,
+lookup, exec, upload, and deletion operations have explicit deadlines. See
+[the Modal adapter notes](./docs/modal.md) for dependency provenance, provider
+constraints, cost model, and capability evidence.
 
 ## Development
 
@@ -123,7 +269,8 @@ npm run typecheck
 npm test           # node:test
 ```
 
-Requires Node.js 20 or newer.
+Requires Node.js 20 or newer. The microsandbox adapter's own tests need Node 22+
+to load the real SDK; without it, its SDK-contract checks skip rather than fail.
 
 ## Releasing
 
