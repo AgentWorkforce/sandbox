@@ -1,4 +1,7 @@
-import type { DeclaredSandboxRuntimeCapabilities } from "../port.js";
+import type {
+  DeclaredSandboxRuntimeCapabilities,
+  SandboxCapabilityModes,
+} from "../port.js";
 import type { RuntimeCapabilities } from "../types.js";
 
 /**
@@ -128,3 +131,58 @@ export const agentCoreObservedCapabilities: AgentCoreObservedCapabilities = {
   streamingExec: false,
   warmLease: false,
 };
+
+/**
+ * Structured capability modes for the AgentCore adapter.
+ *
+ * This adapter is where the `CapabilityAbsence` vocabulary earns its third
+ * member. The Modal and Vercel adapters declare `interactive` and `snapshots`
+ * as `"not-exposed"` — both providers genuinely have PTY and snapshots, and it
+ * is *this package's port* that does not reach them, so the cell moves the day
+ * someone adds an operation. AgentCore is the opposite case: the vendor API has
+ * no such operation to reach. That is `"unsupported"`, and it never moves.
+ *
+ * Collapsing the two would be a real loss here. A reader comparing providers
+ * needs to know that adding a PTY operation to the port would light up Modal and
+ * Vercel and still leave AgentCore dark.
+ */
+export const agentCoreCapabilityModes = {
+  /**
+   * `InvokeCodeInterpreter` does return an event stream server-side, but
+   * `runScript` awaits the single `invoke` call and reads `structuredContent`
+   * once, so nothing upstream observes incremental output. Both streaming
+   * members of the union mean *streamed live*; `buffered` is the shape of this
+   * port.
+   */
+  outputStreams: "buffered",
+  /**
+   * A session is the ephemeral billable unit. `stop` is terminal with no
+   * resumable state — `status` is `READY | TERMINATED` — so there is no
+   * stop/start pair for filesystem state to survive across.
+   */
+  filesystem: "ephemeral",
+  /**
+   * Settled, matching {@link AgentCoreObservedCapabilities.neverIdle}. Every
+   * session carries a `sessionTimeoutSeconds` ceiling — 900s by default,
+   * 28,800s (8h) at the documented maximum — after which AWS terminates it.
+   * There is no never-idle tier, so per the union's own note `deadline` states
+   * this without needing `unsupported`.
+   */
+  lifetime: "deadline",
+  /**
+   * `"unsupported"`, NOT `"not-exposed"`. The AgentCore API exposes no PTY
+   * operation at all, so this is a fact about the provider rather than about
+   * our port, and no amount of work on this package can change it. Contrast the
+   * Modal and Vercel adapters, where `openInteractive()` / `pty: true` are real
+   * and only our port is missing.
+   */
+  interactive: "unsupported",
+  /**
+   * Also `"unsupported"`, and for the same reason: the AgentCore API has no
+   * filesystem snapshot or fork operation. Note the consequence for the
+   * promotion ledger — {@link agentCoreObservedCapabilities.snapshotCapture}
+   * cannot be promoted by *any* live probe, unlike its Modal and Vercel
+   * namesakes, because there is no provider operation for a canary to call.
+   */
+  snapshots: "unsupported",
+} as const satisfies SandboxCapabilityModes;

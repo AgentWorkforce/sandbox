@@ -292,6 +292,43 @@ provider genuinely streams `InvokeCodeInterpreter` events server-side; this
 port buffers to a single `RunScriptResult`, same distinction the Modal
 adapter draws for `Command.logs()`).
 
+### Structured modes
+
+`agentCoreCapabilityModes` declares the port's `declaredCapabilityModes`. This
+adapter is where the `CapabilityAbsence` vocabulary earns its third member.
+
+| Mode | Value | Basis |
+| --- | --- | --- |
+| `outputStreams` | `buffered` | `InvokeCodeInterpreter` returns an event stream server-side, but `runScript` awaits the single `invoke` and reads `structuredContent` once. Both streaming members of the union mean *streamed live*. |
+| `filesystem` | `ephemeral` | A session is the ephemeral billable unit; `status` is `READY \| TERMINATED` with no resumable stopped state, so there is no stop/start pair for state to survive across. |
+| `lifetime` | `deadline` | Settled. Every session carries a `sessionTimeoutSeconds` ceiling (DOCUMENTED default 900s, max 28,800s / 8h). This is the `neverIdle` cell stated in the type. |
+| `interactive` | `unsupported` | The AgentCore API exposes no PTY operation at all. |
+| `snapshots` | `unsupported` | The AgentCore API has no filesystem snapshot or fork operation. |
+
+**Why `unsupported` and not `not-exposed`.** The Modal and Vercel adapters
+declare these same two cells `not-exposed`, and the difference is load-bearing.
+Modal has real `pty: true` and real `snapshotFilesystem()`; Vercel has real
+`openInteractive()` and `snapshot()`/`fork()`. In both, the capability exists in
+the provider and it is *this package's port* that does not reach it — so the
+cell moves the day someone adds a port operation. AgentCore has no such API
+operation to reach, so nothing built in this package can ever change these two.
+
+Collapsing the two absences would lose exactly the fact a reader comparing
+providers needs: adding a PTY operation to the port would light up Modal and
+Vercel and still leave AgentCore dark.
+
+There is a consequence for the promotion ledger. `snapshotCapture` in
+`AgentCoreObservedCapabilities` is not merely unproven the way its Modal and
+Vercel namesakes are — it is **unprovable**, because there is no provider
+operation for a canary to call. `isPendingEvidence()` reports `false` for the
+mode, which is the guard a promotion path should consult before treating a
+`false` cell as an invitation to go probe.
+
+Note also what has no mode: `warmLease` and `lifecycle`, both structurally false
+here. The union covers neither, and that is fine — modes describe a capability's
+shape, not its verification state, and must not become a route around the
+evidence discipline.
+
 All `AgentCoreObservedCapabilities` cells — including
 `idleMemoryBillingConfirmedFree`, the load-bearing economics question this
 adapter exists partly to answer — start `false` and are promoted only in a

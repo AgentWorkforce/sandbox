@@ -137,6 +137,7 @@ export type {
   AgentCoreVpcConfig,
 } from "./agentcore/config.js";
 export {
+  agentCoreCapabilityModes,
   agentCoreObservedCapabilities,
   agentCoreSandboxCapabilities,
   agentCoreWorkflowCapabilities,

@@ -17,6 +17,7 @@ import type {
 } from "../types.js";
 import {
   agentCoreObservedCapabilities,
+  agentCoreCapabilityModes,
   agentCoreSandboxCapabilities,
   agentCoreWorkflowCapabilities,
 } from "./capabilities.js";
@@ -164,6 +165,8 @@ export class AgentCoreSandboxRuntime implements SandboxRuntime, WorkflowRuntime 
   readonly id = "agentcore";
   readonly capabilities = agentCoreWorkflowCapabilities;
   readonly declaredCapabilities = agentCoreSandboxCapabilities;
+
+  readonly declaredCapabilityModes = agentCoreCapabilityModes;
   readonly observedCapabilities = agentCoreObservedCapabilities;
 
   private readonly region: string;

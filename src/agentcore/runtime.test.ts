@@ -9,6 +9,11 @@ import {
   AgentCoreNetworkConfigError,
   AgentCoreSandboxRuntime,
   AgentCoreUnregisteredHandleError,
+  agentCoreCapabilityModes,
+  agentCoreObservedCapabilities,
+  agentCoreWorkflowCapabilities,
+  isPendingEvidence,
+  resolveSandboxRuntimeCapabilities,
 } from "../index.js";
 import type {
   AgentCoreApi,
@@ -132,6 +137,72 @@ describe("public barrel", () => {
     assert.equal(pkg.agentCoreSandboxCapabilities.lifecycle, false);
     assert.equal(pkg.agentCoreWorkflowCapabilities.isolation, "strong");
     assert.equal(pkg.agentCoreObservedCapabilities.cleanupVerified, false);
+  });
+});
+
+describe("capability modes", () => {
+  const makeRuntime = () => {
+    const { api } = fakeApi();
+    return new AgentCoreSandboxRuntime(
+      { credentials: { type: "default-chain" }, region: TEST_REGION, defaultHomeDir: TEST_HOME_DIR, interpreter: OWNED_VPC },
+      { apiFactory: () => api },
+    );
+  };
+
+  it("resolves every mode, none left unknown", () => {
+    const capabilities = resolveSandboxRuntimeCapabilities(makeRuntime());
+    assert.deepEqual(capabilities.modes, {
+      outputStreams: "buffered",
+      filesystem: "ephemeral",
+      lifetime: "deadline",
+      interactive: "unsupported",
+      snapshots: "unsupported",
+    });
+  });
+
+  it("uses unsupported, not not-exposed, because the API has no such operation", () => {
+    // The distinction this adapter exists to demonstrate. Modal and Vercel
+    // declare these "not-exposed": the providers genuinely have PTY and
+    // snapshots and only our port is missing, so adding a port operation would
+    // light them up. AgentCore has no such API operation at all, so nothing we
+    // build here can ever change these two.
+    assert.equal(agentCoreCapabilityModes.interactive, "unsupported");
+    assert.equal(agentCoreCapabilityModes.snapshots, "unsupported");
+    assert.equal(isPendingEvidence(agentCoreCapabilityModes.interactive), false);
+    assert.equal(isPendingEvidence(agentCoreCapabilityModes.snapshots), false);
+  });
+
+  it("keeps snapshotCapture unpromotable, since no probe can reach it", () => {
+    // Consequence of "unsupported" for the promotion ledger: unlike its Modal
+    // and Vercel namesakes, this cell has no provider operation for a canary to
+    // call, so it is not merely unproven — it is unprovable.
+    assert.equal(agentCoreObservedCapabilities.snapshotCapture, false);
+    assert.equal(agentCoreCapabilityModes.snapshots, "unsupported");
+  });
+
+  it("states buffered output though the provider streams server-side", () => {
+    // InvokeCodeInterpreter returns an event stream; runScript awaits the one
+    // invoke and reads structuredContent once, so nothing upstream sees
+    // incremental output.
+    assert.equal(agentCoreCapabilityModes.outputStreams, "buffered");
+    assert.equal(agentCoreWorkflowCapabilities.streamingLogs, false);
+  });
+
+  it("aligns the deadline lifetime with the settled neverIdle cell", () => {
+    assert.equal(agentCoreCapabilityModes.lifetime, "deadline");
+    assert.equal(agentCoreObservedCapabilities.neverIdle, false);
+  });
+
+  it("does not launder the structurally-false booleans through a mode", () => {
+    // warmLease and lifecycle are structurally false here and have no mode to
+    // hide in; modes describe shape, not verification state.
+    const capabilities = resolveSandboxRuntimeCapabilities(makeRuntime());
+    assert.equal(capabilities.warmLease, false);
+    assert.equal(capabilities.lifecycle, false);
+  });
+
+  it("exports the modes on the public barrel", () => {
+    assert.deepEqual(pkg.agentCoreCapabilityModes, agentCoreCapabilityModes);
   });
 });
 
