@@ -141,6 +141,34 @@ export type {
 } from "./agent37/client.js";
 
 export {
+  FreestyleCapabilityMismatchError,
+  FreestyleCreateTimeoutError,
+  FreestyleDestroyVerificationError,
+  FreestyleLaunchEnvironmentUnsupportedError,
+  FreestyleLifecycleTimeoutError,
+  FreestyleLookupTimeoutError,
+  FreestyleRuntime,
+  FreestyleUnknownExitCodeError,
+} from "./freestyle/runtime.js";
+export type {
+  FreestyleAttachedVmOptions,
+  FreestyleBundleFile,
+  FreestyleListOwnedOptions,
+  FreestyleOwnedVm,
+  FreestyleUploadBundleOptions,
+} from "./freestyle/runtime.js";
+export type {
+  FreestylePersistence,
+  FreestyleRuntimeOptions,
+} from "./freestyle/config.js";
+export {
+  freestyleObservedCapabilities,
+  freestyleSandboxCapabilities,
+  freestyleWorkflowCapabilities,
+} from "./freestyle/capabilities.js";
+export type { FreestyleObservedCapabilities } from "./freestyle/capabilities.js";
+
+export {
   VercelCapabilityMismatchError,
   VercelDestroyVerificationError,
   VercelDetachedLaunchUnsupportedError,

@@ -152,6 +152,27 @@ other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
 `processSandboxDto()` copies `sandboxClass`/`warmPoolId` and a subsequent SDK
 bump picks that up — `runtime.test.ts`'s `DaytonaRuntime smoke` suite has a
 load-bearing regression test that fails once that happens.
+### Freestyle runtime contract
+
+`FreestyleRuntime` uses an explicit API key, home directory, ownership-name
+prefix, and persistence policy. It never reads ambient credentials. Freestyle
+does not expose labels on VM creation, so label lookup and warm leasing remain
+unsupported; ownership and cleanup are scoped to collision-safe names under the
+configured prefix. Deleted list rows are treated as gone only when the provider
+sets `deleted: true`.
+
+The adapter exposes buffered exec, file transfer, reattachment, owned-resource
+listing, and verified deletion. Stop/start methods exist as a conservative
+probe surface, but lifecycle remains undeclared because the live validation
+account could not create a persistent VM. PTY, snapshots, streaming logs, fork,
+and never-idle behavior are likewise not advertised without the required live
+proof through this package's public port.
+
+The official SDK is isolated under `src/freestyle/internal/`; public
+configuration and capability metadata do not import vendor types. All create,
+lookup, exec, lifecycle, and deletion operations have explicit deadlines. See
+[the Freestyle adapter notes](./docs/freestyle.md) for dependency provenance,
+provider constraints, and capability evidence.
 
 ### Vercel Sandbox runtime contract
 
