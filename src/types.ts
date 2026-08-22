@@ -1,4 +1,15 @@
-export type IsolationLevel = 'none' | 'process' | 'strong';
+/**
+ * How strongly a runtime isolates a workload from the host.
+ *
+ * `'unknown'` is deliberately NOT a synonym for weak. It is for a provider
+ * whose isolation this package has not established as fact — most often a
+ * hosted backend whose internals are documented by the vendor but not
+ * observable from here. Encoding such a case as `'strong'` would publish a
+ * guarantee nobody verified, and encoding it as `'none'`/`'process'` would
+ * publish a limitation that may not exist. A caller that requires a specific
+ * guarantee must treat `'unknown'` as "not established" and decide for itself.
+ */
+export type IsolationLevel = 'none' | 'process' | 'strong' | 'unknown';
 
 export interface RuntimeCapabilities {
   pty: boolean;
@@ -39,7 +50,9 @@ export interface ExecResult {
   /**
    * True when the provider capped captured output and `output` is therefore
    * incomplete. Optional and additive; `undefined` means the provider did not
-   * report truncation, not that the output is known to be complete.
+   * report truncation, not that the output is known to be complete. A given
+   * adapter may guarantee more than this baseline for its own reads — see
+   * that adapter's implementation for the stronger claim, if any.
    */
   truncated?: boolean;
 }

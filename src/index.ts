@@ -30,6 +30,7 @@ export type {
   LifetimeMode,
   OutputStreamMode,
   SnapshotMode,
+  ResolvedSandboxRuntimeCapabilities,
   RunScriptResult,
   SandboxCapabilityModes,
   SandboxCountOptions,
@@ -81,6 +82,29 @@ export type {
   E2BSandboxStatics,
   E2BUploadBundleOptions,
 } from "./e2b/runtime.js";
+
+export {
+  MicrosandboxBackendBusyError,
+  MicrosandboxBackendPoisonedError,
+  MicrosandboxCreateTimeoutError,
+  MicrosandboxLogReadError,
+  MicrosandboxLookupTimeoutError,
+  MicrosandboxNameTooLongError,
+  MicrosandboxPaginationError,
+  MicrosandboxRunLostError,
+  MicrosandboxRunNotFinishedError,
+  MicrosandboxRunTimeoutUnsupportedError,
+  MicrosandboxRuntime,
+  MicrosandboxSessionConflictError,
+  MicrosandboxStatusProbeError,
+  MicrosandboxUnknownOutcomeError,
+} from "./microsandbox/runtime.js";
+export type {
+  MicrosandboxBackend,
+  MicrosandboxRuntimeOptions,
+  MicrosandboxSdk,
+  MicrosandboxStatus,
+} from "./microsandbox/runtime.js";
 
 export {
   AGENT37_COMMAND_CAP_MS,

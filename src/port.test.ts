@@ -4,7 +4,9 @@ import { describe, it } from "node:test";
 import {
   isPendingEvidence,
   resolveSandboxRuntimeCapabilities,
+  type ResolvedSandboxRuntimeCapabilities,
   type SandboxRuntime,
+  type SandboxRuntimeCapabilities,
 } from "./port.js";
 
 /** Minimal runtime: only what the resolver actually inspects. */
@@ -119,4 +121,34 @@ describe("capability modes", () => {
       resolveSandboxRuntimeCapabilities(instance),
     );
   });
+
+  it(
+    "lets a consumer literal-construct SandboxRuntimeCapabilities without modes",
+    () => {
+      // Source-compat contract: the exported base shape must still accept the
+      // five pre-modes fields alone. External TypeScript consumers that built
+      // fixtures like this before modes existed compile unchanged.
+      const preModesFixture: SandboxRuntimeCapabilities = {
+        asyncExec: false,
+        reattach: false,
+        detachedLaunch: false,
+        warmLease: true,
+        lifecycle: true,
+      };
+      assert.equal(preModesFixture.modes, undefined);
+    },
+  );
+
+  it(
+    "resolver returns the stricter ResolvedSandboxRuntimeCapabilities with modes populated",
+    () => {
+      // The resolver's return type has modes required. Assign into the strict
+      // type without a cast: the compiler enforces that modes is present, and
+      // the runtime confirms it's populated (with unknowns by default).
+      const resolved: ResolvedSandboxRuntimeCapabilities =
+        resolveSandboxRuntimeCapabilities(runtime());
+      assert.equal(resolved.modes.outputStreams, "unknown");
+      assert.equal(resolved.modes.filesystem, "unknown");
+    },
+  );
 });
