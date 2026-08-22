@@ -131,10 +131,59 @@ past a benchmark completion, both tagged `ephemeral:true` by
 sandbox-provider-comparison-0819. **Not deleting** — Khaliq's call, already
 with him.
 
-The lead question — what let this happen, and what would catch it next time
-— is answered separately in [[project_ephemeral_leak_diagnosis_2026-08-22]]
-(TODO in this seat's queue; will land as an addendum to this file if the
-memory doesn't survive).
+**Diagnosis** (what let this happen, and what would catch it next time,
+verified against `src/agent37/runtime.ts` at 2f82187):
+
+- `ephemeral:true` was a caller-applied *metadata label*, not a lifecycle
+  contract. Agent37 does nothing with labels beyond storing and returning
+  them for `findAllByLabels`. There is no `ephemeralUntil` /
+  `deadline` field on `LaunchOptions` a provider could act on either.
+- Ownership is tracked only in-process (`private readonly ownership = new
+  Map<string, boolean>` at line 482). When the launching process exits —
+  crash, SIGKILL, normal script completion without a `finally` — the
+  ownership record is gone and only the provider knows the instance exists.
+- Agent37's lifetime is effectively `never-idle`: it runs until explicitly
+  stopped, so nothing on the provider side reaps.
+- The adapter is aware of a *sibling* failure mode: `POST /v1/instances` is
+  synchronous, and aborting the request "neither stops the allocation nor
+  yields the id needed to delete it, so the timeout would leak a billed
+  orphan" (line 402). It refuses `createTimeoutSeconds` for that reason.
+  What it does *not* protect against is the case that hit us — a successful
+  launch followed by no destroy.
+- The port comment at `src/agent37/runtime.ts:374` explicitly warns that
+  sweeping on labels alone is unsafe: "labels are reused precisely so warm
+  leases can be found by them, so a sweep could delete a healthy instance
+  belonging to someone else." So a naïve `ephemeral:true` cron would be
+  unsafe.
+- Per [[feedback_script_not_agent_benchmarks]] the benchmark that launched
+  these two instances is a cron'd script. If it exited before its cleanup
+  path (crash or SIGKILL), no in-process handler fires. There is no
+  out-of-process safety net today.
+
+**What would catch it next time** (increasing investment):
+
+1. **Ownership-tag + deadline metadata sweep.** Every launch already stamps
+   an "opaque attribution tag" (port line 162). Have every ephemeral launch
+   also stamp `ephemeralUntil: <ISO8601>`. A per-provider daily cron lists
+   instances stamped by any known attribution tag with `ephemeralUntil` in
+   the past and destroys them. The invariant "we stamped it, we said when
+   to reap, past that date is safe to delete" side-steps the labels-are-
+   reused warning because tag+timestamp is not the same as label. This is
+   the smallest change that would have destroyed both `4mrt16bu6v` and
+   `h3v9wr5ya3` within a day.
+2. **First-class `ephemeralUntil` on `LaunchOptions`.** Push the deadline
+   into the port so adapters can express it to providers that honour it
+   (Modal's 24h ceiling is a natural fit; E2B has a lifetime bound too).
+   The ones that cannot (Agent37 today) fall back to (1).
+3. **Script-side `try { launch(); ... } finally { destroy(); }` wrapping
+   in every benchmark.** Doesn't cover SIGKILL, but reduces the rate at
+   which (1) has to catch things. Complementary, not a substitute.
+
+The first is a two-file change on this seat's roadmap (`src/port.ts` to
+add the metadata field, a new `scripts/reap-ephemeral.ts` per provider).
+Not writing it in this session — Khaliq's ruling on the two live instances
+is a prerequisite so the cron doesn't collide with his own recovery. When
+the ruling lands, opening as sandbox#TBD.
 
 ## Handoff section (keep this current)
 
