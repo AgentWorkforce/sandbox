@@ -1922,13 +1922,19 @@ describe('DaytonaRuntime smoke', { concurrency: false }, () => {
         }
         try {
           await daytona.delete(sandbox);
-        } catch (deleteError) {
-          // Daytona get/delete is eventually consistent: get can still resolve
-          // for a sandbox that runtime.destroy() already removed, and the
-          // subsequent delete then rejects 404. That case is cleanup success,
-          // not failure — assertDaytonaSandboxGone below confirms absence
-          // regardless. Any other delete error is real and must still bubble.
-          if (!isTestDaytonaNotFound(deleteError)) throw deleteError;
+        } catch (error) {
+          // This delete races the runtime.destroy() above, which already
+          // deleted the sandbox. Daytona keeps the record resolvable while it
+          // is still `destroying`, so get() succeeds and the delete() that
+          // follows loses the race one of two ways:
+          //   404 - the destroy already finished; nothing left to delete
+          //   409 - "state change in progress"; the destroy is still running
+          // Neither is a cleanup failure, and neither is proof of absence, so
+          // fall through to the check below, which polls until it is really
+          // gone. Any other error is a genuine cleanup failure.
+          if (!isTestDaytonaNotFound(error) && !isTestDaytonaStateChangeInProgress(error)) {
+            throw error;
+          }
         }
         await assertDaytonaSandboxGone(daytona, id);
       } catch (error) {
@@ -2052,6 +2058,17 @@ async function assertDaytonaSandboxGone(daytona: Daytona, id: string): Promise<v
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert.fail(`Daytona sandbox ${id} still exists after cleanup`);
+}
+
+// Daytona rejects a mutation aimed at a sandbox that is mid-transition with
+// HTTP 409 "Sandbox state change in progress" — during cleanup that means an
+// in-flight destroy, not a failure.
+function isTestDaytonaStateChangeInProgress(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { status?: unknown; statusCode?: unknown; name?: unknown };
+  return candidate.status === 409
+    || candidate.statusCode === 409
+    || candidate.name === 'DaytonaConflictError';
 }
 
 function isTestDaytonaNotFound(error: unknown): boolean {
