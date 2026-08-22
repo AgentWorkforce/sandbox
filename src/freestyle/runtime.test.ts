@@ -239,12 +239,16 @@ describe("FreestyleRuntime launch, lookup, and ownership", () => {
   });
 
   it("turns a stalled create into a typed deadline and leaves no false registration", async () => {
-    const { runtime } = mockRuntime({
+    const { runtime, calls } = mockRuntime({
       config: { createTimeoutMs: 5 },
       create: () => new Promise(() => {}),
     });
     await assert.rejects(runtime.launch(), FreestyleCreateTimeoutError);
+    // destroy() returns silently for an unregistered handle, so the absence of
+    // a throw proves nothing on its own; the delete call is the real evidence
+    // that the stalled create left no registration behind.
     await runtime.destroy({ id: "vm_1" });
+    assert.deepEqual(calls.delete, []);
   });
 
   it("never turns name ownership into a fake server-side label lease", async () => {
