@@ -11,8 +11,12 @@ export const freestyleSandboxCapabilities = {
   // Freestyle create has no label field. Name-scoped ownership is useful for
   // cleanup, but it is not a server-side label lease implementation.
   warmLease: false,
-  // The adapter implements stop/start as a probe surface. This flag is promoted
-  // only after stop -> settled state -> start -> exec succeeds live.
+  // Measured live 2026-08-22: stop/start/exec round-trips cleanly under
+  // `sticky` persistence, but under `ephemeral` — what this adapter is
+  // validated with — `stop` destroys the VM rather than stopping it. The
+  // capability is therefore a function of `options.persistence`, which one
+  // shared constant cannot express, so it stays false rather than claiming
+  // something untrue for the default configuration. See docs/freestyle.md.
   lifecycle: false,
 } as const satisfies DeclaredSandboxRuntimeCapabilities;
 
@@ -44,6 +48,8 @@ export const freestyleObservedCapabilities: FreestyleObservedCapabilities = {
   // ledgered VM was absent or deleted:true in a fresh post-run prefix audit.
   cleanupVerified: true,
   fork: false,
+  // False as a *declaration*, not as an observation: see the note above. Under
+  // `sticky` persistence stop -> start -> exec was observed working live.
   lifecycle: false,
   neverIdle: false,
   ptySurvival: false,

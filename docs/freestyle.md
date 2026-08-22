@@ -29,17 +29,44 @@ it does not invent a one-year timeout or invoke an undocumented suspend
 workaround. Deletion succeeds only after the VM is absent or its retained list
 row has `deleted: true`.
 
-The lifecycle methods are implemented for testing and future promotion, but
-`lifecycle` remains false. The 2026-08-20 validation account rejected persistent
-VM creation, so stop/start followed by exec could not be observed. Snapshot,
-fork, PTY survival, and never-idle behavior remain unadvertised for the same
-reason. Exec is buffered by the SDK; `streamingLogs` is false.
+The lifecycle methods are implemented, but the declared `lifecycle` flag
+remains false, because whether they work is a function of the configured
+persistence and a single static flag cannot say that. Measured live on
+2026-08-22 against `freestyle@0.1.63`:
 
-The same live run did establish deletion behavior: a clean canary and seven
-sequential VMs were deleted, four successful concurrent VMs plus one late
-timed-out allocation were reconciled by the run ledger, and a fresh exact-prefix
-audit found zero live resources. `freestyleObservedCapabilities.cleanupVerified`
-records only that measured fact. A width-five create probe returned four handles
+| Persistence | `stop` | `start` | exec after start | filesystem across stop/start |
+| --- | --- | --- | --- | --- |
+| `ephemeral` | VM is **destroyed**, not stopped | n/a | n/a | n/a |
+| `sticky` | settles to `stopped` | works (5 of 6 attempts) | works | preserved |
+| `persistent` | rejected at create: `PERSISTENT_VMS_NOT_ALLOWED` (plan limit) | n/a | n/a | n/a |
+
+Under `ephemeral` — the persistence the adapter was validated with — `stop` does
+not stop the VM: the adapter observes it leave the provider listing entirely and
+raises `Freestyle VM "<id>" disappeared while waiting for stopped`. Declaring
+`lifecycle: true` would therefore be wrong for the configuration most callers
+start from.
+
+Under `sticky` the capability is real and was proven end to end: four
+consecutive stop → start → exec cycles on one VM all succeeded, with a marker
+file written before the first stop still readable after the fourth start. One
+earlier `start` in the same session returned a provider-side
+`INTERNAL_ERROR: Internal server error` (5 of 6 starts succeeded overall), so
+callers driving `sticky` lifecycle should expect to retry `start`.
+
+Promoting the flag honestly requires deriving it from `options.persistence`
+rather than flipping the shared constant; that change is deliberately not made
+here. Snapshot, fork, PTY survival, and never-idle behavior remain unadvertised
+— this package's ports do not reach them. Exec is buffered by the SDK;
+`streamingLogs` is false.
+
+Deletion behavior is established. The 2026-08-20 run deleted a clean canary and
+seven sequential VMs, reconciled four concurrent VMs plus one late timed-out
+allocation through the run ledger, and found zero live resources in a fresh
+exact-prefix audit. The 2026-08-22 revalidation repeated this on the final
+source: every VM created across the revalidation and the lifecycle probes was
+deleted, and an account-wide audit afterwards returned zero VM rows in total.
+`freestyleObservedCapabilities.cleanupVerified` records only that measured
+fact. A width-five create probe returned four handles
 while the fifth encountered burst-quota 429 retries and crossed the explicit
 120-second deadline; capacity is not declared as an adapter capability.
 
