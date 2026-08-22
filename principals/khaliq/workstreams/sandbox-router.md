@@ -1,10 +1,30 @@
 ---
 status: active
-owner: sandbox-lead
+owner: sandbox-lead-0822
 reports_to: chief
-updated: 2026-08-22
+updated: 2026-08-22T17:15Z
 repos: [sandbox, sandbox-router]
 ---
+
+**Cwd deletion 2026-08-22 ~17:00Z.** The `.lanes/sandbox-lead` worktree
+was removed while this seat was suspended — same failure mode that killed
+sandbox-lead-0821. Recovered with `git worktree add .../.lanes/sandbox-lead
+--detach origin/main` at HEAD `7c8d0ac`. No writes were done from the
+recovered directory before this notice; the seat is not silently
+continuing from a mystery cwd. Root cause not investigated in this seat.
+
+**Overnight merges (2026-08-22 10:38–12:57Z):** sandbox #20, #22 Freestyle,
+#23 lifecycle-verify, #24 mount-script env-var token ingress (this is the
+`mount-script-token-argv-fix-0821` artifact my earlier sweep couldn't find
+— it landed under `mount-script`/`sandbox#21` naming), #25 the
+attribution_tag + ephemeralUntil reaper (matches my
+[[project_ephemeral_leak_diagnosis_2026-08-22]] proposal), and
+sandbox-router #2/#3/#6/#7/#8. sandbox #15 Modal and #16 Vercel merged
+earlier that morning.
+
+**Agent37 leaked instances resolved.** `4mrt16bu6v` and `h3v9wr5ya3` both
+return HTTP 404 to Agent37's hosting API as of 17:14Z — reaped in the
+6h gap between shifts, presumably as #25 landed.
 
 Goal: two shipping surfaces. `AgentWorkforce/sandbox` is the multi-provider
 adapter set (Daytona, E2B, Micro Sandbox, Agent37, Modal, Vercel, AgentCore,
