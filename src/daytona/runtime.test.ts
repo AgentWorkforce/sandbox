@@ -1920,7 +1920,16 @@ describe('DaytonaRuntime smoke', { concurrency: false }, () => {
           if (isTestDaytonaNotFound(error)) continue;
           throw error;
         }
-        await daytona.delete(sandbox);
+        try {
+          await daytona.delete(sandbox);
+        } catch (deleteError) {
+          // Daytona get/delete is eventually consistent: get can still resolve
+          // for a sandbox that runtime.destroy() already removed, and the
+          // subsequent delete then rejects 404. That case is cleanup success,
+          // not failure — assertDaytonaSandboxGone below confirms absence
+          // regardless. Any other delete error is real and must still bubble.
+          if (!isTestDaytonaNotFound(deleteError)) throw deleteError;
+        }
         await assertDaytonaSandboxGone(daytona, id);
       } catch (error) {
         cleanupFailures.push(error);
