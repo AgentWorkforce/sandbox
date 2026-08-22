@@ -26,12 +26,16 @@
   },
   "peerDependencies": {
     "@daytonaio/sdk": ">=0.205.0 <0.206.0",
+    "@vercel/sandbox": ">=3.0.1 <4.0.0",
     "e2b": ">=2.35.0 <3.0.0",
     "microsandbox": ">=0.6.11 <0.7.0",
     "modal": ">=0.9.0 <0.10.0"
   },
   "peerDependenciesMeta": {
     "@daytonaio/sdk": {
+      "optional": true
+    },
+    "@vercel/sandbox": {
       "optional": true
     },
     "e2b": {
@@ -47,6 +51,7 @@
   "devDependencies": {
     "@daytonaio/sdk": "^0.205.1",
     "@types/node": "^22",
+    "@vercel/sandbox": "3.0.1",
     "e2b": "^2.35.0",
     "microsandbox": "^0.6.11",
     "modal": "^0.9.0",

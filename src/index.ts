@@ -141,6 +141,41 @@ export type {
 } from "./agent37/client.js";
 
 export {
+  VercelCapabilityMismatchError,
+  VercelDestroyVerificationError,
+  VercelDetachedLaunchUnsupportedError,
+  VercelForeignSandboxError,
+  VercelLifecycleTimeoutError,
+  VercelListPageLimitError,
+  VercelOperationTimeoutError,
+  VercelSandboxRuntime,
+  VercelTagLimitError,
+  VercelUnknownExitCodeError,
+  reconcileVercelCapabilities,
+} from "./vercel/runtime.js";
+export type {
+  VercelAttachedSandboxOptions,
+  VercelCapabilitySurface,
+  VercelBundleFile,
+  VercelListOwnedOptions,
+  VercelOwnedSandbox,
+  VercelRunScriptOptions,
+  VercelUploadBundleOptions,
+} from "./vercel/runtime.js";
+export {
+  vercelCapabilityModes,
+  vercelObservedCapabilities,
+  vercelSandboxCapabilities,
+  vercelWorkflowCapabilities,
+} from "./vercel/capabilities.js";
+export type { VercelObservedCapabilities } from "./vercel/capabilities.js";
+export type {
+  VercelCredentials,
+  VercelRuntimeOptions,
+  VercelSandboxSource,
+} from "./vercel/config.js";
+
+export {
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
   ModalForeignSandboxError,

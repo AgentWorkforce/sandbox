@@ -153,6 +153,47 @@ other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
 bump picks that up — `runtime.test.ts`'s `DaytonaRuntime smoke` suite has a
 load-bearing regression test that fails once that happens.
 
+### Vercel Sandbox runtime contract
+
+`VercelSandboxRuntime` takes an explicit token, team id, project id, ownership
+name prefix, and home directory, and passes credentials on every SDK call so the
+vendor's own environment and on-disk OAuth fallbacks can never supply an
+operator's identity.
+
+A Vercel sandbox is addressed by its **name**, not an opaque id, so
+`RuntimeHandle.id` carries the name and the configured prefix is a real
+ownership boundary: stop, start, and delete refuse any name outside it.
+`Sandbox.list` supports server-side `namePrefix` and `tags` filters, so label
+lookup is a real search here — but every row is re-checked against the requested
+tags in process, because a server filter that were ever ignored would hand back
+someone else's sandbox as a warm lease. `getById` is implemented over `list`
+rather than `Sandbox.get`, which resumes and bills the sandbox as a side effect.
+
+Deletion is verified by absence, and a row that reappears under the same name
+with a different `createdAt` counts as proof our sandbox is gone rather than as
+a survivor. Failed verification retains the registration so cleanup stays
+retryable. `acquire()` returns an `AsyncDisposable` for `await using` scopes.
+
+Commands run as `sh -c` with `cwd` and `env` passed through provider fields, so
+no caller value is spliced into a command string. Every operation carries its
+own deadline, under an absolute `retryDeadlineMs` ceiling that spans the SDK's
+internal retries.
+
+Warm leasing, lifecycle, PTY, snapshots, streaming logs, fork, and verified
+cleanup are all declared `false` pending live evidence; never-idle is settled
+false, because every Vercel sandbox carries a termination deadline. The official
+SDK is isolated under `src/vercel/internal/`. See
+[the Vercel adapter notes](./docs/vercel.md) for dependency provenance,
+capability evidence, and the active-CPU-versus-wall-clock pricing analysis.
+
+Capabilities are also declared structurally. PTY and snapshots resolve to
+`"not-exposed"` — real in the SDK, unreachable through this port, and so not
+something a live probe may promote — while `lifetime` resolves to `"deadline"`,
+the settled reason a Vercel sandbox has no never-idle tier. `filesystem` is
+deliberately left `"unknown"`: durability is per-instance configuration
+(`persistent`), and surviving a stop/resume is the same round trip `lifecycle`
+is still awaiting live proof of.
+
 ### Modal runtime contract
 
 `ModalRuntime` takes an explicit Modal **token pair** (`tokenId` and
