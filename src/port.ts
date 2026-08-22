@@ -12,7 +12,10 @@ export type RunScriptResult = {
    * True when the provider capped captured output and `output` is therefore
    * incomplete. Optional and additive: a provider that either never truncates
    * or cannot tell simply omits it, and `undefined` means "not reported",
-   * never "complete".
+   * never "complete". Mirrors `ExecResult.truncated` deliberately: an adapter
+   * that bounds a log read should report the bound on both planes or on
+   * neither, because a caller that moves between them would otherwise see the
+   * same shortened log described two different ways.
    */
   truncated?: boolean;
 };
@@ -20,6 +23,12 @@ export type RunScriptResult = {
 export type AsyncRunStartResult = {
   sessionId: string;
   commandId: string;
+  /**
+   * True when a submit whose outcome was unknown resolved to the run that was
+   * already admitted for this exact session and command, rather than starting
+   * a second one.
+   */
+  reconciled?: true;
 };
 
 export type AsyncRunStatus = {
@@ -233,6 +242,11 @@ export type SandboxRuntime = {
  * narrow `RuntimeCapabilities` in `./types.ts`, which belongs to the live
  * in-sandbox bootstrap plane and must not be conflated with it. The two are
  * kept under distinct names on purpose.
+ *
+ * `modes` is optional on this shape so a TypeScript consumer can still
+ * literal-construct a fixture with the five booleans. The resolver returns the
+ * stricter `ResolvedSandboxRuntimeCapabilities` where `modes` is required and
+ * always populated (defaulting to `"unknown"` rather than to a claim).
  */
 export type SandboxRuntimeCapabilities = {
   /**
@@ -249,9 +263,25 @@ export type SandboxRuntimeCapabilities = {
   /** `start`/`stop` actually change sandbox state rather than no-opping. */
   readonly lifecycle: boolean;
   /**
-   * Structured detail for the capabilities a boolean flattens. Always present
-   * after resolution, defaulting to `"unknown"` rather than to a claim.
+   * Structured detail for the capabilities a boolean flattens. Optional on the
+   * base shape for source-compat with pre-modes fixtures; always populated on
+   * the resolver's return type (`ResolvedSandboxRuntimeCapabilities`).
    */
+  readonly modes?: SandboxCapabilityModes;
+};
+
+/**
+ * The descriptor `resolveSandboxRuntimeCapabilities` returns. `modes` is
+ * required here — the resolver always populates it, defaulting to `"unknown"`
+ * so a runtime that declares nothing makes no new claim while still producing
+ * a fully-shaped resolved descriptor.
+ *
+ * Kept distinct from `SandboxRuntimeCapabilities` so external consumers that
+ * literal-construct fixtures with only the pre-modes fields continue to
+ * compile; those fixtures satisfy `SandboxRuntimeCapabilities`, and only code
+ * reading a resolver output relies on `modes` being present.
+ */
+export type ResolvedSandboxRuntimeCapabilities = SandboxRuntimeCapabilities & {
   readonly modes: SandboxCapabilityModes;
 };
 
@@ -267,7 +297,7 @@ export type DeclaredSandboxRuntimeCapabilities = Pick<
 
 const capabilitiesByRuntime = new WeakMap<
   SandboxRuntime,
-  SandboxRuntimeCapabilities
+  ResolvedSandboxRuntimeCapabilities
 >();
 
 /**
@@ -282,7 +312,7 @@ const capabilitiesByRuntime = new WeakMap<
  */
 export function resolveSandboxRuntimeCapabilities(
   runtime: SandboxRuntime,
-): SandboxRuntimeCapabilities {
+): ResolvedSandboxRuntimeCapabilities {
   const cached = capabilitiesByRuntime.get(runtime);
   if (cached) {
     return cached;
@@ -295,7 +325,7 @@ export function resolveSandboxRuntimeCapabilities(
     && typeof runtime.getById === "function"
     && typeof runtime.getScriptStatus === "function"
     && typeof runtime.getScriptLogs === "function";
-  const resolved: SandboxRuntimeCapabilities = {
+  const resolved: ResolvedSandboxRuntimeCapabilities = {
     asyncExec,
     reattach: typeof runtime.getById === "function",
     detachedLaunch: typeof runtime.launchDetached === "function",
