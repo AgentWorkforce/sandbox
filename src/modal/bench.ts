@@ -23,6 +23,7 @@
 
 import type { RuntimeHandle } from "../types.js";
 import type { SandboxRuntime } from "../port.js";
+import { MODAL_MIN_CPU_CORES } from "./config.js";
 
 // --- published rates -------------------------------------------------------
 
@@ -69,7 +70,7 @@ export type ModalCostInput = {
  * projection down is a budget guard that can be walked past.
  */
 export function estimateModalSandboxCostUsd(input: ModalCostInput): number {
-  requireFinitePositive(input.cpuCores, "cpuCores");
+  requireCpuAtLeastFloor(input.cpuCores);
   requireFinitePositive(input.memoryGiB, "memoryGiB");
   requireFiniteNonNegative(input.seconds, "seconds");
   return (
@@ -80,7 +81,7 @@ export function estimateModalSandboxCostUsd(input: ModalCostInput): number {
 
 /** The same shape billed as an ordinary Function, for ratio reporting only. */
 export function estimateModalFunctionCostUsd(input: ModalCostInput): number {
-  requireFinitePositive(input.cpuCores, "cpuCores");
+  requireCpuAtLeastFloor(input.cpuCores);
   requireFinitePositive(input.memoryGiB, "memoryGiB");
   requireFiniteNonNegative(input.seconds, "seconds");
   return (
@@ -305,9 +306,32 @@ export async function runModalBenchmark(
   runtime: SandboxRuntime,
   options: ModalBenchOptions,
 ): Promise<ModalBenchReport> {
-  const count = Math.floor(options.count);
-  if (!Number.isFinite(count) || count < 1) {
-    throw new Error(`Modal benchmark count must be a positive integer; got ${String(options.count)}`);
+  // Reject a non-integer instead of silently truncating: a caller who passes
+  // `count: 2.7` almost certainly typed a wrong number, and running 2 without
+  // saying so buys a benchmark for a shape that was never requested.
+  if (
+    !Number.isFinite(options.count)
+    || !Number.isInteger(options.count)
+    || options.count < 1
+  ) {
+    throw new Error(
+      `Modal benchmark count must be a positive integer; got ${String(options.count)}`,
+    );
+  }
+  const count = options.count;
+  // A zero-lifetime projection reserves $0 in the ledger but still creates
+  // sandboxes with a positive provider lifetime, so the budget guard cannot
+  // stop the run before it bills. Guard here where the value crosses into the
+  // guard rather than deep in the estimator.
+  if (
+    !Number.isFinite(options.projectedLifetimeSeconds)
+    || options.projectedLifetimeSeconds <= 0
+  ) {
+    throw new Error(
+      "Modal benchmark projectedLifetimeSeconds must be a finite, positive number of seconds "
+        + "(and should cover the runtime's configured maxLifetimeMs, because a leaked "
+        + `sandbox bills for its whole lifetime); got ${String(options.projectedLifetimeSeconds)}`,
+    );
   }
   const now = options.now ?? (() => Date.now());
   const ledger = new ModalBenchLedger({ budgetUsd: options.budgetUsd });
@@ -320,6 +344,12 @@ export async function runModalBenchmark(
   const samples: ModalBenchSample[] = [];
   const labels = options.labels ?? {};
 
+  // Only sweep-by-label if the caller supplied labels *and* the runtime can
+  // list by them. Without both, a stray sandbox cannot be attributed to this
+  // run and the entry stays `create-failed` — the pre-existing shape.
+  const canReconcileByLabel = Object.keys(labels).length > 0
+    && typeof runtime.findAllByLabels === "function";
+
   const acquire = async (index: number): Promise<void> => {
     const label = `bench-${index}`;
     // Budget check and ledger write happen together, before any provider call.
@@ -329,8 +359,16 @@ export async function runModalBenchmark(
     try {
       handle = await runtime.launch({ name: label, labels });
     } catch (error) {
-      entry.state = "create-failed";
       entry.error = errorMessage(error);
+      // Leave the entry `intended` when a label sweep can reconcile it:
+      // `launch` throwing does not prove the provider created nothing, and
+      // marking `create-failed` here would hide any sandbox that materialised
+      // after the client-side deadline fired. Teardown's sweep either
+      // reattaches the stray and destroys it, or promotes the entry to
+      // `create-failed` once absence has been checked.
+      if (!canReconcileByLabel) {
+        entry.state = "create-failed";
+      }
       samples.push({ label, createMs: now() - startedAt, error: entry.error });
       return;
     }
@@ -343,10 +381,17 @@ export async function runModalBenchmark(
     if (options.measureFirstExec) {
       const execStartedAt = now();
       try {
-        await runtime.runScript(handle, {
+        const result = await runtime.runScript(handle, {
           command: options.firstExecCommand ?? "echo modal-bench-ready",
         });
-        firstExecMs = now() - execStartedAt;
+        // A canary that exits nonzero is a failure, not a latency sample.
+        // Recording `firstExecMs` for a failed command would let the harness
+        // report a green measurement for a command that never worked.
+        if (result.exitCode === 0) {
+          firstExecMs = now() - execStartedAt;
+        } else {
+          execError = `first exec exited with code ${String(result.exitCode ?? "unknown")}`;
+        }
       } catch (error) {
         execError = errorMessage(error);
       }
@@ -382,7 +427,7 @@ export async function runModalBenchmark(
     // A budget breach aborts the run but must never skip teardown.
     abortError = error;
   } finally {
-    await teardown(runtime, ledger);
+    await teardown(runtime, ledger, labels);
   }
 
   const leaked = ledger.leaked();
@@ -417,15 +462,14 @@ export async function runModalBenchmark(
  * Every entry is attempted even if an earlier one throws, because stopping at
  * the first failure would strand the rest.
  */
-async function teardown(runtime: SandboxRuntime, ledger: ModalBenchLedger): Promise<void> {
+async function teardown(
+  runtime: SandboxRuntime,
+  ledger: ModalBenchLedger,
+  labels: Record<string, string>,
+): Promise<void> {
+  // Pass 1: destroy sandboxes we already have ids for.
   for (const entry of ledger.outstanding()) {
     if (entry.sandboxId === undefined) {
-      // Intent was recorded but no handle came back. It cannot be destroyed by
-      // id, and it cannot be assumed absent either.
-      if (entry.state === "intended") {
-        entry.state = "leaked";
-        entry.error ??= "create outcome unknown: no sandbox id was ever observed";
-      }
       continue;
     }
     try {
@@ -437,8 +481,60 @@ async function teardown(runtime: SandboxRuntime, ledger: ModalBenchLedger): Prom
     }
   }
 
-  // Verification is a separate pass against the provider. `destroy` returning
-  // is not proof; a re-lookup reporting absence is.
+  // Pass 2: reconcile launches that threw without returning a handle. A
+  // `launch` rejection does not prove the provider created nothing — a
+  // sandbox that landed just after the client-side deadline fired would
+  // otherwise leak invisibly. Sweep by the caller's labels, associate any
+  // stray with an outstanding no-id entry, and destroy it. This is why the
+  // acquire loop leaves such entries `intended` rather than `create-failed`.
+  const unaccounted = ledger.outstanding().filter((entry) => entry.sandboxId === undefined);
+  const canSweep = unaccounted.length > 0
+    && Object.keys(labels).length > 0
+    && typeof runtime.findAllByLabels === "function";
+  if (canSweep) {
+    const knownIds = new Set(
+      ledger.all()
+        .map((entry) => entry.sandboxId)
+        .filter((id): id is string => id !== undefined),
+    );
+    let strays: RuntimeHandle[] = [];
+    try {
+      strays = (await runtime.findAllByLabels!(labels))
+        .filter((handle) => !knownIds.has(handle.id));
+    } catch (error) {
+      // A sweep failure is not fatal, but it does mean any remaining no-id
+      // entries have to fall through as unverified — see below.
+      for (const entry of unaccounted) {
+        entry.error = errorMessage(error);
+      }
+    }
+    for (const entry of unaccounted) {
+      const match = strays.shift();
+      if (match === undefined) {
+        // Sweep ran and no matching stray exists: this create truly failed.
+        entry.state = "create-failed";
+        entry.error ??= "create rejected and no stray sandbox was found by label sweep";
+        continue;
+      }
+      entry.sandboxId = match.id;
+      try {
+        await runtime.destroy(match);
+        entry.state = "destroyed";
+      } catch (error) {
+        entry.state = "destroy-failed";
+        entry.error = errorMessage(error);
+      }
+    }
+  } else {
+    for (const entry of unaccounted) {
+      entry.state = "leaked";
+      entry.error ??= "create outcome unknown: no sandbox id was ever observed "
+        + "and no label sweep was possible";
+    }
+  }
+
+  // Pass 3: verify. `destroy` returning is not proof; a re-lookup reporting
+  // absence is.
   for (const entry of ledger.outstanding()) {
     if (entry.sandboxId === undefined) {
       continue;
@@ -488,6 +584,20 @@ function requireFiniteNonNegative(value: number, field: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(
       `Modal benchmark ${field} must be a finite, non-negative number; got ${String(value)}`,
+    );
+  }
+}
+
+/**
+ * Modal charges as if the reservation were at least its per-container floor.
+ * Accepting a below-floor CPU value in the estimator would understate spend
+ * and let the budget guard be walked past.
+ */
+function requireCpuAtLeastFloor(cpuCores: number): void {
+  if (!Number.isFinite(cpuCores) || cpuCores < MODAL_MIN_CPU_CORES) {
+    throw new Error(
+      `Modal benchmark cpuCores must be a finite number >= ${MODAL_MIN_CPU_CORES} `
+        + `physical cores (Modal's per-container floor); got ${String(cpuCores)}`,
     );
   }
 }

@@ -77,6 +77,16 @@ export class ModalRuntime implements SandboxRuntime {
   private readonly clientFactory: ModalClientFactory;
   private clientPromise: Promise<ModalClientLike> | null = null;
   private contextPromise: Promise<ModalContext> | null = null;
+  /**
+   * Reconciliation tasks that outlive their caller.
+   *
+   * The only source today is `launch()` racing a `sandboxes.create()` past its
+   * client-side deadline: when the deadline fires the create can still complete
+   * and hand back a sandbox that would otherwise bill silently. `close()` awaits
+   * these before releasing the gRPC channel so that a reconciliation cannot be
+   * orphaned by teardown.
+   */
+  private readonly reconciliations = new Set<Promise<void>>();
 
   constructor(options: ModalRuntimeOptions & { clientFactory?: ModalClientFactory }) {
     this.options = resolveModalRuntimeOptions(options);
@@ -90,6 +100,11 @@ export class ModalRuntime implements SandboxRuntime {
     labels: Record<string, string>,
     options: SandboxLookupOptions = {},
   ): Promise<RuntimeHandle | null> {
+    // Preserve a caller-supplied `limit: 0`: a zero-result lookup is a valid
+    // question with a defined answer, not a value to round up to one.
+    if (normalizePositiveInt(options.limit) === 0) {
+      return null;
+    }
     const matches = await this.findAllByLabels(labels, { ...options, limit: 1 });
     return matches[0] ?? null;
   }
@@ -123,8 +138,17 @@ export class ModalRuntime implements SandboxRuntime {
 
     const context = await this.context(deadline);
     const matches: RuntimeHandle[] = [];
-    for await (const sandbox of context.client.sandboxes.list(this.listParams(context, tags))) {
-      deadline.assertNotExpired();
+    const iterator = context.client.sandboxes
+      .list(this.listParams(context, tags))[Symbol.asyncIterator]();
+    // `for await` awaits `iterator.next()` outside `deadline.run`, so a stalled
+    // list page can outlive `timeoutMs` and the caller's budget stops meaning
+    // anything. Drive the iterator by hand and wrap each fetch in the deadline.
+    for (;;) {
+      const step = await deadline.run(Promise.resolve(iterator.next()));
+      if (step.done) {
+        break;
+      }
+      const sandbox = step.value;
       if (excluded.has(sandbox.sandboxId)) {
         continue;
       }
@@ -153,11 +177,11 @@ export class ModalRuntime implements SandboxRuntime {
   ): Promise<number> {
     const tags = this.buildLookupTags(labels, true);
     const states = options.states ?? null;
-    // `maxCount` is an early exit, not a clamp: stop paging once the caller has
-    // learned enough, and report exactly what was counted.
-    const ceiling = normalizePositiveInt(options.maxCount)
-      ?? normalizePositiveInt(options.limit)
-      ?? Number.POSITIVE_INFINITY;
+    // `maxCount` is an early exit for the *count*: stop paging once the caller
+    // has learned enough, and report exactly what was counted. `limit` is a
+    // page-size hint elsewhere in the port and treating it as a ceiling here
+    // would silently undercount matching sandboxes.
+    const ceiling = normalizePositiveInt(options.maxCount) ?? Number.POSITIVE_INFINITY;
     if (ceiling === 0) {
       return 0;
     }
@@ -165,8 +189,16 @@ export class ModalRuntime implements SandboxRuntime {
 
     const context = await this.context(deadline);
     let count = 0;
-    for await (const sandbox of context.client.sandboxes.list(this.listParams(context, tags))) {
-      deadline.assertNotExpired();
+    const iterator = context.client.sandboxes
+      .list(this.listParams(context, tags))[Symbol.asyncIterator]();
+    // Same reason as findAllByLabels: the iterator advance must sit inside the
+    // deadline or a stalled page defeats the caller's timeoutMs.
+    for (;;) {
+      const step = await deadline.run(Promise.resolve(iterator.next()));
+      if (step.done) {
+        break;
+      }
+      const sandbox = step.value;
       if (!(await this.tagsReallyMatch(sandbox, tags, deadline))) {
         continue;
       }
@@ -192,6 +224,13 @@ export class ModalRuntime implements SandboxRuntime {
    * could otherwise reattach to a sandbox belonging to another lane. A foreign
    * sandbox reads as absent (`null`) rather than raising, because "not one of
    * mine" and "not there" are the same answer to this question.
+   *
+   * Unlike `findAllByLabels`/`countByLabels`, this path is not server-side
+   * tag-filtered: Modal's `fromId` accepts no tag argument, so a foreign
+   * sandbox is fetched before `isOwned()` can reject it. That costs one extra
+   * `getTags()` round trip for a lookup a lane could otherwise have skipped;
+   * the trade is deliberate because `fromId` is the only reattach primitive
+   * Modal exposes.
    */
   async getById(
     id: string,
@@ -278,10 +317,51 @@ export class ModalRuntime implements SandboxRuntime {
         : { blockNetwork: this.options.blockNetwork }),
     };
 
-    const sandbox = await deadline.run(
-      context.client.sandboxes.create(context.app, context.image, params),
-    );
+    // Hold the raw create promise so it outlives the deadline race. If the
+    // caller's client-side budget fires before Modal responds, the create can
+    // still complete and hand back a billed sandbox with no handle in reach.
+    // Reconcile that outcome in the background — see `trackReconciliation`.
+    const pending = context.client.sandboxes.create(context.app, context.image, params);
+    let sandbox: ModalSandboxLike;
+    try {
+      sandbox = await deadline.run(pending);
+    } catch (error) {
+      if (error instanceof ModalDeadlineExceededError) {
+        this.trackReconciliation(this.reconcileOrphanedCreate(pending));
+      }
+      throw error;
+    }
     return this.toHandle(sandbox.sandboxId, "running");
+  }
+
+  /**
+   * Terminate a create that outlived its deadline.
+   *
+   * Runs after `launch()` has already rejected, so the caller has no handle
+   * for the sandbox that might still be materialising. Failure modes here are
+   * all silent by design: if the create ultimately rejects there is nothing to
+   * clean up; if terminate fails there is no caller to raise to. `close()`
+   * awaits these before releasing the gRPC channel so a reconciliation cannot
+   * be orphaned by teardown.
+   */
+  private async reconcileOrphanedCreate(pending: Promise<ModalSandboxLike>): Promise<void> {
+    let sandbox: ModalSandboxLike;
+    try {
+      sandbox = await pending;
+    } catch {
+      return;
+    }
+    try {
+      await sandbox.terminate({ wait: false });
+    } catch {
+      // The next label sweep — either the caller's or this runtime's cleanup —
+      // is the safety net. There is no useful action to take from here.
+    }
+  }
+
+  private trackReconciliation(work: Promise<void>): void {
+    this.reconciliations.add(work);
+    void work.finally(() => this.reconciliations.delete(work));
   }
 
   /**
@@ -337,7 +417,7 @@ export class ModalRuntime implements SandboxRuntime {
     }
     const deadline = this.deadline(this.options.uploadTimeoutMs, "uploadBundle");
     const context = await this.context(deadline);
-    const sandbox = await deadline.run(context.client.sandboxes.fromId(sandboxId));
+    const sandbox = await this.ownedSandbox(sandboxId, context, deadline);
 
     // Sequential on purpose. Modal's filesystem writes go through the same
     // per-sandbox command router; firing a bundle in parallel buys little and
@@ -393,9 +473,9 @@ export class ModalRuntime implements SandboxRuntime {
     const timeoutMs = options.timeoutMs ?? this.options.execTimeoutMs;
     const deadline = this.deadline(timeoutMs, "runScript");
     const context = await this.context(deadline);
-    const sandbox = await deadline.run(context.client.sandboxes.fromId(sandboxId));
+    const sandbox = await this.ownedSandbox(sandboxId, context, deadline);
 
-    const process = await deadline.run(sandbox.exec(["sh", "-lc", options.command], {
+    const process = await deadline.run(sandbox.exec(["sh", "-lc", command], {
       workdir: handle.workdir ?? this.options.workdir,
       // Hand Modal the same budget, so the provider kills a runaway command
       // even if this client goes away. The outer deadline is a second line of
@@ -491,13 +571,46 @@ export class ModalRuntime implements SandboxRuntime {
     if (!this.options.verifyTagsClientSide || entries.length === 0) {
       return true;
     }
-    const actual = await deadline.run(sandbox.getTags());
+    let actual: Record<string, string>;
+    try {
+      actual = await deadline.run(sandbox.getTags());
+    } catch (error) {
+      // A sandbox that vanished between `list` and `getTags` is a non-match,
+      // not a lookup failure — otherwise one racing termination would abort
+      // the entire scan and hide every other candidate from the caller.
+      if (isNotFound(error)) {
+        return false;
+      }
+      throw error;
+    }
     return entries.every(([key, value]) => actual[key] === value);
   }
 
   private async isOwned(sandbox: ModalSandboxLike, deadline: Deadline): Promise<boolean> {
     const tags = await deadline.run(sandbox.getTags());
     return tags[this.options.ownerTagKey] === this.options.namePrefix;
+  }
+
+  /**
+   * Resolve a sandbox by id and prove ownership before returning it.
+   *
+   * Every write-or-execute path that takes a caller-supplied id must go
+   * through this: `fromId` will happily return any sandbox in the workspace,
+   * so a stale or synthesized handle would otherwise let a caller reattach to
+   * another lane's sandbox and mutate it. `destroy` uses its own resolution
+   * because it must also treat an already-absent sandbox as success — the
+   * only shape here that is idempotent.
+   */
+  private async ownedSandbox(
+    sandboxId: string,
+    context: ModalContext,
+    deadline: Deadline,
+  ): Promise<ModalSandboxLike> {
+    const sandbox = await deadline.run(context.client.sandboxes.fromId(sandboxId));
+    if (!(await this.isOwned(sandbox, deadline))) {
+      throw new ModalForeignSandboxError(sandboxId, this.options.namePrefix);
+    }
+    return sandbox;
   }
 
   private async waitUntilGone(sandbox: ModalSandboxLike, deadline: Deadline): Promise<void> {
@@ -570,6 +683,12 @@ export class ModalRuntime implements SandboxRuntime {
    * own. Long-lived hosts can ignore it; short-lived scripts and tests cannot.
    */
   async close(): Promise<void> {
+    // Drain reconciliations first: releasing the gRPC channel while an orphan
+    // terminate is still in flight would abandon exactly the resource this
+    // path exists to clean up.
+    if (this.reconciliations.size > 0) {
+      await Promise.allSettled([...this.reconciliations]);
+    }
     const pending = this.clientPromise;
     this.clientPromise = null;
     this.contextPromise = null;
