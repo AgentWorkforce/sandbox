@@ -50,9 +50,24 @@ export type RelayfileMountShellOptions = {
    * `--creds-file` flag for the same version-skew reason as
    * RELAYFILE_MOUNT_LOCAL_LAYOUT above: pre-creds binaries reject an unknown
    * flag but ignore the env var, so one spelling works across every binary a
-   * snapshot may carry. `--token` stays as the launch credential either way.
+   * snapshot may carry.
    */
   credsFilePath?: string;
+  /**
+   * How the launch token reaches the daemon.
+   *
+   *   - `'argv'` (default): rendered as `--token <literal>`. The token is
+   *     visible in `ps aux`, `/proc/<pid>/cmdline`, and any observability
+   *     agent that captures process command lines. Preserved as the default
+   *     for backwards compatibility with binaries that only read `--token`.
+   *   - `'env'`: rendered as an `env RELAYFILE_MOUNT_TOKEN=<literal>` prefix,
+   *     omitted from argv entirely. Requires a daemon build that reads the
+   *     `RELAYFILE_MOUNT_TOKEN` env var. Follow the same version-skew probe
+   *     pattern as RELAYFILE_MOUNT_LOCAL_LAYOUT before flipping to `'env'`.
+   *
+   * The credentials-in-argv exposure was tracked as AgentWorkforce/sandbox#21.
+   */
+  tokenIngress?: "argv" | "env";
 };
 
 /**
@@ -89,13 +104,20 @@ const SCOPED_LOCAL_LAYOUT_ENV = "env RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped ";
  * `env`-prefix for every relayfile-mount invocation: always pins the scoped
  * local layout, and when the caller provides a creds file, also points the
  * daemon at it via RELAYFILE_MOUNT_CREDS_FILE (see `credsFilePath` docs for
- * the version-skew rationale).
+ * the version-skew rationale). When `tokenIngress === 'env'`, prepends
+ * `RELAYFILE_MOUNT_TOKEN=<literal>` so the launch token never enters argv.
  */
-function mountEnvPrefix(opts: Pick<RelayfileMountShellOptions, "credsFilePath">): string {
-  if (!opts.credsFilePath) {
-    return SCOPED_LOCAL_LAYOUT_ENV;
+function mountEnvPrefix(
+  opts: Pick<RelayfileMountShellOptions, "credsFilePath" | "tokenIngress" | "token">,
+): string {
+  const parts = ["RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped"];
+  if (opts.credsFilePath) {
+    parts.push(`RELAYFILE_MOUNT_CREDS_FILE=${shellQuote(opts.credsFilePath)}`);
   }
-  return `env RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped RELAYFILE_MOUNT_CREDS_FILE=${shellQuote(opts.credsFilePath)} `;
+  if (opts.tokenIngress === "env") {
+    parts.push(`RELAYFILE_MOUNT_TOKEN=${shellQuote(opts.token)}`);
+  }
+  return `env ${parts.join(" ")} `;
 }
 
 export type RelayfileMountInitialSyncOptions = RelayfileMountShellOptions & {
@@ -466,7 +488,10 @@ function buildMountArgs(opts: RelayfileMountShellOptions): string[] {
     `--workspace ${shellQuote(opts.workspaceId)}`,
     `--local-dir ${shellQuote(opts.localDir)}`,
     `--state-dir ${shellQuote(opts.stateDir)}`,
-    `--token ${shellQuote(opts.token)}`,
+    // Token goes via env prefix (see mountEnvPrefix) when tokenIngress === 'env',
+    // so it never enters argv. Otherwise it is emitted as --token for
+    // backwards compat with daemon builds that only read the flag.
+    ...(opts.tokenIngress === "env" ? [] : [`--token ${shellQuote(opts.token)}`]),
     ...(opts.websocket === false ? ["--websocket=false"] : []),
     ...(opts.lazyRepos ? ["--lazy-repos"] : []),
     ...scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true })
