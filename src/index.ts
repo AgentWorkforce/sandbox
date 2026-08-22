@@ -261,6 +261,34 @@ export type {
   ModalSandboxServiceLike,
 } from "./modal/internal/sdk.js";
 
+export {
+  AgentCoreCommandFailedError,
+  AgentCoreDestroyVerificationError,
+  AgentCoreInterpreterNotReadyError,
+  AgentCoreNetworkConfigError,
+  AgentCoreOperationTimeoutError,
+  AgentCoreSandboxRuntime,
+  AgentCoreUnregisteredHandleError,
+} from "./agentcore/runtime.js";
+export type {
+  AgentCoreRunScriptOptions,
+  AgentCoreRuntimeDependencies,
+} from "./agentcore/runtime.js";
+export type {
+  AgentCoreCredentials,
+  AgentCoreInterpreterSource,
+  AgentCoreNetworkConfig,
+  AgentCoreRuntimeOptions,
+  AgentCoreVpcConfig,
+} from "./agentcore/config.js";
+export {
+  agentCoreCapabilityModes,
+  agentCoreObservedCapabilities,
+  agentCoreSandboxCapabilities,
+  agentCoreWorkflowCapabilities,
+} from "./agentcore/capabilities.js";
+export type { AgentCoreObservedCapabilities } from "./agentcore/capabilities.js";
+
 export { LocalSandboxRuntime } from "./local/runtime.js";
 export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
 
