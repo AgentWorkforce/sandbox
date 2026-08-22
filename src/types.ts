@@ -26,6 +26,36 @@ export interface LaunchOptions {
   labels?: Record<string, string>;
   workdir?: string;
   createTimeoutSeconds?: number;
+  /**
+   * Deadline after which the instance is a leak — the caller promises the
+   * instance is safe to reap once wall-clock passes this timestamp. Together
+   * with `attributionTag`, this is the reap-ephemeral contract: an out-of-
+   * process reaper (see `scripts/reap-ephemeral.ts`) DELETEs instances that
+   * carry BOTH fields when `ephemeralUntil` is in the past. Adapters that
+   * accept this option persist it on the instance's provider-side metadata
+   * so it survives caller crashes.
+   *
+   * Number: Unix milliseconds. String: ISO-8601 (parsed and re-encoded to
+   * millis at persist time; consistency with the reaper is on the adapter).
+   *
+   * **Never sweep on labels alone.** `metadata.ephemeral === 'true'` is a
+   * caller-set label, not a lifecycle contract — sweeping on it deletes
+   * healthy warm-lease instances that legitimately carry the same label.
+   * The safe contract is `attributionTag + ephemeralUntil<past>`, both
+   * required.
+   */
+  ephemeralUntil?: number | string;
+  /**
+   * Opaque tag identifying which system launched this instance for the
+   * reap-ephemeral contract. Any two systems that share a tag agree to
+   * reap each other's leaked instances; a tag with no counter-reaper leaks
+   * quietly. Combined with `ephemeralUntil` per the contract above.
+   *
+   * Suggested shape: `<system-slug>:<lane-slug>` (e.g.,
+   * `bench:sandbox-provider-comparison-0819`). Kept as an opaque string
+   * so the reap contract does not force a shared taxonomy.
+   */
+  attributionTag?: string;
 }
 
 export interface RuntimeHandle {

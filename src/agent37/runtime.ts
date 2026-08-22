@@ -638,6 +638,20 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     if (options.labels) {
       Object.assign(rawMetadata, options.labels);
     }
+    // Reap-ephemeral contract (see LaunchOptions docs and
+    // scripts/reap-ephemeral.ts). Persisted under reserved metadata keys so the
+    // out-of-process reaper can identify safe-to-reap leaks after a caller
+    // crash. Written LAST so caller labels cannot shadow them.
+    if (options.attributionTag !== undefined) {
+      rawMetadata["_sandbox.attributionTag"] = options.attributionTag;
+    }
+    if (options.ephemeralUntil !== undefined) {
+      rawMetadata["_sandbox.ephemeralUntil"] = String(
+        typeof options.ephemeralUntil === "number"
+          ? options.ephemeralUntil
+          : Date.parse(options.ephemeralUntil),
+      );
+    }
     const metadata = Object.keys(rawMetadata).length > 0 ? rawMetadata : undefined;
     const body: Record<string, unknown> = {
       ...(this.template === undefined ? {} : { template: this.template }),
