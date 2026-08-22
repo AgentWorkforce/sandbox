@@ -44,12 +44,28 @@ bump. `origin/main` head: `288b767`.
 | #22 Freestyle | CLEAN | freestyle-adapter-0822. |
 | #23 | CLEAN | lifecycle-verify-0822 — Daytona live smoke cleanup no longer fails on its own delete race. |
 
-**Capability-modes defect class:** #17 introduced structured capability modes
-alongside the boolean flags. A clean `git` three-way merge on a rebase can
-still leave an adapter declaring capabilities the OLD way while `main` now
-expects the new form. **Verified clean on #15 and #16** as of this update.
-**Still to verify on #19** once rebased. See [[reference_sandbox_economics_doc]]
-for the four-provider economics context that motivates the modes.
+**Capability-modes state of the port (verified 2026-08-22):** #17 introduced
+`SandboxCapabilityModes` alongside the boolean flags. The field is
+`declaredCapabilityModes?: Partial<SandboxCapabilityModes>` on the runtime
+interface, and the resolver defaults absent cells to `"unknown"`. It is
+purely additive. Actual adopters:
+
+- **Declared:** Modal (#15) via `modalCapabilityModes` + runtime assertions
+  at 876-920; Vercel (#16) via `vercelCapabilityModes` (deliberately omits
+  `filesystem` — per-instance configurable, documented).
+- **Not declared:** every adapter merged to main before #17 (Daytona, E2B,
+  Agent37, local) plus Freestyle (#22) and, as of this writing, AgentCore
+  (#19, still CONFLICTING). Any consumer that reads them via the resolver
+  sees five `"unknown"` cells — safe, just uninformative.
+
+So the seat-brief "rebase left it in the old form" concern is a specific
+worry about #15/#16/#19 branches where the pattern *was* already present
+and might have been lost. Confirmed intact on #15 and #16. Still to verify
+on #19. The broader story — every already-merged adapter also lacks the
+declarations — is a migration opportunity, not a defect. Flagged on #22
+review with a correction after I initially over-framed it. See
+[[reference_sandbox_economics_doc]] for the economics context that
+motivates the modes.
 
 ### `AgentWorkforce/sandbox-router`
 
