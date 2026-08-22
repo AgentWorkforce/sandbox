@@ -153,6 +153,51 @@ other fields once suspected missing (`autoDestroyAt`, `autoPauseInterval`,
 bump picks that up — `runtime.test.ts`'s `DaytonaRuntime smoke` suite has a
 load-bearing regression test that fails once that happens.
 
+### Modal runtime contract
+
+`ModalRuntime` takes an explicit Modal **token pair** (`tokenId` and
+`tokenSecret` — Modal does not use a single bearer key), an App name, an image
+tag, a home directory, and an ownership-name prefix. It never reads ambient
+credentials or a local Modal profile.
+
+A Modal Sandbox is a child of an App, built from an Image, and it has a
+**maximum lifetime after which the provider terminates it** — the SDK's own
+default is five minutes. `maxLifetimeMs` is therefore required configuration and
+is always sent explicitly. `createTimeoutSeconds` on `launch` is a deadline on
+the create call and is deliberately not forwarded to that lifetime.
+
+Modal exposes no stop/start for a Sandbox; `terminate` is the only lifecycle
+transition and it is terminal. `start` and `stop` are absent rather than
+no-ops, and `lifecycle` is declared false permanently. Async exec is likewise
+not implemented: Modal cannot re-resolve a running exec by id, so the
+`startScript`/`getScriptStatus`/`getScriptLogs` trio is omitted entirely instead
+of being half-supported.
+
+Ownership rides on Modal's native server-side tags rather than on a naming
+convention. Every sandbox carries an ownership tag, every lookup filters on it
+server-side, and reattachment and deletion both re-check it. Warm leasing is
+implemented against that real tag filter but remains undeclared until a live
+probe confirms it. Snapshots, volumes, PTY, and tunnels exist in the provider
+and are documented, but are not advertised because this package's port exposes
+no operation for them.
+
+That last distinction is now stated structurally rather than in prose. The
+adapter declares `declaredCapabilityModes`, so PTY and snapshots resolve to
+`"not-exposed"` — a fact about this package's port, which `isPendingEvidence()`
+reports as unmovable — rather than to a bare `false` a later canary might read
+as merely unverified. `lifetime` resolves to `"deadline"`, which is the
+structural reason a Modal sandbox can never be never-idle. Output is
+`"buffered"`: Modal streams, the adapter drains. Warm leasing deliberately gets
+no mode, because modes describe a capability's shape and not its verification
+state.
+
+The official SDK is isolated under `src/modal/internal/`, and because that SDK
+speaks gRPC rather than HTTP there is no injectable transport seam; the boundary
+is a structural mirror that is checked at build time instead. All create,
+lookup, exec, upload, and deletion operations have explicit deadlines. See
+[the Modal adapter notes](./docs/modal.md) for dependency provenance, provider
+constraints, cost model, and capability evidence.
+
 ## Development
 
 ```bash
