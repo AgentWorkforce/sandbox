@@ -70,6 +70,17 @@ fact. A width-five create probe returned four handles
 while the fifth encountered burst-quota 429 retries and crossed the explicit
 120-second deadline; capacity is not declared as an adapter capability.
 
+Late-create reconciliation. When a `launch()` call rejects with
+`FreestyleCreateTimeoutError` and the caller did not supply a name (so the
+runtime generated a fresh UUID-based one), the adapter now schedules a
+background cleanup: it awaits the underlying SDK call, and if the provider
+eventually hands back a VM under that unique name, it issues a verified
+`destroy` for it. Caller-supplied names produce deterministic slug names that
+two concurrent launches can share, so those are not reconciled by name — they
+remain the caller's responsibility to sweep. Short-lived processes that need
+to know all late allocations have been reclaimed should `await runtime.close()`
+before exit; long-lived hosts can ignore it.
+
 ## Provider shape and pricing caveat
 
 The official VM documentation describes a default of 4 vCPU, 8 GB memory, and

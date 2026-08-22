@@ -170,6 +170,7 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
   private readonly pollIntervalMs: number;
   private readonly injectedClientFactory?: FreestyleClientFactory;
   private readonly registrations = new Map<string, RegisteredVm>();
+  private readonly reconciliations = new Set<Promise<void>>();
 
   constructor(
     options: FreestyleRuntimeOptions,
@@ -201,20 +202,47 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
     const timeoutMs = options.createTimeoutSeconds && options.createTimeoutSeconds > 0
       ? Math.ceil(options.createTimeoutSeconds * 1_000)
       : this.createTimeoutMs;
-    const name = this.ownedName(options.name?.trim() || options.label?.trim());
+    const callerName = options.name?.trim() || options.label?.trim();
+    const name = this.ownedName(callerName);
+    // Only a name we generated with a fresh UUID is safe to reconcile by name.
+    // Deterministic slug names (derived from caller-supplied input) can collide
+    // across concurrent launches — matching on such a name could destroy a
+    // sibling's live VM. Leave those documented as unreconciled.
+    const reconcilableName = callerName ? null : name;
     const client = await this.client(timeoutMs);
-    const created = await withDeadline(
-      client.vms.create({
-        name,
-        persistence: this.persistence,
-        ...(this.snapshotId ? { snapshotId: this.snapshotId } : {}),
-        ...(this.idleTimeoutSeconds !== undefined
-          ? { idleTimeoutSeconds: this.idleTimeoutSeconds }
-          : {}),
-      }),
-      timeoutMs,
-      () => new FreestyleCreateTimeoutError(timeoutMs),
-    );
+    // Hold the raw create promise so it outlives the client-side deadline
+    // race. `withDeadline` only abandons the wait — the SDK call can still
+    // complete after we reject, and Freestyle may then hand back a billed VM
+    // that this adapter never registered. Reconcile that outcome in the
+    // background so the caller sees a clean rejection without leaking a VM.
+    const pending = client.vms.create({
+      name,
+      persistence: this.persistence,
+      ...(this.snapshotId ? { snapshotId: this.snapshotId } : {}),
+      ...(this.idleTimeoutSeconds !== undefined
+        ? { idleTimeoutSeconds: this.idleTimeoutSeconds }
+        : {}),
+    });
+    let created: Awaited<ReturnType<FreestyleClientLike["vms"]["create"]>>;
+    try {
+      created = await withDeadline(
+        pending,
+        timeoutMs,
+        () => new FreestyleCreateTimeoutError(timeoutMs),
+      );
+    } catch (error) {
+      if (error instanceof FreestyleCreateTimeoutError && reconcilableName) {
+        this.trackReconciliation(
+          this.reconcileOrphanedCreate(pending, reconcilableName),
+        );
+      } else {
+        // Nothing to reconcile — either not our timeout, or a caller-supplied
+        // name we cannot uniquely correlate. Swallow any late rejection so
+        // the runtime does not emit an unhandledRejection warning.
+        this.trackReconciliation(swallow(pending));
+      }
+      throw error;
+    }
     if (!created || typeof created.vmId !== "string" || !created.vmId.trim()) {
       throw new Error("Freestyle create response is missing vmId");
     }
@@ -518,13 +546,29 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
       return;
     }
     const client = await this.client(this.requestTimeoutMs);
-    await withDeadline(
-      client.vms.delete({ vmId: handle.id }),
-      this.requestTimeoutMs,
-      () => new FreestyleLookupTimeoutError(this.requestTimeoutMs, "delete request"),
-    );
+    // The delete call and the verification share one teardown, so a lost
+    // response or a request that crosses `requestTimeoutMs` must not report
+    // failure without first checking the authoritative list. If the provider
+    // actually performed the delete, `waitUntilDeleted` will confirm it and
+    // teardown resolves cleanly; only an unverified failure retains ownership.
+    let deleteError: unknown;
+    try {
+      await withDeadline(
+        client.vms.delete({ vmId: handle.id }),
+        this.requestTimeoutMs,
+        () => new FreestyleLookupTimeoutError(this.requestTimeoutMs, "delete request"),
+      );
+    } catch (error) {
+      deleteError = error;
+    }
     const verified = await this.waitUntilDeleted(handle.id);
     if (!verified) {
+      if (deleteError !== undefined) {
+        // Delete request failed and the VM is still visible: surface the
+        // original transport failure so the caller can decide whether to
+        // retry, and retain the registration so cleanup remains reachable.
+        throw deleteError;
+      }
       // Retain the registration so a caller can retry cleanup.
       throw new FreestyleDestroyVerificationError(
         handle.id,
@@ -532,6 +576,22 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
       );
     }
     this.registrations.delete(handle.id);
+  }
+
+  /**
+   * Drain in-flight orphaned-create reconciliations.
+   *
+   * A `launch()` whose client-side deadline fires may schedule a background
+   * delete for a VM the provider still allocates. Short-lived processes and
+   * tests must wait for those before exiting, or the reconciliation is what
+   * gets leaked. Long-lived hosts can ignore it; either way, this method is
+   * safe to call more than once and does not surface reconciliation errors.
+   */
+  async close(): Promise<void> {
+    if (this.reconciliations.size === 0) {
+      return;
+    }
+    await Promise.allSettled([...this.reconciliations]);
   }
 
   // Freestyle has no durable async process object through this adapter. Omit
@@ -551,6 +611,64 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
     sessionId: string,
     commandId: string,
   ) => Promise<AsyncRunStatus>;
+
+  /**
+   * Terminate a create that outlived its client-side deadline.
+   *
+   * Called only for names this runtime generated with a fresh UUID, so a
+   * match in the provider listing is unambiguously our own late allocation.
+   * All failure modes are silent by design: `launch()` has already rejected,
+   * so there is no caller to raise to. `close()` awaits pending
+   * reconciliations before the process exits.
+   */
+  private async reconcileOrphanedCreate(
+    pending: Promise<{ vm: FreestyleVmLike; vmId: string } | unknown>,
+    name: string,
+  ): Promise<void> {
+    let vmId: string | undefined;
+    try {
+      const settled = await pending;
+      if (
+        settled
+        && typeof settled === "object"
+        && typeof (settled as { vmId?: unknown }).vmId === "string"
+        && (settled as { vmId: string }).vmId.trim()
+      ) {
+        vmId = (settled as { vmId: string }).vmId.trim();
+      }
+    } catch {
+      // Create ultimately rejected — nothing was allocated, nothing to clean.
+      return;
+    }
+    if (!vmId) {
+      // No id came back. Fall back to the authoritative listing to find any
+      // row the provider allocated under the name we asked for.
+      try {
+        const owned = await this.listOwned({ states: null });
+        const match = owned.find((vm) => vm.name === name);
+        if (!match) {
+          return;
+        }
+        vmId = match.id;
+      } catch {
+        return;
+      }
+    }
+    // Register just long enough to satisfy destroy()'s ownership gate and
+    // then reuse the same verified-absence teardown the normal path uses.
+    this.register(vmId, { owned: true, labels: {}, state: "STARTED" });
+    try {
+      await this.destroy({ id: vmId, state: "STARTED", homeDir: this.defaultHomeDir });
+    } catch {
+      // Best effort. The next `listOwned` sweep or a follow-up cleanup pass
+      // is the safety net; there is no useful action from here.
+    }
+  }
+
+  private trackReconciliation(work: Promise<void>): void {
+    this.reconciliations.add(work);
+    void work.finally(() => this.reconciliations.delete(work));
+  }
 
   private async client(requestTimeoutMs: number): Promise<FreestyleClientLike> {
     if (this.injectedClientFactory) {
@@ -905,4 +1023,20 @@ async function withDeadline<T>(
 
 function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+}
+
+/**
+ * Consume a promise's eventual settlement without acting on it.
+ *
+ * Used when `launch()` has already rejected and there is no productive
+ * reconciliation to run (e.g. a caller-supplied name we cannot uniquely
+ * correlate). Without this, a late create rejection would surface as an
+ * unhandledRejection warning even though nothing wants the result.
+ */
+async function swallow(operation: Promise<unknown>): Promise<void> {
+  try {
+    await operation;
+  } catch {
+    // Ignored on purpose.
+  }
 }

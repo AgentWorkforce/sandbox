@@ -460,4 +460,221 @@ describe("FreestyleRuntime lifecycle and verified cleanup", () => {
     await assert.rejects(runtime.destroy(handle), FreestyleDestroyVerificationError);
     assert.deepEqual(calls.delete, ["vm_1", "vm_1"]);
   });
+
+  it("delete request that fails but leaves the VM already gone resolves as verified success", async () => {
+    // Simulates the outcome-unknown delete path (response lost or timeout
+    // crossed) where the provider actually performed the deletion. The
+    // authoritative listing reports deleted:true, so destroy must resolve
+    // rather than retain ownership on a VM that no longer exists.
+    let stateIndex = 0;
+    const states: FreestyleVmListItem[][] = [
+      [{ id: "vm_1", name: "cmpfree-test-one", state: "running", deleted: false }],
+      [{ id: "vm_1", name: "cmpfree-test-one", state: "stopped", deleted: true }],
+    ];
+    const calls = { delete: [] as string[], list: 0 };
+    const vm: FreestyleVmLike = {
+      async start() {},
+      async stop() {},
+      async exec() { return { stdout: "", stderr: "", statusCode: 0 }; },
+      fs: {
+        async readFile() { return Buffer.alloc(0); },
+        async writeFile() {},
+        async readTextFile() { return ""; },
+        async writeTextFile() {},
+      },
+    };
+    const client: FreestyleClientLike = {
+      vms: {
+        async create() { return { vm, vmId: "vm_1", domains: [] }; },
+        async list() {
+          calls.list += 1;
+          const page = states[Math.min(stateIndex, states.length - 1)] ?? [];
+          stateIndex += 1;
+          return { vms: page };
+        },
+        ref() { return vm; },
+        async get() { throw new Error("must not use vms.get"); },
+        async delete({ vmId }) {
+          calls.delete.push(vmId);
+          // Provider performed the delete but the response is lost.
+          throw new Error("simulated transport failure after provider deletion");
+        },
+      },
+    };
+    const runtime = new FreestyleRuntime(
+      { ...BASE_OPTIONS, lifecycleSettleTimeoutMs: 25, pollIntervalMs: 1 },
+      { clientFactory: () => client },
+    );
+    const handle = await runtime.launch();
+    await runtime.destroy(handle);
+    assert.deepEqual(calls.delete, ["vm_1"]);
+    // Ownership is dropped because verification confirmed absence: a retry
+    // is a no-op instead of a second delete against a gone VM.
+    await runtime.destroy(handle);
+    assert.deepEqual(calls.delete, ["vm_1"]);
+  });
+
+  it("delete request that fails and the VM is still visible surfaces the original transport error", async () => {
+    // Same outcome-unknown path, but the provider did NOT perform the
+    // deletion. The verified-absence check must NOT convert a real failure
+    // into a silent success, and the caller must see the original error so
+    // they can decide whether to retry.
+    const calls = { delete: [] as string[] };
+    const vm: FreestyleVmLike = {
+      async start() {},
+      async stop() {},
+      async exec() { return { stdout: "", stderr: "", statusCode: 0 }; },
+      fs: {
+        async readFile() { return Buffer.alloc(0); },
+        async writeFile() {},
+        async readTextFile() { return ""; },
+        async writeTextFile() {},
+      },
+    };
+    const client: FreestyleClientLike = {
+      vms: {
+        async create() { return { vm, vmId: "vm_1", domains: [] }; },
+        async list() {
+          return { vms: [{ id: "vm_1", name: "cmpfree-test-one", state: "running", deleted: false }] };
+        },
+        ref() { return vm; },
+        async get() { throw new Error("must not use vms.get"); },
+        async delete({ vmId }) {
+          calls.delete.push(vmId);
+          throw new Error("simulated real delete failure");
+        },
+      },
+    };
+    const runtime = new FreestyleRuntime(
+      { ...BASE_OPTIONS, lifecycleSettleTimeoutMs: 4, pollIntervalMs: 1 },
+      { clientFactory: () => client },
+    );
+    const handle = await runtime.launch();
+    await assert.rejects(runtime.destroy(handle), /simulated real delete failure/u);
+    // Registration is retained so a retry is possible.
+    await assert.rejects(runtime.destroy(handle), /simulated real delete failure/u);
+    assert.deepEqual(calls.delete, ["vm_1", "vm_1"]);
+  });
+});
+
+describe("FreestyleRuntime reconciles orphaned creates", () => {
+  it("late create allocation for a generated-unique name is destroyed after close()", async () => {
+    // Provider accepts the create but the response outlives the client-side
+    // deadline. `launch` must reject typed, and the background reconciliation
+    // must destroy the late-allocated VM once close() is awaited.
+    const calls = { create: 0, delete: [] as string[], list: 0 };
+    let resolveCreate: ((value: { vm: FreestyleVmLike; vmId: string; domains: string[] }) => void) | undefined;
+    let createdName: string | undefined;
+    let stateIndex = 0;
+    const vm: FreestyleVmLike = {
+      async start() {},
+      async stop() {},
+      async exec() { return { stdout: "", stderr: "", statusCode: 0 }; },
+      fs: {
+        async readFile() { return Buffer.alloc(0); },
+        async writeFile() {},
+        async readTextFile() { return ""; },
+        async writeTextFile() {},
+      },
+    };
+    const client: FreestyleClientLike = {
+      vms: {
+        create(input) {
+          calls.create += 1;
+          createdName = input?.name ?? undefined;
+          return new Promise((resolve) => {
+            resolveCreate = resolve;
+          });
+        },
+        async list() {
+          calls.list += 1;
+          const pages: FreestyleVmListItem[][] = [
+            // First lookup after late allocation: the VM is visible.
+            [{ id: "vm_late", name: createdName ?? "unknown", state: "running", deleted: false }],
+            // waitUntilDeleted polls until the row reports deleted:true.
+            [{ id: "vm_late", name: createdName ?? "unknown", state: "stopped", deleted: true }],
+          ];
+          const page = pages[Math.min(stateIndex, pages.length - 1)] ?? [];
+          stateIndex += 1;
+          return { vms: page };
+        },
+        ref() { return vm; },
+        async get() { throw new Error("must not use vms.get"); },
+        async delete({ vmId }) {
+          calls.delete.push(vmId);
+        },
+      },
+    };
+    const runtime = new FreestyleRuntime(
+      {
+        ...BASE_OPTIONS,
+        createTimeoutMs: 5,
+        lifecycleSettleTimeoutMs: 50,
+        pollIntervalMs: 1,
+      },
+      { clientFactory: () => client },
+    );
+
+    // No caller-supplied name — the runtime generates a UUID-based name,
+    // which is unambiguously safe to reconcile.
+    await assert.rejects(runtime.launch(), FreestyleCreateTimeoutError);
+    assert.equal(calls.delete.length, 0);
+    assert.ok(createdName, "provider create was invoked");
+
+    // Late allocation arrives after the client-side deadline fired.
+    resolveCreate!({ vm, vmId: "vm_late", domains: [] });
+
+    // Draining pending reconciliations must issue the delete for the late VM.
+    await runtime.close();
+    assert.deepEqual(calls.delete, ["vm_late"]);
+  });
+
+  it("late create allocation for a caller-supplied name is NOT reconciled by name", async () => {
+    // Deterministic slug names are shared across concurrent launches, so a
+    // "matching-name" reconciliation could destroy a sibling's live VM. The
+    // adapter must refuse to reconcile in this case, leaving the late VM to
+    // an out-of-band prefix sweep (documented in docs/freestyle.md).
+    const calls = { create: 0, delete: [] as string[], list: 0 };
+    let resolveCreate: ((value: { vm: FreestyleVmLike; vmId: string; domains: string[] }) => void) | undefined;
+    const vm: FreestyleVmLike = {
+      async start() {},
+      async stop() {},
+      async exec() { return { stdout: "", stderr: "", statusCode: 0 }; },
+      fs: {
+        async readFile() { return Buffer.alloc(0); },
+        async writeFile() {},
+        async readTextFile() { return ""; },
+        async writeTextFile() {},
+      },
+    };
+    const client: FreestyleClientLike = {
+      vms: {
+        create() {
+          calls.create += 1;
+          return new Promise((resolve) => {
+            resolveCreate = resolve;
+          });
+        },
+        async list() { calls.list += 1; return { vms: [] }; },
+        ref() { return vm; },
+        async get() { throw new Error("must not use vms.get"); },
+        async delete({ vmId }) { calls.delete.push(vmId); },
+      },
+    };
+    const runtime = new FreestyleRuntime(
+      { ...BASE_OPTIONS, createTimeoutMs: 5 },
+      { clientFactory: () => client },
+    );
+
+    await assert.rejects(
+      runtime.launch({ name: "caller-supplied-name" }),
+      FreestyleCreateTimeoutError,
+    );
+    resolveCreate!({ vm, vmId: "vm_late", domains: [] });
+    await runtime.close();
+    // Reconciliation intentionally skipped for caller-named launches.
+    assert.deepEqual(calls.delete, []);
+    // No listing call was needed because reconciliation was skipped.
+    assert.equal(calls.list, 0);
+  });
 });
