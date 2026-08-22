@@ -9,10 +9,19 @@ import type {
   RuntimeHandle,
   WorkflowRuntime,
 } from '../types.js';
+import { fetchDaytonaWireSupplement } from './wire-supplement.js';
+import type { DaytonaWireSupplement } from './wire-supplement.js';
 
 export interface DaytonaRuntimeOptions {
   daytona: Daytona;
   snapshot?: string;
+  /**
+   * When Daytona reports a restarted sandbox as ready but its Toolbox exec
+   * daemon is still unavailable, replace it from the same snapshot and
+   * provider metadata. The returned handle can therefore have a new ID.
+   * Defaults to true because a STARTED sandbox without exec is unusable.
+   */
+  recreateOnFailedStart?: boolean;
   /**
    * Home directory inside the sandbox image. Required: it is image-specific,
    * so there is no default that is correct for every consumer.
@@ -101,9 +110,13 @@ interface RegisteredSandbox {
 const SCRIPT_LOG_READ_MAX_BYTES = 262_144; // 256 KiB
 const DEFAULT_DAYTONA_LOOKUP_TIMEOUT_MS = 10_000;
 const DAYTONA_ADMISSION_RECONCILIATION_LOOKUP_TIMEOUT_MS = 1_000;
+const DAYTONA_POST_START_EXEC_PROBE_TIMEOUT_SECONDS = 10;
+const DAYTONA_POST_START_EXEC_PROBE_ATTEMPTS = 3;
+const DAYTONA_POST_START_EXEC_PROBE_DELAY_MS = 250;
 
 export class DaytonaRuntime implements WorkflowRuntime {
   readonly id = 'daytona';
+  readonly declaredCapabilities = { warmLease: true, lifecycle: true } as const;
   readonly capabilities: RuntimeCapabilities = {
     pty: false,
     snapshots: true,
@@ -116,11 +129,13 @@ export class DaytonaRuntime implements WorkflowRuntime {
   private readonly daytona: Daytona;
   private readonly snapshot?: string;
   private readonly defaultHomeDir: string;
+  private readonly recreateOnFailedStart: boolean;
 
   constructor(options: DaytonaRuntimeOptions) {
     this.daytona = options.daytona;
     this.snapshot = options.snapshot;
     this.defaultHomeDir = options.defaultHomeDir;
+    this.recreateOnFailedStart = options.recreateOnFailedStart ?? true;
   }
 
   async launch(options: LaunchOptions = {}): Promise<RuntimeHandle> {
@@ -651,6 +666,14 @@ export class DaytonaRuntime implements WorkflowRuntime {
     return homeDir;
   }
 
+  /**
+   * Fetches the sandboxClass + warmPoolId fields Daytona's wire response
+   * carries that the SDK's Sandbox class drops. See wire-supplement.ts.
+   */
+  async getWireSupplement(handle: RuntimeHandle): Promise<DaytonaWireSupplement> {
+    return fetchDaytonaWireSupplement(this.daytona, handle.id);
+  }
+
   async destroy(handle: RuntimeHandle): Promise<void> {
     const entry = this.sandboxes.get(handle.id);
     if (!entry) {
@@ -665,16 +688,11 @@ export class DaytonaRuntime implements WorkflowRuntime {
       return;
     }
 
-    const client = this.daytona as unknown as {
-      remove?: (sandbox: Sandbox) => Promise<void>;
-      delete: (sandbox: Sandbox) => Promise<void>;
-    };
-    const remove = client.remove ?? client.delete;
     // Order matters: do the remote delete *first*, and only drop the
     // local map entry after it succeeds. If we dropped the entry first
     // and the remote delete then failed, the handle id would be lost
     // and the caller could not retry cleanup safely.
-    await remove.call(client, entry.sandbox);
+    await this.removeSandbox(entry.sandbox);
     this.sandboxes.delete(handle.id);
   }
 
@@ -693,9 +711,13 @@ export class DaytonaRuntime implements WorkflowRuntime {
     };
     if (client.stop) {
       await client.stop(entry.sandbox);
+      handle.state = 'STOPPED';
       return;
     }
-    await entry.sandbox.stop?.();
+    if (typeof entry.sandbox.stop === 'function') {
+      await entry.sandbox.stop();
+      handle.state = 'STOPPED';
+    }
   }
 
   async start(handle: RuntimeHandle): Promise<RuntimeHandle> {
@@ -716,8 +738,193 @@ export class DaytonaRuntime implements WorkflowRuntime {
     } else {
       await entry.sandbox.start?.();
     }
-    handle.state = 'STARTED';
+
+    // SDK 0.180's lifecycle call waits for the platform state to become
+    // STARTED, but provider runs have shown that state can be reached while
+    // the Toolbox exec daemon still returns 502. Rehydrate first so the probe
+    // also avoids any pre-stop SDK client state.
+    // A failed control-plane rehydration is not proof that this specific
+    // sandbox's exec daemon is dead (it can be auth, rate limit, or network),
+    // so never create a second resource for that class of failure.
+    const restartedSandbox = await awaitLookupOperation(
+      this.daytona.get(handle.id),
+      lookupDeadline(undefined),
+      `rehydrating sandbox ${handle.id} after start`,
+    );
+    try {
+      await this.assertSandboxExecHealthy(restartedSandbox);
+    } catch (restartError) {
+      if (!this.recreateOnFailedStart) {
+        throw restartError;
+      }
+      return this.recreateAfterFailedStart(handle, entry, restartError);
+    }
+
+    entry.sandbox = restartedSandbox;
+    this.updateHandleFromSandbox(handle, restartedSandbox);
     return handle;
+  }
+
+  private async recreateAfterFailedStart(
+    handle: RuntimeHandle,
+    entry: RegisteredSandbox,
+    restartError: unknown,
+  ): Promise<RuntimeHandle> {
+    const originalSandbox = entry.sandbox;
+    const originalId = handle.id;
+    let replacement: Sandbox | undefined;
+
+    // entry.sandbox can be a list-derived object registered via attachSandbox
+    // without ever going through get(), which leaves env, volumes, and
+    // network settings unpopulated until refreshData() runs. Hydrate before
+    // reading it for replacementCreateParams so those settings are not
+    // silently dropped from the replacement.
+    await (originalSandbox as unknown as { refreshData?: () => Promise<void> }).refreshData?.();
+
+    try {
+      // Do not copy the name: Daytona requires names to be unique while the
+      // stopped original still exists. Labels, environment, snapshot and
+      // lifecycle/network settings are preserved instead.
+      replacement = await this.daytona.create(
+        this.replacementCreateParams(originalSandbox) as never,
+      );
+      await this.assertSandboxExecHealthy(replacement);
+    } catch (recreateError) {
+      if (replacement) {
+        try {
+          await this.removeSandbox(replacement);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [restartError, recreateError, cleanupError],
+            `Daytona sandbox "${originalId}" restart and replacement failed; replacement cleanup also failed`,
+          );
+        }
+      }
+      throw new AggregateError(
+        [restartError, recreateError],
+        `Daytona sandbox "${originalId}" restarted without working exec and replacement failed`,
+      );
+    }
+
+    try {
+      // Commit the replacement only after it has executed a real command and
+      // the unusable original has been removed. If removal fails, roll the
+      // replacement back so callers never unknowingly leak a second sandbox.
+      await this.removeSandbox(originalSandbox);
+    } catch (removeOriginalError) {
+      try {
+        await this.removeSandbox(replacement);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [restartError, removeOriginalError, cleanupError],
+          `Daytona sandbox "${originalId}" replacement was healthy, but neither original nor replacement could be cleaned up`,
+        );
+      }
+      throw new AggregateError(
+        [restartError, removeOriginalError],
+        `Daytona sandbox "${originalId}" replacement was rolled back because original cleanup failed`,
+      );
+    }
+
+    this.sandboxes.delete(originalId);
+    entry.sandbox = replacement;
+    this.sandboxes.set(replacement.id, entry);
+    this.updateHandleFromSandbox(handle, replacement);
+    return handle;
+  }
+
+  private async assertSandboxExecHealthy(sandbox: Sandbox): Promise<void> {
+    let lastFailure: unknown;
+    for (let attempt = 1; attempt <= DAYTONA_POST_START_EXEC_PROBE_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await sandbox.process.executeCommand(
+          'true',
+          undefined,
+          undefined,
+          DAYTONA_POST_START_EXEC_PROBE_TIMEOUT_SECONDS,
+        );
+        if (result.exitCode === 0) {
+          return;
+        }
+        lastFailure = new Error(
+          `Daytona sandbox "${sandbox.id}" post-start exec probe exited ${String(result.exitCode)}`,
+        );
+      } catch (error) {
+        lastFailure = error;
+      }
+      if (attempt < DAYTONA_POST_START_EXEC_PROBE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, DAYTONA_POST_START_EXEC_PROBE_DELAY_MS));
+      }
+    }
+    throw lastFailure;
+  }
+
+  private replacementCreateParams(sandbox: Sandbox): Record<string, unknown> {
+    const source = sandbox as unknown as {
+      snapshot?: unknown;
+      user?: unknown;
+      env?: unknown;
+      labels?: unknown;
+      public?: unknown;
+      autoStopInterval?: unknown;
+      autoArchiveInterval?: unknown;
+      autoDeleteInterval?: unknown;
+      volumes?: unknown;
+      networkBlockAll?: unknown;
+      networkAllowList?: unknown;
+    };
+    const labels = isStringRecord(source.labels) ? { ...source.labels } : undefined;
+    const snapshot = typeof source.snapshot === 'string' && source.snapshot.trim()
+      ? source.snapshot.trim()
+      : this.snapshot;
+    const language = labels?.['code-toolbox-language']?.trim() || 'typescript';
+
+    return {
+      ...(snapshot ? { snapshot } : { language }),
+      ...(typeof source.user === 'string' && source.user.trim() ? { user: source.user } : {}),
+      ...(isStringRecord(source.env) ? { envVars: { ...source.env } } : {}),
+      ...(labels ? { labels } : {}),
+      ...(typeof source.public === 'boolean' ? { public: source.public } : {}),
+      ...(typeof source.autoStopInterval === 'number'
+        ? { autoStopInterval: source.autoStopInterval }
+        : {}),
+      ...(typeof source.autoArchiveInterval === 'number'
+        ? { autoArchiveInterval: source.autoArchiveInterval }
+        : {}),
+      ...(typeof source.autoDeleteInterval === 'number'
+        ? { autoDeleteInterval: source.autoDeleteInterval }
+        : {}),
+      ...(Array.isArray(source.volumes) ? { volumes: [...source.volumes] } : {}),
+      ...(typeof source.networkBlockAll === 'boolean'
+        ? { networkBlockAll: source.networkBlockAll }
+        : {}),
+      ...(typeof source.networkAllowList === 'string' && source.networkAllowList.trim()
+        ? { networkAllowList: source.networkAllowList }
+        : {}),
+    };
+  }
+
+  private removeSandbox(sandbox: Sandbox): Promise<void> {
+    const client = this.daytona as unknown as {
+      remove?: (sandbox: Sandbox) => Promise<void>;
+      delete: (sandbox: Sandbox) => Promise<void>;
+    };
+    const remove = client.remove ?? client.delete;
+    return remove.call(client, sandbox);
+  }
+
+  private updateHandleFromSandbox(handle: RuntimeHandle, sandbox: Sandbox): void {
+    handle.id = sandbox.id;
+    handle.state = this.readSandboxState(sandbox)?.toUpperCase() ?? 'STARTED';
+    if (sandbox.createdAt) {
+      handle.createdAt = sandbox.createdAt;
+    }
+    if (sandbox.updatedAt) {
+      handle.updatedAt = sandbox.updatedAt;
+    }
+    if (sandbox.lastActivityAt) {
+      handle.lastActivityAt = sandbox.lastActivityAt;
+    }
   }
 
   private async createSandbox(options: LaunchOptions): Promise<Sandbox> {
@@ -1058,6 +1265,13 @@ export class DaytonaRuntime implements WorkflowRuntime {
 
 function normalizeDaytonaState(state: string): string {
   return state.toLowerCase();
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every((entry) => typeof entry === 'string');
 }
 
 type LookupDeadline = {
