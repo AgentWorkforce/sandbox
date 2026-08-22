@@ -1,4 +1,7 @@
-import type { DeclaredSandboxRuntimeCapabilities } from "../port.js";
+import type {
+  DeclaredSandboxRuntimeCapabilities,
+  SandboxCapabilityModes,
+} from "../port.js";
 import type { RuntimeCapabilities } from "../types.js";
 
 /**
@@ -127,3 +130,73 @@ export const MODAL_STRUCTURALLY_FALSE = [
   "lifecycle",
   "neverIdle",
 ] as const satisfies ReadonlyArray<keyof ModalObservedCapabilities>;
+
+/**
+ * Structured capability modes for the Modal adapter.
+ *
+ * Every cell below restates, in the type system, something this file already
+ * documented in prose. That is the whole reason to fill them in: the booleans
+ * above cannot distinguish "Modal cannot do this" from "Modal can, but our port
+ * exposes no operation reaching it" from "nobody has checked yet", and this
+ * adapter is the one that had to work around that by hand — see
+ * {@link MODAL_STRUCTURALLY_FALSE}.
+ *
+ * Note what is deliberately *not* here: `warmLease` stays a `false` boolean
+ * pending the live canary. Modes describe the shape of a capability, not its
+ * verification state, so a mode is not a back door for promoting a cell that
+ * the house rule keeps unproven.
+ */
+export const modalCapabilityModes = {
+  /**
+   * `buffered`, not `separate-streams`.
+   *
+   * Modal's `exec()` does return live `stdout`/`stderr` as separate
+   * `ReadableStream`s, and `runScript` does hand back separated `stdout` and
+   * `stderr` fields. But both streaming members of the union require output to
+   * be *streamed live*, and the adapter drains both pipes to completion with
+   * `readText()` before it returns anything. Separated-after-the-fact is still
+   * buffered. Declaring `separate-streams` would promise callers an incremental
+   * channel this port does not have.
+   */
+  outputStreams: "buffered",
+  /**
+   * Anything written is lost when the sandbox goes away, and on Modal it always
+   * goes away: `terminate()` is the only lifecycle transition and it is
+   * terminal. There is no stop/start pair for state to survive across, so
+   * `persistent` cannot apply.
+   */
+  filesystem: "ephemeral",
+  /**
+   * The structural fact behind `neverIdle: false` in
+   * {@link MODAL_STRUCTURALLY_FALSE}, now stated in the type rather than in a
+   * hand-maintained list. *Every* Modal Sandbox carries a maximum lifetime —
+   * five minutes by default, 24 hours at the ceiling (`MODAL_MAX_LIFETIME_MS`),
+   * and the provider terminates it when that elapses. There is no "no deadline"
+   * setting, so no live run can ever move this.
+   *
+   * `deadline` says that on its own; per the union's own note, a provider that
+   * always terminates at a deadline cannot offer a never-idle tier, so this
+   * needs no separate `unsupported`.
+   */
+  lifetime: "deadline",
+  /**
+   * `not-exposed`, emphatically not `unsupported`: Modal supports PTY on both
+   * `create` and `exec` (`pty: true`). This package's port declares no PTY
+   * operation, so it is unreachable *here*. It moves if someone adds one — and
+   * `isPendingEvidence()` correctly reports false for it, because no canary
+   * against Modal can change a fact about our own port surface.
+   */
+  interactive: "not-exposed",
+  /**
+   * Also `not-exposed`. Modal has real filesystem snapshots —
+   * `snapshotFilesystem()` and `snapshotDirectory(path)`, both returning an
+   * `Image` reusable as a create source. The port exposes no snapshot
+   * operation, so the capability is not reachable through it.
+   *
+   * This is exactly the cell the absence vocabulary was added to protect:
+   * `modalObservedCapabilities.snapshotCapture` is a *pending* observation
+   * about the provider, while this is a *settled* fact about our port. A canary
+   * may promote that one; it must never promote this one.
+   */
+  snapshots: "not-exposed",
+} as const satisfies SandboxCapabilityModes;

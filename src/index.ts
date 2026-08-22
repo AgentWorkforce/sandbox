@@ -156,6 +156,7 @@ export type {
 } from "./modal/bench.js";
 export {
   MODAL_STRUCTURALLY_FALSE,
+  modalCapabilityModes,
   modalObservedCapabilities,
   modalSandboxCapabilities,
   modalWorkflowCapabilities,

@@ -5,11 +5,14 @@ import { describe, it } from "node:test";
 import {
   MODAL_MAX_LIFETIME_MS,
   MODAL_MIN_CPU_CORES,
+  MODAL_STRUCTURALLY_FALSE,
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
   ModalForeignSandboxError,
   ModalRuntime,
   ModalTagCollisionError,
+  isPendingEvidence,
+  modalCapabilityModes,
   modalObservedCapabilities,
   modalSandboxCapabilities,
   modalWorkflowCapabilities,
@@ -439,6 +442,100 @@ describe("Modal capabilities", () => {
   });
 
   it("the real adapter passes its own reconciliation", () => {
+    assert.doesNotThrow(() => reconcileModalCapabilities(runtime(harness()) as SandboxRuntime));
+  });
+});
+
+describe("Modal capability modes", () => {
+  /** A reconcilable Modal-shaped runtime with the modes swapped out. */
+  const withModes = (
+    modes: Record<string, string>,
+  ): SandboxRuntime =>
+    ({
+      ...(runtime(harness()) as unknown as Record<string, unknown>),
+      declaredCapabilities: modalSandboxCapabilities,
+      declaredCapabilityModes: modes,
+      findByLabels: async () => null,
+      findAllByLabels: async () => [],
+      countByLabels: async () => 0,
+      launch: async () => ({ id: "x" }),
+      uploadBundle: async () => {},
+      runScript: async () => ({ output: "", exitCode: 0 }),
+      destroy: async () => {},
+    }) as unknown as SandboxRuntime;
+
+  const mismatch = (modes: Record<string, string>, needle: string) => {
+    assert.throws(
+      () => reconcileModalCapabilities(withModes(modes)),
+      (error: unknown) =>
+        error instanceof ModalCapabilityMismatchError
+        && error.mismatches.some((m) => m.includes(needle)),
+    );
+  };
+
+  it("resolves every mode the adapter declares, none left unknown", () => {
+    const caps = resolveSandboxRuntimeCapabilities(runtime(harness()) as SandboxRuntime);
+    assert.deepEqual(caps.modes, {
+      outputStreams: "buffered",
+      filesystem: "ephemeral",
+      lifetime: "deadline",
+      interactive: "not-exposed",
+      snapshots: "not-exposed",
+    });
+  });
+
+  it("states buffered output, because runScript drains before it returns", () => {
+    // Modal's exec really does hand back separate live ReadableStreams; the
+    // adapter reads both to completion first, so the port's shape is buffered.
+    assert.equal(modalCapabilityModes.outputStreams, "buffered");
+    assert.equal(modalWorkflowCapabilities.streamingLogs, false);
+  });
+
+  it("states the deadline lifetime that MODAL_STRUCTURALLY_FALSE.neverIdle encodes", () => {
+    assert.equal(modalCapabilityModes.lifetime, "deadline");
+    assert.ok(MODAL_STRUCTURALLY_FALSE.includes("neverIdle"));
+    assert.equal(modalObservedCapabilities.neverIdle, false);
+  });
+
+  it("marks pty and snapshots not-exposed, so no canary can promote them", () => {
+    // The distinction the absence vocabulary exists for: these are facts about
+    // this package's port, not pending observations about Modal. A live probe
+    // proving Modal has PTY must not move either cell.
+    assert.equal(modalCapabilityModes.interactive, "not-exposed");
+    assert.equal(modalCapabilityModes.snapshots, "not-exposed");
+    assert.equal(isPendingEvidence(modalCapabilityModes.interactive), false);
+    assert.equal(isPendingEvidence(modalCapabilityModes.snapshots), false);
+  });
+
+  it("leaves warmLease a pending boolean rather than laundering it through a mode", () => {
+    // Modes describe shape, not verification state. warmLease stays false until
+    // the live canary, and nothing in the mode table asserts otherwise.
+    assert.equal(modalSandboxCapabilities.warmLease, false);
+    assert.equal(
+      resolveSandboxRuntimeCapabilities(runtime(harness()) as SandboxRuntime).warmLease,
+      false,
+    );
+  });
+
+  it("rejects a never-idle lifetime: Modal always terminates at a deadline", () => {
+    mismatch({ lifetime: "never-idle" }, "no no-deadline setting");
+  });
+
+  it("rejects a streaming outputStreams mode this port cannot honor", () => {
+    mismatch({ outputStreams: "separate-streams" }, 'the honest value is "buffered"');
+    mismatch({ outputStreams: "combined-stream" }, 'the honest value is "buffered"');
+  });
+
+  it("rejects a persistent filesystem: there is no stop/start to survive", () => {
+    mismatch({ filesystem: "persistent" }, "no stop/start pair for state to survive");
+  });
+
+  it("rejects promoting pty or snapshots above not-exposed", () => {
+    mismatch({ snapshots: "snapshot" }, "declares no snapshot operation");
+    mismatch({ snapshots: "snapshot-and-fork" }, "declares no snapshot operation");
+  });
+
+  it("the real adapter's own modes pass reconciliation", () => {
     assert.doesNotThrow(() => reconcileModalCapabilities(runtime(harness()) as SandboxRuntime));
   });
 });

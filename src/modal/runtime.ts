@@ -4,12 +4,16 @@ import { randomUUID } from "node:crypto";
 import type {
   DeclaredSandboxRuntimeCapabilities,
   RunScriptResult,
+  SandboxCapabilityModes,
   SandboxCountOptions,
   SandboxLookupOptions,
   SandboxRuntime,
 } from "../port.js";
 import type { RuntimeHandle } from "../types.js";
-import { modalSandboxCapabilities } from "./capabilities.js";
+import {
+  modalCapabilityModes,
+  modalSandboxCapabilities,
+} from "./capabilities.js";
 import {
   type ModalRuntimeOptions,
   type ResolvedModalRuntimeOptions,
@@ -65,6 +69,9 @@ export class ModalRuntime implements SandboxRuntime {
 
   readonly declaredCapabilities: Partial<DeclaredSandboxRuntimeCapabilities> =
     modalSandboxCapabilities;
+
+  readonly declaredCapabilityModes: Partial<SandboxCapabilityModes> =
+    modalCapabilityModes;
 
   private readonly options: ResolvedModalRuntimeOptions;
   private readonly clientFactory: ModalClientFactory;
@@ -729,6 +736,71 @@ export function reconcileModalCapabilities(runtime: SandboxRuntime): void {
     mismatches.push(
       `async exec is all-or-nothing but only [${present.join(", ")}] are implemented: `
         + "Modal cannot re-resolve a ContainerProcess by id, so the trio must stay absent",
+    );
+  }
+
+  // --- modes ---------------------------------------------------------------
+  //
+  // The booleans above can only be wrong about *whether* a capability exists.
+  // The modes can be wrong about its *shape*, which is the subtler lie: a mode
+  // that over-claims reads as settled fact rather than as a pending cell, and
+  // `isPendingEvidence()` reports false for it, so nothing downstream will ever
+  // revisit it. Each rule below is a shape this adapter could misstate.
+  const modes = runtime.declaredCapabilityModes ?? {};
+
+  // Modal terminates every sandbox at a deadline that always exists — five
+  // minutes by default, MODAL_MAX_LIFETIME_MS at the ceiling. "never-idle" is
+  // the one lifetime Modal structurally cannot offer, which is exactly why
+  // `neverIdle` sits in MODAL_STRUCTURALLY_FALSE.
+  if (modes.lifetime === "never-idle") {
+    mismatches.push(
+      'declaredCapabilityModes.lifetime is "never-idle" but every Modal Sandbox '
+        + "carries a maximum lifetime the provider enforces (see "
+        + "MODAL_STRUCTURALLY_FALSE.neverIdle); there is no no-deadline setting",
+    );
+  }
+
+  // A live-stream mode promises callers an incremental channel. `runScript`
+  // drains both pipes with readText() before returning, and the port exposes no
+  // streaming surface at all, so any streaming member is a claim this adapter
+  // cannot honor no matter what the provider can do.
+  if (
+    modes.outputStreams === "combined-stream"
+    || modes.outputStreams === "separate-streams"
+  ) {
+    mismatches.push(
+      `declaredCapabilityModes.outputStreams is "${modes.outputStreams}" but runScript `
+        + "drains stdout/stderr to completion before returning and the port exposes no "
+        + 'streaming operation; the honest value is "buffered"',
+    );
+  }
+
+  // Filesystem persistence means surviving a stop/start of the same sandbox.
+  // Modal has no such pair, so "persistent" cannot be true here.
+  if (modes.filesystem === "persistent") {
+    mismatches.push(
+      'declaredCapabilityModes.filesystem is "persistent" but Modal has no stop/start '
+        + "pair for state to survive across; terminate is the only transition and it is "
+        + "terminal",
+    );
+  }
+
+  // PTY and snapshots are real on Modal and unreachable through this port. That
+  // asymmetry is the whole reason "not-exposed" exists, and it is the pair most
+  // likely to be "corrected" upward by someone reading the provider's docs
+  // instead of this package's port.
+  if (modes.interactive === "pty" && !has("startScript")) {
+    mismatches.push(
+      'declaredCapabilityModes.interactive is "pty" but this package\'s port declares no '
+        + 'PTY operation; Modal supports pty:true, so the honest value is "not-exposed" '
+        + '(a fact about our port) rather than a positive claim',
+    );
+  }
+  if (modes.snapshots === "snapshot" || modes.snapshots === "snapshot-and-fork") {
+    mismatches.push(
+      `declaredCapabilityModes.snapshots is "${modes.snapshots}" but this package's port `
+        + "declares no snapshot operation; Modal has snapshotFilesystem/snapshotDirectory, "
+        + 'so the honest value is "not-exposed" rather than a positive claim',
     );
   }
 

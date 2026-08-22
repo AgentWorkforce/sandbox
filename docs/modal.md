@@ -182,11 +182,38 @@ House rule: a behavioral claim stays `false` until a live probe establishes it.
 | `snapshots` | `false` | Modal exposes real snapshots — see below — but this package's port exposes no snapshot operation. Capability means *reachable through this port*. |
 | `streamingLogs` | `false` | `exec()` returns live `ReadableStream`s, so Modal genuinely streams; the port's `RunScriptResult` is buffered, so the adapter drains them. |
 
+### Structured modes
+
+The booleans above cannot say *why* a capability is absent, and for this adapter
+that gap was being papered over by hand — `MODAL_STRUCTURALLY_FALSE` exists
+precisely because `lifecycle: false` and `neverIdle: false` are settled facts
+while every other `false` is a pending observation. `modalCapabilityModes`
+states that distinction in the type system instead, via the
+`declaredCapabilityModes` port field.
+
+| Mode | Value | Reason |
+|---|---|---|
+| `outputStreams` | `buffered` | Modal's `exec()` really does return separate live `ReadableStream`s, and `runScript` hands back separated `stdout`/`stderr`. But both streaming members of the union mean *streamed live*, and the adapter drains both pipes with `readText()` before returning. Separated after the fact is still buffered. |
+| `filesystem` | `ephemeral` | `terminate()` is the only lifecycle transition and it is terminal; there is no stop/start pair for state to survive across, so `persistent` cannot apply. |
+| `lifetime` | `deadline` | Every Modal Sandbox carries a maximum lifetime the provider enforces — 5 minutes by default, `MODAL_MAX_LIFETIME_MS` (24h) at the ceiling. This is `MODAL_STRUCTURALLY_FALSE.neverIdle` stated in the type: per the union's own note, a provider that always terminates at a deadline cannot offer a never-idle tier. |
+| `interactive` | `not-exposed` | Modal supports `pty: true`. This package's port declares no PTY operation, so it is unreachable *here*. |
+| `snapshots` | `not-exposed` | Modal has real `snapshotFilesystem()`/`snapshotDirectory()`. This package's port declares no snapshot operation. |
+
+The `not-exposed` cells are the ones to be careful with. They are facts about
+*this package's port*, not pending observations about Modal, so
+`isPendingEvidence()` returns `false` for them and a live canary proving Modal
+has PTY must **not** promote either. They move only if someone adds an operation
+to the port. Note also what is absent from the table: `warmLease` stays a
+pending `false` boolean. Modes describe a capability's shape, not its
+verification state, and are not a route around the house rule.
+
 `reconcileModalCapabilities` runs at construction time and throws
 `ModalCapabilityMismatchError` if a declaration and the implementation disagree —
 for example a declared `lifecycle: true` with no `start`/`stop`, a no-op
-lifecycle method, or a partial async-exec trio. The point is to fail on a
-developer's machine rather than in production.
+lifecycle method, or a partial async-exec trio. It guards the modes on the same
+terms: a `never-idle` lifetime, a live-streaming `outputStreams`, a `persistent`
+filesystem, or a positive `interactive`/`snapshots` claim each fail the build.
+The point is to fail on a developer's machine rather than in production.
 
 ## Provider features characterized but not adopted
 

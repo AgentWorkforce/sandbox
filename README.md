@@ -142,6 +142,16 @@ probe confirms it. Snapshots, volumes, PTY, and tunnels exist in the provider
 and are documented, but are not advertised because this package's port exposes
 no operation for them.
 
+That last distinction is now stated structurally rather than in prose. The
+adapter declares `declaredCapabilityModes`, so PTY and snapshots resolve to
+`"not-exposed"` — a fact about this package's port, which `isPendingEvidence()`
+reports as unmovable — rather than to a bare `false` a later canary might read
+as merely unverified. `lifetime` resolves to `"deadline"`, which is the
+structural reason a Modal sandbox can never be never-idle. Output is
+`"buffered"`: Modal streams, the adapter drains. Warm leasing deliberately gets
+no mode, because modes describe a capability's shape and not its verification
+state.
+
 The official SDK is isolated under `src/modal/internal/`, and because that SDK
 speaks gRPC rather than HTTP there is no injectable transport seam; the boundary
 is a structural mirror that is checked at build time instead. All create,
