@@ -15,18 +15,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version bump type"
+        description: "Exact version already prepared in package.json"
         required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-          - prerelease
-        default: "patch"
-      custom_version:
-        description: "Custom version (optional, overrides the bump type)"
-        required: false
         type: string
       tag:
         description: "npm dist-tag"
@@ -83,18 +73,44 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Bump version
+      - name: Validate version
         id: version
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
         run: |
-          CUSTOM="${{ github.event.inputs.custom_version }}"
-          BUMP="${{ github.event.inputs.version }}"
-          if [ -n "$CUSTOM" ]; then
-            npm version "$CUSTOM" --no-git-tag-version
-          else
-            npm version "$BUMP" --no-git-tag-version
+          MANIFEST_VERSION=$(node -p "require('./package.json').version")
+          LOCKFILE_VERSION=$(node -p "require('./package-lock.json').version")
+          LOCKFILE_ROOT_VERSION=$(node -p "require('./package-lock.json').packages[''].version")
+          if [ "$REQUESTED_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error title=Version mismatch::requested version ($REQUESTED_VERSION) must match package.json ($MANIFEST_VERSION)"
+            exit 1
           fi
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "$LOCKFILE_VERSION" != "$MANIFEST_VERSION" ] || [ "$LOCKFILE_ROOT_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error title=Version mismatch::package-lock.json ($LOCKFILE_VERSION, root $LOCKFILE_ROOT_VERSION) must match package.json ($MANIFEST_VERSION)"
+            exit 1
+          fi
+          npm version "$REQUESTED_VERSION" --no-git-tag-version --allow-same-version
+          if ! git diff --quiet -- package.json package-lock.json; then
+            echo "::error title=Unexpected version mutation::version validation changed a manifest"
+            exit 1
+          fi
+          echo "new_version=${MANIFEST_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check release tag
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${NEW_VERSION}" > /dev/null 2>&1; then
+            echo "::error title=Release tag exists::v${NEW_VERSION} already exists on origin"
+            exit 1
+          else
+            STATUS=$?
+            if [ "$STATUS" -ne 2 ]; then
+              echo "::error title=Tag check failed::could not verify whether v${NEW_VERSION} exists on origin"
+              exit "$STATUS"
+            fi
+          fi
 
       - name: Dry run publish
         if: ${{ github.event.inputs.dry_run == 'true' }}
@@ -104,18 +120,12 @@ jobs:
         if: ${{ github.event.inputs.dry_run != 'true' }}
         run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }} --ignore-scripts
 
-      - name: Commit, tag, and release
+      - name: Tag release
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(release): v${NEW_VERSION}"
-            git pull --rebase origin main
-            git push origin HEAD:main
-          fi
           git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
           git push origin "v${NEW_VERSION}"
