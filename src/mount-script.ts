@@ -50,10 +50,9 @@ export type RelayfileMountShellOptions = {
    * Path to a JSON creds file (`{"token": "relay_pa_…", "mintedAt"?, "expiresAt"?}`)
    * the daemon re-reads on 401 so a refreshed token heals the mount without a
    * restart. Passed as the RELAYFILE_MOUNT_CREDS_FILE env var rather than a
-   * `--creds-file` flag for the same version-skew reason as
-   * RELAYFILE_MOUNT_LOCAL_LAYOUT above: pre-creds binaries reject an unknown
-   * flag but ignore the env var, so one spelling works across every binary a
-   * snapshot may carry.
+   * `--creds-file` flag because pre-creds binaries reject an unknown flag but
+   * ignore the env var, so one spelling works across every binary a snapshot
+   * may carry.
    */
   credsFilePath?: string;
   /**
@@ -65,8 +64,8 @@ export type RelayfileMountShellOptions = {
    *     for backwards compatibility with binaries that only read `--token`.
    *   - `'env'`: rendered as an `env RELAYFILE_MOUNT_TOKEN=<literal>` prefix,
    *     omitted from argv entirely. Requires a daemon build that reads the
-   *     `RELAYFILE_MOUNT_TOKEN` env var. Follow the same version-skew probe
-   *     pattern as RELAYFILE_MOUNT_LOCAL_LAYOUT before flipping to `'env'`.
+   *     `RELAYFILE_MOUNT_TOKEN` env var. Confirm that capability before
+   *     flipping the default to `'env'`.
    *
    * The credentials-in-argv exposure was tracked as AgentWorkforce/sandbox#21.
    */
@@ -74,53 +73,43 @@ export type RelayfileMountShellOptions = {
 };
 
 /**
- * Pin the daemon's local layout to `scoped` (remote path appended under
- * --local-dir) on every invocation.
+ * The local-layout value and --local-dir are one contract.
  *
- * Newer daemon releases made the layout explicit: they default to `exact`
- * (--local-dir IS the mirror root) and hard-error on multiple --remote-path
- * values unless `--local-layout=scoped`. All builders in this module
- * pre-compute an UNSCOPED local dir (see `unscopedLocalDir`) and rely on the
- * daemon appending the remote path, which is what older binaries did
- * implicitly. Without this pin, a newer binary breaks two ways: multi-path
- * mounts fail at startup, and single-path mounts silently mirror at the wrong
- * depth.
+ * Every invocation uses explicit `exact` layout, so --local-dir is the final
+ * on-disk mirror root. For a remote root such as `/github/repos/acme/cloud`,
+ * builders first recover the unscoped base (for callers that already passed
+ * the joined path) and then append that remote root themselves. Multi-path
+ * mounts run one process per remote root because exact layout intentionally
+ * rejects repeated --remote-path values.
  *
- * Pinned via env var rather than the `--local-layout` flag on purpose: older
- * binaries reject the unknown flag but ignore the env var, while newer ones
- * read RELAYFILE_MOUNT_LOCAL_LAYOUT as the flag default. One spelling
- * therefore yields an identical on-disk layout across every binary version a
- * sandbox image may carry — which matters because the image and this code are
- * versioned independently. The pathless case is safe: scoped layout with
- * remote path "/" is a no-op join (normalizeMountRemotePath("/") → localDir).
- *
- * Spelled `env VAR=… relayfile-mount` (not the bare `VAR=… relayfile-mount`
- * shell form) because initial-sync commands get wrapped by coreutils
- * `timeout`, which execs its argument instead of shell-parsing it — a bare
- * assignment prefix would make `timeout '20s' VAR=… relayfile-mount` fail
- * with "failed to run command". `env` is a real executable, so the same
- * prefix composes under `timeout`, `nohup`, and direct execution alike.
+ * The flag is deliberate. A binary too old to understand explicit layout
+ * now fails loudly instead of ignoring an env var and silently mirroring at
+ * the wrong depth. Every production image currently in scope (v0.10.35+) has
+ * the explicit layout contract.
  */
-const SCOPED_LOCAL_LAYOUT_ENV = "env RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped ";
+const EXACT_LOCAL_LAYOUT_ARG = `--local-layout ${shellQuote("exact")}`;
 
 /**
- * `env`-prefix for every relayfile-mount invocation: always pins the scoped
- * local layout, and when the caller provides a creds file, also points the
- * daemon at it via RELAYFILE_MOUNT_CREDS_FILE (see `credsFilePath` docs for
- * the version-skew rationale). When `tokenIngress === 'env'`, prepends
- * `RELAYFILE_MOUNT_TOKEN=<literal>` so the launch token never enters argv.
+ * Optional `env` prefix for relayfile-mount invocations. When the caller
+ * provides a creds file, points the daemon at it via
+ * RELAYFILE_MOUNT_CREDS_FILE (see `credsFilePath` docs for the version-skew
+ * rationale). When `tokenIngress === 'env'`, adds
+ * RELAYFILE_MOUNT_TOKEN=<literal> so the launch token never enters argv.
+ * The explicit `env` executable is required because initial-sync commands can
+ * sit directly behind coreutils `timeout`, which does not shell-parse a bare
+ * `VAR=value` assignment.
  */
 function mountEnvPrefix(
   opts: Pick<RelayfileMountShellOptions, "credsFilePath" | "tokenIngress" | "token">,
 ): string {
-  const parts = ["RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped"];
+  const parts: string[] = [];
   if (opts.credsFilePath) {
     parts.push(`RELAYFILE_MOUNT_CREDS_FILE=${shellQuote(opts.credsFilePath)}`);
   }
   if (opts.tokenIngress === "env") {
     parts.push(`RELAYFILE_MOUNT_TOKEN=${shellQuote(opts.token)}`);
   }
-  return `env ${parts.join(" ")} `;
+  return parts.length > 0 ? `env ${parts.join(" ")} ` : "";
 }
 
 export type RelayfileMountInitialSyncOptions = RelayfileMountShellOptions & {
@@ -180,30 +169,18 @@ const DEFAULT_TEMPLATE_PLACEHOLDERS: RelayfileMountShellTemplate["placeholders"]
  */
 export function buildRelayfileMountStartShell(opts: RelayfileMountDaemonOptions): string {
   const scopedRoots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
-  const localDir = unscopedLocalDir(opts.localDir, scopedRoots);
-  const args = buildMountArgs({ ...opts, localDir, paths: scopedRoots });
+  if (scopedRoots.length > 1) {
+    return buildRelayfileMountMultiStartShell({ ...opts, paths: scopedRoots });
+  }
+  const [mount] = exactMounts(opts.localDir, scopedRoots);
+  const args = buildMountArgs({ ...opts, ...mount });
   const interval = opts.interval ?? "1s";
   const logPath = opts.logPath ?? "/tmp/relayfile-mount.log";
-  const startShell = [
+  return [
     `${mountEnvPrefix(opts)}nohup relayfile-mount`,
     ...args,
     `--interval ${shellQuote(interval)}`,
     `> ${shellQuote(logPath)} 2>&1 & echo $!`,
-  ].join(" ");
-  if (scopedRoots.length <= 1) {
-    return startShell;
-  }
-  // `paths-file` is the new-daemon sentinel: the release that added it also
-  // added repeated `--remote-path` support. The Go flag package prints
-  // `-paths-file` in help while the command accepts `--paths-file`, so probe
-  // for the flag name without assuming dash style.
-  return [
-    "if relayfile-mount --help 2>&1 | grep -q -- 'paths-file'; then",
-    `${startShell};`,
-    "else",
-    "echo 'relayfile-mount multi-path filters unsupported; starting one daemon per remote path' >&2;",
-    `${buildRelayfileMountFallbackStartShell({ ...opts, paths: scopedRoots })};`,
-    "fi",
   ].join(" ");
 }
 
@@ -218,9 +195,11 @@ export function buildRelayfileMountStartShell(opts: RelayfileMountDaemonOptions)
  */
 export function buildRelayfileMountFlushShell(opts: RelayfileMountShellOptions): string {
   const scopedRoots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
-  const localDir = unscopedLocalDir(opts.localDir, scopedRoots);
-  const args = buildMountArgs({ ...opts, localDir, paths: scopedRoots });
-  return [`${mountEnvPrefix(opts)}relayfile-mount --once`, ...args].join(" ");
+  const commands = exactMounts(opts.localDir, scopedRoots).map((mount) => [
+    `${mountEnvPrefix(opts)}relayfile-mount --once`,
+    ...buildMountArgs({ ...opts, ...mount }),
+  ].join(" "));
+  return composeMountCommands(commands);
 }
 
 /**
@@ -243,12 +222,18 @@ export function buildRelayfileMountCleanupFlushShell(
   opts: RelayfileMountShellOptions,
 ): string {
   const scopedRoots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
-  const localDir = unscopedLocalDir(opts.localDir, scopedRoots);
-  const args = buildMountArgs({ ...opts, localDir, paths: scopedRoots });
-  return [
-    `${mountEnvPrefix(opts)}relayfile-mount "$relayfile_mount_flush_mode"`,
-    ...args,
-  ].join(" ");
+  const mounts = exactMounts(opts.localDir, scopedRoots);
+  if (mounts.length === 1) {
+    return [
+      `${mountEnvPrefix(opts)}relayfile-mount "$relayfile_mount_flush_mode"`,
+      ...buildMountArgs({ ...opts, ...mounts[0]! }),
+    ].join(" ");
+  }
+  const commands = mounts.map((mount) => [
+    `${mountEnvPrefix(opts)}relayfile-mount "$1"`,
+    ...buildMountArgs({ ...opts, ...mount }),
+  ].join(" "));
+  return `sh -c ${shellQuote(commands.join(" && "))} relayfile-mount-cleanup "$relayfile_mount_flush_mode"`;
 }
 
 export function buildRelayfileMountInitialSyncShell(
@@ -471,14 +456,15 @@ export function buildRelayfileMountShellTemplate(
   };
   const pathArgsPlaceholderArg = buildMountPathArg(resolved.pathArgs);
   const pathArgTemplate = buildMountPathArg(resolved.path);
-  const startShellWithoutPaths = buildRelayfileMountStartShell(baseOpts);
-  const flushShellWithoutPaths = buildRelayfileMountFlushShell(baseOpts);
   return {
-    startShellTemplate: insertStartTemplatePathArgs(
-      startShellWithoutPaths,
+    startShellTemplate: buildDynamicMountStartTemplate(
+      baseOpts,
       pathArgsPlaceholderArg,
     ),
-    flushShellTemplate: `${flushShellWithoutPaths}${pathArgsPlaceholderArg}`,
+    flushShellTemplate: buildDynamicMountOnceTemplate(
+      baseOpts,
+      pathArgsPlaceholderArg,
+    ),
     pathArgsPlaceholderArg,
     pathArgTemplate,
     placeholders: resolved,
@@ -487,6 +473,7 @@ export function buildRelayfileMountShellTemplate(
 
 function buildMountArgs(opts: RelayfileMountShellOptions): string[] {
   return [
+    EXACT_LOCAL_LAYOUT_ARG,
     `--base-url ${shellQuote(opts.baseUrl)}`,
     `--workspace ${shellQuote(opts.workspaceId)}`,
     `--local-dir ${shellQuote(opts.localDir)}`,
@@ -532,38 +519,23 @@ function initialSyncStateFile(
 }
 
 function initialSyncStateFiles(opts: RelayfileMountInitialSyncOptions): string[] {
-  const roots = scopedRemoteRoots(opts.paths ?? []);
+  const roots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
   if (roots.length > 0) {
-    const localRoot = unscopedLocalDir(opts.localDir, roots);
-    return roots.map((remoteRoot) => initialSyncStateFile(opts, remoteRoot, localRoot));
+    return exactMounts(opts.localDir, roots).map((mount) =>
+      initialSyncStateFile(opts, mount.paths[0]!, mount.localDir)
+    );
   }
-
-  // The single-command branch can still carry a provider-root scope such as
-  // `/github/**`. Include every effective command root in the identity rather
-  // than collapsing those mounts onto the same nominal `/` checkpoint.
-  const commandRoots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
-  const remoteRoot = commandRoots.length > 0 ? commandRoots.join("\0") : "/";
-  const localRoot = unscopedLocalDir(opts.localDir, commandRoots);
-  return [initialSyncStateFile(opts, remoteRoot, localRoot)];
+  const [mount] = exactMounts(opts.localDir, []);
+  return [initialSyncStateFile(opts, "/", mount!.localDir)];
 }
 
 function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): string[] {
-  const roots = scopedRemoteRoots(opts.paths ?? []);
+  const roots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
   const stateFiles = initialSyncStateFiles(opts);
-  if (roots.length === 0) {
-    // Pin the unscoped sync's private state exactly as the scoped branch
-    // below does, so `initialSyncProgressFiles` can name the file the sync
-    // actually writes.
-    return [
-      `${buildRelayfileMountFlushShell(opts)} --state-file ${shellQuote(stateFiles[0]!)}`,
-    ];
-  }
-  const localDir = unscopedLocalDir(opts.localDir, roots);
-  return roots
-    .map((remoteRoot, index) => {
+  return exactMounts(opts.localDir, roots)
+    .map((mount, index) => {
       const args = [
-        ...buildMountArgs({ ...opts, localDir, paths: [] }),
-        `--remote-path ${shellQuote(remoteRoot)}`,
+        ...buildMountArgs({ ...opts, ...mount }),
         `--state-file ${shellQuote(stateFiles[index]!)}`,
       ];
       return [`${mountEnvPrefix(opts)}relayfile-mount --once`, ...args].join(" ");
@@ -655,6 +627,9 @@ function scopedRemoteRoot(
   if (!normalized || normalized === "/" || normalized.includes("*")) {
     return null;
   }
+  if (normalized.slice(1).split("/").some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`relayfile remote root contains a traversal segment: ${path}`);
+  }
   if (!options.allowProviderRoot && normalized.slice(1).split("/").length < 2) {
     return null;
   }
@@ -688,22 +663,165 @@ function unscopedLocalDir(localRoot: string, remoteRoots: readonly string[]): st
   return normalizedRoot || "/";
 }
 
+type ExactMount = Pick<RelayfileMountShellOptions, "localDir" | "paths"> & {
+  paths: readonly string[];
+};
+
+/**
+ * Resolve the final exact-layout mount root(s).
+ *
+ * Callers are allowed to pass either the unscoped base (`/workspace`) or an
+ * already joined single-path directory (`/workspace/github/repos/acme/app`).
+ * Recovering the base first prevents a double append, then every remote root
+ * gets its own exact-layout invocation and final on-disk directory.
+ */
+function exactMounts(localRoot: string, remoteRoots: readonly string[]): ExactMount[] {
+  const unscopedRoot = unscopedLocalDir(localRoot, remoteRoots);
+  if (remoteRoots.length === 0) {
+    return [{ localDir: unscopedRoot, paths: [] }];
+  }
+  return remoteRoots.map((remoteRoot) => {
+    const localDir = posixPath.join(
+      unscopedRoot,
+      remoteRoot.replace(/^\/+/, ""),
+    );
+    const localPrefix = unscopedRoot === "/" ? "/" : `${unscopedRoot}/`;
+    if (localDir !== unscopedRoot && !localDir.startsWith(localPrefix)) {
+      throw new Error(`relayfile remote root escapes local mount root: ${remoteRoot}`);
+    }
+    return { localDir, paths: [remoteRoot] };
+  });
+}
+
+function composeMountCommands(commands: readonly string[]): string {
+  if (commands.length === 1) {
+    return commands[0]!;
+  }
+  return `sh -c ${shellQuote(commands.join(" && "))}`;
+}
+
 function buildMountPathArg(path: string): string {
   return ` --remote-path ${shellQuote(path)}`;
 }
 
-function insertStartTemplatePathArgs(shell: string, pathArgsPlaceholderArg: string): string {
-  return shell.replace(" --interval ", `${pathArgsPlaceholderArg} --interval `);
+const DYNAMIC_LOCAL_DIR = "__relayfile_dynamic_local_dir__";
+const DYNAMIC_REMOTE_PATH = "__relayfile_dynamic_remote_path__";
+
+function dynamicMountArgs(
+  opts: RelayfileMountShellOptions,
+  includeRemotePath: boolean,
+): string[] {
+  return buildMountArgs({
+    ...opts,
+    localDir: DYNAMIC_LOCAL_DIR,
+    paths: includeRemotePath ? [DYNAMIC_REMOTE_PATH] : [],
+  }).map((arg) => arg
+    .replace(shellQuote(opts.baseUrl), '"$relayfile_mount_base_url"')
+    .replace(shellQuote(opts.workspaceId), '"$relayfile_mount_workspace_id"')
+    .replace(shellQuote(opts.token), '"$relayfile_mount_token"')
+    .replace(shellQuote(DYNAMIC_LOCAL_DIR), '"$relayfile_mount_local_dir"')
+    .replace(shellQuote(DYNAMIC_REMOTE_PATH), '"$relayfile_mount_remote_path"'));
 }
 
-function buildRelayfileMountFallbackStartShell(opts: RelayfileMountDaemonOptions): string {
-  const roots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
-  const localDir = unscopedLocalDir(opts.localDir, roots);
+function dynamicMountTemplateSetup(opts: RelayfileMountShellOptions): string[] {
+  return [
+    `relayfile_mount_base_url=${shellQuote(opts.baseUrl)};`,
+    `relayfile_mount_workspace_id=${shellQuote(opts.workspaceId)};`,
+    `relayfile_mount_local_root=${shellQuote(opts.localDir)};`,
+    `relayfile_mount_token=${shellQuote(opts.token)};`,
+  ];
+}
+
+function dynamicMountPathSetup(): string[] {
+  return [
+    'relayfile_mount_remote_path="$2";',
+    "shift 2;",
+    'case "/${relayfile_mount_remote_path#/}/" in */../*|*/./*) echo "relayfile remote root contains a traversal segment" >&2; exit 2 ;; esac;',
+    'relayfile_mount_local_dir="${relayfile_mount_local_root%/}/${relayfile_mount_remote_path#/}";',
+  ];
+}
+
+/**
+ * The shell-template consumer supplies its remote roots after this package is
+ * built, so it cannot use the static exactMounts helper. Parse the same
+ * repeated `--remote-path <root>` pairs in the rendered shell and apply the
+ * identical base/root join before launching one exact-layout daemon per root.
+ */
+function buildDynamicMountStartTemplate(
+  opts: RelayfileMountDaemonOptions,
+  pathArgsPlaceholderArg: string,
+): string {
   const interval = opts.interval ?? "1s";
   const logPath = opts.logPath ?? "/tmp/relayfile-mount.log";
-  const starts = roots.map((root) => [
+  const pathlessStart = [
+    `${mountEnvPrefix(opts)}nohup relayfile-mount`,
+    ...dynamicMountArgs(opts, false),
+    `--interval ${shellQuote(interval)}`,
+    `> ${shellQuote(logPath)} 2>&1 & echo $!`,
+  ].join(" ");
+  const dynamicStart = [
     `${mountEnvPrefix(opts)}relayfile-mount`,
-    ...buildMountArgs({ ...opts, localDir, paths: [root] }),
+    ...dynamicMountArgs(opts, true),
+    `--interval ${shellQuote(interval)}`,
+    `>> ${shellQuote(logPath)} 2>&1 &`,
+    'relayfile_mount_pids="$relayfile_mount_pids $!";',
+  ].join(" ");
+  return [
+    ...dynamicMountTemplateSetup(opts),
+    `set --${pathArgsPlaceholderArg};`,
+    'if [ "$#" -eq 0 ]; then',
+    'relayfile_mount_local_dir="$relayfile_mount_local_root";',
+    `${pathlessStart};`,
+    "else",
+    "(",
+    "relayfile_mount_pids='';",
+    'while [ "$#" -gt 0 ]; do',
+    'if [ "$#" -lt 2 ] || [ "$1" != "--remote-path" ]; then echo "invalid relayfile mount path args" >&2; exit 2; fi;',
+    ...dynamicMountPathSetup(),
+    dynamicStart,
+    "done;",
+    "trap 'kill $relayfile_mount_pids 2>/dev/null || true; wait' INT TERM EXIT;",
+    "wait",
+    `) >/dev/null 2>&1 & echo $!;`,
+    "fi",
+  ].join(" ");
+}
+
+function buildDynamicMountOnceTemplate(
+  opts: RelayfileMountShellOptions,
+  pathArgsPlaceholderArg: string,
+): string {
+  const pathlessOnce = [
+    `${mountEnvPrefix(opts)}relayfile-mount --once`,
+    ...dynamicMountArgs(opts, false),
+  ].join(" ");
+  const dynamicOnce = [
+    `${mountEnvPrefix(opts)}relayfile-mount --once`,
+    ...dynamicMountArgs(opts, true),
+  ].join(" ");
+  return [
+    ...dynamicMountTemplateSetup(opts),
+    `set --${pathArgsPlaceholderArg};`,
+    'if [ "$#" -eq 0 ]; then',
+    'relayfile_mount_local_dir="$relayfile_mount_local_root";',
+    `${pathlessOnce};`,
+    "else",
+    'while [ "$#" -gt 0 ]; do',
+    'if [ "$#" -lt 2 ] || [ "$1" != "--remote-path" ]; then echo "invalid relayfile mount path args" >&2; exit 2; fi;',
+    ...dynamicMountPathSetup(),
+    `${dynamicOnce} || exit $?;`,
+    "done;",
+    "fi",
+  ].join(" ");
+}
+
+function buildRelayfileMountMultiStartShell(opts: RelayfileMountDaemonOptions): string {
+  const roots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
+  const interval = opts.interval ?? "1s";
+  const logPath = opts.logPath ?? "/tmp/relayfile-mount.log";
+  const starts = exactMounts(opts.localDir, roots).map((mount) => [
+    `${mountEnvPrefix(opts)}relayfile-mount`,
+    ...buildMountArgs({ ...opts, ...mount }),
     `--interval ${shellQuote(interval)}`,
     `>> ${shellQuote(logPath)} 2>&1 &`,
     "relayfile_mount_pids=\"$relayfile_mount_pids $!\";",

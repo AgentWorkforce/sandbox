@@ -1,10 +1,17 @@
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  buildRelayfileMountCleanupFlushShell,
   buildRelayfileMountStartShell,
   buildRelayfileMountFlushShell,
   buildRelayfileMountInitialSyncShell,
+  buildRelayfileMountPathArgsShell,
+  buildRelayfileMountShellTemplate,
 } from "./mount-script.js";
 
 const TOKEN = "relay_pa_thisisasecrettoken_do_not_leak";
@@ -15,6 +22,47 @@ const BASE = {
   stateDir: "/var/run/relayfile-mount",
   token: TOKEN,
 } as const;
+
+function fakeExactMount(t: TestContext): {
+  binDir: string;
+  localRoot: string;
+} {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "sandbox-mount-layout-"));
+  t.after(() => rmSync(fixtureRoot, { recursive: true, force: true }));
+  const binDir = join(fixtureRoot, "bin");
+  const localRoot = join(fixtureRoot, "workspace");
+  const fakeMount = join(binDir, "relayfile-mount");
+
+  const mkdir = spawnSync("mkdir", ["-p", binDir]);
+  assert.equal(mkdir.status, 0, mkdir.stderr?.toString());
+  writeFileSync(
+    fakeMount,
+    `#!/bin/sh
+layout="\${RELAYFILE_MOUNT_LOCAL_LAYOUT:-exact}"
+if [ "$layout" = scoped ]; then
+  echo 'unsupported local layout: --local-layout=scoped; use --local-layout=exact' >&2
+  exit 1
+fi
+local_dir=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --local-layout) layout="$2"; shift 2 ;;
+    --local-dir) local_dir="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$layout" != exact ] || [ -z "$local_dir" ]; then exit 2; fi
+mkdir -p "$local_dir"
+printf mounted > "$local_dir/.mounted"
+`,
+  );
+  chmodSync(fakeMount, 0o755);
+  return { binDir, localRoot };
+}
+
+function testShellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 describe("mount-script token ingress", () => {
   describe("default ('argv') — backwards-compatible with older daemons", () => {
@@ -75,14 +123,162 @@ describe("mount-script token ingress", () => {
       });
       assert.match(start, /RELAYFILE_MOUNT_CREDS_FILE=/);
       assert.match(start, /RELAYFILE_MOUNT_TOKEN=/);
-      assert.match(start, /RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped/);
+      assert.match(start, /--local-layout 'exact'/);
       assert.doesNotMatch(start, /--token/);
     });
 
-    it("keeps RELAYFILE_MOUNT_LOCAL_LAYOUT scoped when only tokenIngress is set", () => {
+    it("keeps exact local layout when only tokenIngress is set", () => {
       const start = buildRelayfileMountStartShell({ ...BASE, tokenIngress: "env" });
-      assert.match(start, /RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped/);
+      assert.match(start, /--local-layout 'exact'/);
+      assert.doesNotMatch(start, /RELAYFILE_MOUNT_LOCAL_LAYOUT=/);
     });
+  });
+});
+
+describe("exact local-layout contract", () => {
+  it("pins the single-path on-disk mirror root explicitly", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+
+    const shell = buildRelayfileMountFlushShell({
+      ...BASE,
+      localDir: localRoot,
+      paths: ["/github/repos/acme/cloud/**"],
+    });
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      existsSync(join(localRoot, "github/repos/acme/cloud/.mounted")),
+      true,
+      "the exact mirror root must include the normalized remote path",
+    );
+    assert.equal(
+      existsSync(join(localRoot, ".mounted")),
+      false,
+      "a successful process at the unscoped base would silently mirror at the wrong depth",
+    );
+  });
+
+  it("starts one exact-layout daemon per remote root", () => {
+    const shell = buildRelayfileMountStartShell({
+      ...BASE,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+    });
+
+    assert.doesNotMatch(shell, /RELAYFILE_MOUNT_LOCAL_LAYOUT=scoped/);
+    assert.doesNotMatch(shell, /paths-file/);
+    assert.equal(shell.match(/relayfile-mount --local-layout 'exact'/g)?.length, 2);
+    assert.match(
+      shell,
+      /--local-dir '\/home\/user\/workspace\/github\/repos\/acme\/cloud'.*--remote-path '\/github\/repos\/acme\/cloud'/,
+    );
+    assert.match(
+      shell,
+      /--local-dir '\/home\/user\/workspace\/slack\/channels\/C123'.*--remote-path '\/slack\/channels\/C123'/,
+    );
+  });
+
+  it("does not double-join an already joined local directory", () => {
+    const shell = buildRelayfileMountStartShell({
+      ...BASE,
+      localDir: "/home/user/workspace/github/repos/acme/cloud/issues/42",
+      paths: ["/github/repos/acme/cloud/issues/42/**"],
+    });
+
+    assert.match(
+      shell,
+      /--local-dir '\/home\/user\/workspace\/github\/repos\/acme\/cloud\/issues\/42'/,
+    );
+    assert.doesNotMatch(shell, /issues\/42\/github\/repos/);
+  });
+
+  it("fails closed when a remote root could escape the local mount root", () => {
+    assert.throws(
+      () => buildRelayfileMountFlushShell({
+        ...BASE,
+        paths: ["/../../tmp/**"],
+      }),
+      /traversal segment/,
+    );
+  });
+
+  it("keeps a multi-root cleanup flush inside one timeout-compatible command", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const shell = buildRelayfileMountCleanupFlushShell({
+      ...BASE,
+      localDir: localRoot,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+    });
+
+    assert.match(shell, /^sh -c /);
+    assert.equal(shell.match(/relayfile-mount "\$1"/g)?.length, 2);
+    assert.match(shell, /--local-layout/);
+    assert.match(shell, /workspace\/github\/repos\/acme\/cloud/);
+    assert.match(shell, /workspace\/slack\/channels\/C123/);
+    assert.match(shell, /relayfile-mount-cleanup "\$relayfile_mount_flush_mode"$/);
+
+    const result = spawnSync(
+      "/bin/sh",
+      ["-c", `relayfile_mount_flush_mode=--once; ${shell}`],
+      {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      existsSync(join(localRoot, "github/repos/acme/cloud/.mounted")),
+      true,
+    );
+    assert.equal(
+      existsSync(join(localRoot, "slack/channels/C123/.mounted")),
+      true,
+    );
+  });
+
+  it("renders late-bound shell templates as separate exact mounts", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const template = buildRelayfileMountShellTemplate({}, {
+      stateDir: join(localRoot, ".state"),
+      websocket: false,
+    });
+    const values = {
+      baseUrl: BASE.baseUrl,
+      workspaceId: BASE.workspaceId,
+      localDir: localRoot,
+      token: BASE.token,
+    };
+    let shell = template.flushShellTemplate;
+    for (const [key, value] of Object.entries(values)) {
+      const placeholder = template.placeholders[key as keyof typeof values];
+      shell = shell.replace(testShellQuote(placeholder), testShellQuote(value));
+    }
+    shell = shell.replace(
+      template.pathArgsPlaceholderArg,
+      buildRelayfileMountPathArgsShell([
+        "/github/repos/acme/cloud/**",
+        "/slack/channels/C123/**",
+      ]),
+    );
+
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      existsSync(join(localRoot, "github/repos/acme/cloud/.mounted")),
+      true,
+    );
+    assert.equal(
+      existsSync(join(localRoot, "slack/channels/C123/.mounted")),
+      true,
+    );
+    assert.equal(existsSync(join(localRoot, ".mounted")), false);
   });
 });
 
@@ -170,6 +366,15 @@ describe("initial-sync idle watchdog progress files", () => {
     const armed = armedProgressFiles(shell);
 
     assert.equal(armed.length, 2);
+    assert.equal(shell.match(/relayfile-mount --once --local-layout 'exact'/g)?.length, 2);
+    assert.match(
+      shell,
+      /--local-dir '\/home\/user\/workspace\/github\/agentworkforce'.*--remote-path '\/github\/agentworkforce'/,
+    );
+    assert.match(
+      shell,
+      /--local-dir '\/home\/user\/workspace\/slack\/C0BBTBC1RCM'.*--remote-path '\/slack\/C0BBTBC1RCM'/,
+    );
     for (const file of armed) {
       assert.ok(
         shell.includes(`--state-file '${file}'`),

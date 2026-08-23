@@ -532,13 +532,13 @@ function cleanupStatusShell(message: string | undefined): string {
  * BENIGN in-flight — once an opId is committed, the server owns delivery and
  * sandbox teardown cannot orphan it, so it does NOT count.
  *
- * remotePath derivation assumes this module's invariant: `--local-dir` is the
- * UNSCOPED workspace root, so a draft sits at its full provider-rooted path
- * under localDir and `remotePath == "/" + rel(localDir, draftPath)` (the bare
- * strip equals relayfile's `normalizeRemotePath(remoteRoot + "/" + rel(...))`
- * because remoteRoot is "/" relative to the unscoped root). If a draft is NOT
- * under localDir (someone scoped the mount later), the invariant is broken and
- * the program bails to null rather than emit wrong paths that would false-fire.
+ * remotePath derivation is valid only when the configured command roots sit
+ * below the caller's `localDir`, so
+ * `remotePath == "/" + rel(localDir, draftPath)`. Exact-layout path mounts can
+ * place their private outbox below a joined child root instead; in that case
+ * this classifier intentionally fails capability detection and returns null,
+ * leaving the older pending-state signals in charge rather than emitting a
+ * wrong path that could false-fire.
  */
 const WRITEBACK_RECEIPT_SCAN_PROGRAM = `"use strict";
 const fs = require("fs");
@@ -774,7 +774,7 @@ function buildInitialSyncBlock(initialSync: string, continueOnFailure: boolean):
   }
   return [
     `if ! ${initialSync} >> /tmp/relayfile-mount.log 2>&1; then`,
-    "  echo '[relayfile-mount] scoped initial sync failed; continuing without preloaded reads' >&2",
+    "  echo '[relayfile-mount] path-filtered initial sync failed; continuing without preloaded reads' >&2",
     "fi",
   ].join("\n");
 }
