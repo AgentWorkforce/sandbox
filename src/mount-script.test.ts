@@ -120,6 +120,35 @@ function armedProgressFiles(shell: string): string[] {
 describe("initial-sync idle watchdog progress files", () => {
   const SYNC_BASE = { ...BASE, idleTimeoutSeconds: 60 };
 
+  it("isolates pinned state files by workspace, remote root, and local root", () => {
+    const stateFileFor = (
+      options: Parameters<typeof buildRelayfileMountInitialSyncShell>[0],
+    ): string => {
+      const [stateFile] = armedProgressFiles(
+        buildRelayfileMountInitialSyncShell(options),
+      );
+      assert.ok(stateFile, "expected the watchdog to arm a state file");
+      return stateFile;
+    };
+    const rootMount = stateFileFor(SYNC_BASE);
+
+    assert.notEqual(
+      rootMount,
+      stateFileFor({ ...SYNC_BASE, workspaceId: "wsp_other" }),
+      "different workspaces must not share initial-sync traversal state",
+    );
+    assert.notEqual(
+      rootMount,
+      stateFileFor({ ...SYNC_BASE, localDir: "/home/other/workspace" }),
+      "different local roots must not share initial-sync traversal state",
+    );
+    assert.notEqual(
+      stateFileFor({ ...SYNC_BASE, paths: ["/github/org/one/**"] }),
+      stateFileFor({ ...SYNC_BASE, paths: ["/github/org/two/**"] }),
+      "different remote roots must not share initial-sync traversal state",
+    );
+  });
+
   it("pins every armed progress file with --state-file (unscoped root mount)", () => {
     const shell = buildRelayfileMountInitialSyncShell({ ...SYNC_BASE });
     const armed = armedProgressFiles(shell);

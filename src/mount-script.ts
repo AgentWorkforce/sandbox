@@ -11,6 +11,9 @@
  * return ready-to-run bash. Callers must not re-quote.
  */
 
+import { createHash } from "node:crypto";
+import { posix as posixPath } from "node:path";
+
 export type RelayfileMountShellOptions = {
   /** Relayfile base URL, e.g. `https://your-relayfile-host.example`. */
   baseUrl: string;
@@ -504,23 +507,55 @@ function buildMountArgs(opts: RelayfileMountShellOptions): string[] {
  *
  * `buildIdleWatchedCommand` cancels the sync when this file stops advancing,
  * so the *only* safe way to name it is to pin it — never to guess where the
- * mount would otherwise put it. Left to `--state-dir` alone, relayfile-mount
- * derives `<state-dir>/<sha256(workspace, remote-root, local-root, kind)[:32]>/state.json`
- * (relayfile `internal/mountsync/state_path.go` → `ResolveMountStatePath`),
- * a path no caller can reconstruct. See {@link initialSyncProgressFiles}.
+ * mount would otherwise put it. The digest mirrors relayfile's mount identity
+ * tuple (`MountStateID` in `internal/mountsync/state_path.go`): workspace,
+ * normalized remote root, normalized local root, and mount kind. That keeps
+ * concurrent mounts in the same sandbox from reading, overwriting, or
+ * mistaking one another's checkpoints for watchdog progress.
  */
-function initialSyncStateFile(index: number): string {
-  return `/tmp/relayfile-mount-initial-sync-${index}.json`;
+function initialSyncStateFile(
+  opts: Pick<RelayfileMountShellOptions, "workspaceId">,
+  remoteRoot: string,
+  localRoot: string,
+): string {
+  const mountIdentity = [
+    opts.workspaceId.trim(),
+    posixPath.normalize(remoteRoot.trim() || "/"),
+    posixPath.normalize(localRoot.trim()),
+    "initial-sync",
+  ].join("\0");
+  const mountId = createHash("sha256")
+    .update(mountIdentity, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+  return `/tmp/relayfile-mount-initial-sync-${mountId}.json`;
+}
+
+function initialSyncStateFiles(opts: RelayfileMountInitialSyncOptions): string[] {
+  const roots = scopedRemoteRoots(opts.paths ?? []);
+  if (roots.length > 0) {
+    const localRoot = unscopedLocalDir(opts.localDir, roots);
+    return roots.map((remoteRoot) => initialSyncStateFile(opts, remoteRoot, localRoot));
+  }
+
+  // The single-command branch can still carry a provider-root scope such as
+  // `/github/**`. Include every effective command root in the identity rather
+  // than collapsing those mounts onto the same nominal `/` checkpoint.
+  const commandRoots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
+  const remoteRoot = commandRoots.length > 0 ? commandRoots.join("\0") : "/";
+  const localRoot = unscopedLocalDir(opts.localDir, commandRoots);
+  return [initialSyncStateFile(opts, remoteRoot, localRoot)];
 }
 
 function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): string[] {
   const roots = scopedRemoteRoots(opts.paths ?? []);
+  const stateFiles = initialSyncStateFiles(opts);
   if (roots.length === 0) {
     // Pin the unscoped sync's private state exactly as the scoped branch
     // below does, so `initialSyncProgressFiles` can name the file the sync
     // actually writes.
     return [
-      `${buildRelayfileMountFlushShell(opts)} --state-file ${shellQuote(initialSyncStateFile(0))}`,
+      `${buildRelayfileMountFlushShell(opts)} --state-file ${shellQuote(stateFiles[0]!)}`,
     ];
   }
   const localDir = unscopedLocalDir(opts.localDir, roots);
@@ -529,7 +564,7 @@ function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): strin
       const args = [
         ...buildMountArgs({ ...opts, localDir, paths: [] }),
         `--remote-path ${shellQuote(remoteRoot)}`,
-        `--state-file ${shellQuote(initialSyncStateFile(index))}`,
+        `--state-file ${shellQuote(stateFiles[index]!)}`,
       ];
       return [`${mountEnvPrefix(opts)}relayfile-mount --once`, ...args].join(" ");
     });
@@ -550,11 +585,7 @@ function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): strin
  * timeout — killing initial syncs that were demonstrably still progressing.
  */
 function initialSyncProgressFiles(opts: RelayfileMountInitialSyncOptions): string[] {
-  const roots = scopedRemoteRoots(opts.paths ?? []);
-  if (roots.length === 0) {
-    return [initialSyncStateFile(0)];
-  }
-  return roots.map((_remoteRoot, index) => initialSyncStateFile(index));
+  return initialSyncStateFiles(opts);
 }
 
 function buildIdleWatchedCommand(
