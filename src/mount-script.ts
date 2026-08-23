@@ -199,7 +199,7 @@ export function buildRelayfileMountFlushShell(opts: RelayfileMountShellOptions):
     `${mountEnvPrefix(opts)}relayfile-mount --once`,
     ...buildMountArgs({ ...opts, ...mount }),
   ].join(" "));
-  return composeMountCommands(commands);
+  return composeIndependentMountCommands(commands);
 }
 
 /**
@@ -233,16 +233,7 @@ export function buildRelayfileMountCleanupFlushShell(
     `${mountEnvPrefix(opts)}relayfile-mount "$1"`,
     ...buildMountArgs({ ...opts, ...mount }),
   ].join(" "));
-  const script = [
-    "relayfile_mount_flush_status=0",
-    ...commands.map((command) => [
-      `${command} || {`,
-      "relayfile_mount_flush_code=$?;",
-      'if [ "$relayfile_mount_flush_status" -eq 0 ]; then relayfile_mount_flush_status=$relayfile_mount_flush_code; fi;',
-      "}",
-    ].join(" ")),
-    'exit "$relayfile_mount_flush_status"',
-  ].join("; ");
+  const script = independentMountCommandsScript(commands);
   return `sh -c ${shellQuote(script)} relayfile-mount-cleanup "$relayfile_mount_flush_mode"`;
 }
 
@@ -250,7 +241,7 @@ export function buildRelayfileMountInitialSyncShell(
   opts: RelayfileMountInitialSyncOptions,
 ): string {
   const commands = buildInitialSyncCommands(opts);
-  const command = commands.join(" && ");
+  const command = composeIndependentMountCommands(commands);
   if (opts.idleTimeoutSeconds && opts.idleTimeoutSeconds > 0) {
     return buildIdleWatchedCommand(
       command,
@@ -262,9 +253,9 @@ export function buildRelayfileMountInitialSyncShell(
     return command;
   }
   const timeout = `${Math.ceil(opts.timeoutSeconds)}s`;
-  const timedCommand = commands
-    .map((entry) => `timeout ${shellQuote(timeout)} ${entry}`)
-    .join(" && ");
+  const timedCommand = composeIndependentMountCommands(
+    commands.map((entry) => `timeout ${shellQuote(timeout)} ${entry}`),
+  );
   return [
     "{",
     "if command -v timeout >/dev/null 2>&1; then",
@@ -720,11 +711,30 @@ export function resolveRelayfileMountExactLayout(
   };
 }
 
-function composeMountCommands(commands: readonly string[]): string {
+/**
+ * Run every independent mount root and return the first failure only after
+ * all roots have had a chance to flush. Teardown must never let a bad first
+ * root discard pending writes from the remaining roots.
+ */
+function independentMountCommandsScript(commands: readonly string[]): string {
+  return [
+    "relayfile_mount_flush_status=0",
+    ...commands.map((command) => [
+      `${command} || {`,
+      "relayfile_mount_flush_code=$?;",
+      'if [ "$relayfile_mount_flush_status" -eq 0 ]; then relayfile_mount_flush_status=$relayfile_mount_flush_code; fi;',
+      "}",
+    ].join(" ")),
+    'exit "$relayfile_mount_flush_status"',
+  ].join("; ");
+}
+
+function composeIndependentMountCommands(commands: readonly string[]): string {
   if (commands.length === 1) {
     return commands[0]!;
   }
-  return `sh -c ${shellQuote(commands.join(" && "))}`;
+  const script = independentMountCommandsScript(commands);
+  return `sh -c ${shellQuote(script)}`;
 }
 
 function buildMountPathArg(path: string): string {
@@ -871,11 +881,16 @@ function buildDynamicMountOnceTemplate(
     'relayfile_mount_local_dir="$relayfile_mount_local_root";',
     `${pathlessOnce};`,
     "else",
+    "relayfile_mount_flush_status=0;",
     'while [ "$#" -gt 0 ]; do',
     'if [ "$#" -lt 2 ] || [ "$1" != "--remote-path" ]; then echo "invalid relayfile mount path args" >&2; exit 2; fi;',
     ...dynamicMountPathSetup(),
-    `${dynamicOnce} || exit $?;`,
+    `${dynamicOnce} || {`,
+    "relayfile_mount_flush_code=$?;",
+    'if [ "$relayfile_mount_flush_status" -eq 0 ]; then relayfile_mount_flush_status=$relayfile_mount_flush_code; fi;',
+    "};",
     "done;",
+    'exit "$relayfile_mount_flush_status";',
     "fi;",
     ")",
   ].join(" ");

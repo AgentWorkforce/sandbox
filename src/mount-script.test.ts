@@ -280,6 +280,91 @@ describe("exact local-layout contract", () => {
     );
   });
 
+  it("attempts every ordinary flush root and returns the first failure", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const firstRoot = join(localRoot, "github/repos/acme/cloud");
+    const laterRoot = join(localRoot, "slack/channels/C123");
+    const shell = buildRelayfileMountFlushShell({
+      ...BASE,
+      localDir: localRoot,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+    });
+
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+      },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(existsSync(join(firstRoot, ".mounted")), false);
+    assert.equal(
+      existsSync(join(laterRoot, ".mounted")),
+      true,
+      "a first-root failure must not skip later ordinary teardown flushes",
+    );
+  });
+
+  it("attempts every initial-sync root and returns the first failure", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const firstRoot = join(localRoot, "github/repos/acme/cloud");
+    const laterRoot = join(localRoot, "slack/channels/C123");
+    const shell = buildRelayfileMountInitialSyncShell({
+      ...BASE,
+      localDir: localRoot,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+    });
+
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+      },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(existsSync(join(firstRoot, ".mounted")), false);
+    assert.equal(
+      existsSync(join(laterRoot, ".mounted")),
+      true,
+      "a first-root failure must not skip later initial-sync roots",
+    );
+  });
+
+  it("attempts every timeout-wrapped initial-sync root", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const firstRoot = join(localRoot, "github/repos/acme/cloud");
+    const laterRoot = join(localRoot, "slack/channels/C123");
+    const shell = buildRelayfileMountInitialSyncShell({
+      ...BASE,
+      localDir: localRoot,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+      timeoutSeconds: 2,
+    });
+
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+      },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(existsSync(join(firstRoot, ".mounted")), false);
+    assert.equal(
+      existsSync(join(laterRoot, ".mounted")),
+      true,
+      "a first-root failure must not skip later timeout-wrapped sync roots",
+    );
+  });
+
   it("renders late-bound shell templates as separate exact mounts", (t) => {
     const { binDir, localRoot } = fakeExactMount(t);
     const template = buildRelayfileMountShellTemplate({}, {
@@ -330,6 +415,51 @@ describe("exact local-layout contract", () => {
       true,
     );
     assert.equal(existsSync(join(localRoot, ".mounted")), false);
+  });
+
+  it("attempts every late-bound flush root and returns the first failure", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const firstRoot = join(localRoot, "github/repos/acme/cloud");
+    const laterRoot = join(localRoot, "slack/channels/C123");
+    const template = buildRelayfileMountShellTemplate({}, {
+      stateDir: join(localRoot, ".state"),
+      websocket: false,
+    });
+    const values = {
+      baseUrl: BASE.baseUrl,
+      workspaceId: BASE.workspaceId,
+      localDir: localRoot,
+      token: BASE.token,
+    };
+    let shell = template.flushShellTemplate;
+    for (const [key, value] of Object.entries(values)) {
+      const placeholder = template.placeholders[key as keyof typeof values];
+      shell = shell.replace(testShellQuote(placeholder), testShellQuote(value));
+    }
+    shell = shell.replace(
+      template.pathArgsPlaceholderArg,
+      buildRelayfileMountPathArgsShell([
+        "/github/repos/acme/cloud/**",
+        "/slack/channels/C123/**",
+      ]),
+    );
+
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+      },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(existsSync(join(firstRoot, ".mounted")), false);
+    assert.equal(
+      existsSync(join(laterRoot, ".mounted")),
+      true,
+      "a first-root failure must not skip later rendered teardown flushes",
+    );
   });
 
   it("surfaces late-bound daemon argument validation failures", (t) => {
@@ -527,20 +657,24 @@ describe("initial-sync idle watchdog progress files", () => {
       paths: ["/github/agentworkforce/**", "/slack/C0BBTBC1RCM/**"],
     });
     const armed = armedProgressFiles(shell);
+    const normalizedShell = shell.replaceAll("'\\''", "'");
 
     assert.equal(armed.length, 2);
-    assert.equal(shell.match(/relayfile-mount --once --local-layout 'exact'/g)?.length, 2);
+    assert.equal(
+      normalizedShell.match(/relayfile-mount --once --local-layout 'exact'/g)?.length,
+      2,
+    );
     assert.match(
-      shell,
+      normalizedShell,
       /--local-dir '\/home\/user\/workspace\/github\/agentworkforce'.*--remote-path '\/github\/agentworkforce'/,
     );
     assert.match(
-      shell,
+      normalizedShell,
       /--local-dir '\/home\/user\/workspace\/slack\/C0BBTBC1RCM'.*--remote-path '\/slack\/C0BBTBC1RCM'/,
     );
     for (const file of armed) {
       assert.ok(
-        shell.includes(`--state-file '${file}'`),
+        normalizedShell.includes(`--state-file '${file}'`),
         `watchdog watches ${file}, but no --state-file pins the sync to it`,
       );
     }
