@@ -112,6 +112,11 @@ export type StartMountOptions = {
 
 export type FlushMountOptions = {
   cwd?: string;
+  /**
+   * Runtime allowance for each exact mount root. Multi-root flushes run each
+   * root sequentially, so the outer runtime timeout is scaled by the number
+   * of generated exact-layout commands to avoid cutting later roots off.
+   */
   timeoutMs?: number;
 };
 
@@ -299,10 +304,13 @@ export class SandboxOrchestrator<Handle> {
     config: RelayfileMountShellOptions,
     options: FlushMountOptions = {},
   ): Promise<void> {
+    const exactLayout = resolveRelayfileMountExactLayout(config);
+    const timeoutMs = (options.timeoutMs ?? 120_000)
+      * Math.max(1, exactLayout.mountLocalDirs.length);
     const result = await this.runtime.runScript(handle, {
       command: buildRelayfileMountFlushShell(config),
       cwd: options.cwd,
-      timeoutMs: options.timeoutMs ?? 120_000,
+      timeoutMs,
     });
     if (result.exitCode !== 0) {
       throw new Error(`Failed to flush relayfile mount: ${result.output}`);
