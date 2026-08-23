@@ -30,6 +30,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Packed package smoke test
+        run: npm run test:package
+
       - name: Typecheck
         run: npm run typecheck
 

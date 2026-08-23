@@ -16,42 +16,10 @@
  * every consumer.
  */
 
-/** Package name, exported so consumers can identify the module at runtime. */
-export const PACKAGE_NAME = "@agent-relay/sandbox";
-
-// --- runtime port (outer orchestration plane) ------------------------------
-export type {
-  AsyncRunStartResult,
-  AsyncRunStatus,
-  CapabilityAbsence,
-  DeclaredSandboxRuntimeCapabilities,
-  FilesystemMode,
-  InteractiveMode,
-  LifetimeMode,
-  OutputStreamMode,
-  SnapshotMode,
-  ResolvedSandboxRuntimeCapabilities,
-  RunScriptResult,
-  SandboxCapabilityModes,
-  SandboxCountOptions,
-  SandboxLookupOptions,
-  SandboxRuntime,
-  SandboxRuntimeCapabilities,
-} from "./port.js";
-export { isPendingEvidence, resolveSandboxRuntimeCapabilities } from "./port.js";
-
-// --- bootstrap plane (live in-sandbox session) -----------------------------
-export type {
-  AsyncExecStartResult,
-  AsyncExecStatus,
-  ExecOptions,
-  ExecResult,
-  IsolationLevel,
-  LaunchOptions,
-  RuntimeCapabilities,
-  RuntimeHandle,
-  WorkflowRuntime,
-} from "./types.js";
+// Keep the historical root barrel intact for existing consumers. New code
+// should import provider-neutral APIs from `./core` and one provider subpath so
+// bundlers never have to resolve SDKs for providers the consumer did not pick.
+export * from "./core/index.js";
 
 // --- providers -------------------------------------------------------------
 export { DaytonaRuntime, SnapshotNotFoundError } from "./daytona/runtime.js";
@@ -288,30 +256,3 @@ export {
   agentCoreWorkflowCapabilities,
 } from "./agentcore/capabilities.js";
 export type { AgentCoreObservedCapabilities } from "./agentcore/capabilities.js";
-
-export { LocalSandboxRuntime } from "./local/runtime.js";
-export type { LocalSandboxRuntimeOptions } from "./local/runtime.js";
-
-// --- orchestration ---------------------------------------------------------
-export { SandboxOrchestrator } from "./orchestrator.js";
-export {
-  buildRelayfileMountCleanupInvocationShell,
-  buildRelayfileMountLifecycleShell,
-} from "./orchestrator.js";
-export type {
-  FlushMountOptions,
-  RelayfileMountHandle,
-  RelayfileMountLifecycleShellOptions,
-  SandboxBundleFile,
-  SandboxCapturedOutput,
-  SandboxCommandResult,
-  SandboxOrchestratorRuntime,
-  SandboxOutputChunk,
-  SandboxProvisionOptions,
-  SandboxRunScriptOptions,
-  StartMountOptions,
-  StopMountOptions,
-} from "./orchestrator.js";
-
-// --- relayfile-mount shell builders ----------------------------------------
-export * from "./mount-script.js";

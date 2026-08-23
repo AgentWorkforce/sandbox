@@ -24,6 +24,27 @@ consumer that only runs local sandboxes does not need a remote provider SDK.
 Adapters for providers that publish no JavaScript SDK speak their HTTP API
 directly and add no dependency at all; they take an injectable `fetch` instead.
 
+Import provider-neutral APIs and the selected adapter from separate entrypoints:
+
+```ts
+import { SandboxOrchestrator } from "@agent-relay/sandbox/core";
+import { DaytonaRuntime } from "@agent-relay/sandbox/daytona";
+```
+
+The provider entrypoints are `agent37`, `agentcore`, `daytona`, `e2b`,
+`freestyle`, `local`, `microsandbox`, `modal`, and `vercel`. Each points at its
+own barrel, so a bundler does not have to resolve the other optional provider SDKs.
+The root `@agent-relay/sandbox` barrel still exports the complete historical
+surface for compatibility, but new runtime imports should use `core` plus one
+provider subpath.
+
+The export map uses `./* -> ./dist/*/index.js` rather than enumerating today’s
+providers. To add another provider safely, add `src/<provider>/index.ts` as its
+isolated public barrel and declare its SDK as an optional peer. The package
+contract test requires every runtime directory (and every optional peer owner)
+to have such a barrel, and the packed-package smoke test verifies those barrels
+ship and import without installing any optional peers.
+
 ### Provider constraints
 
 Each adapter inherits its provider SDK's requirements, and they are not all the
@@ -31,7 +52,7 @@ same as this package's:
 
 | Adapter | Peer dependency | Requirements beyond this package's |
 | --- | --- | --- |
-| `DaytonaRuntime` | `@daytonaio/sdk` | — |
+| `DaytonaRuntime` | `@daytonaio/sdk` 0.180–0.205 | — |
 | `E2BSandboxRuntime` | `e2b` | — |
 | `MicrosandboxRuntime` | `microsandbox` | **Node.js 22+**, a platform-specific native addon (macOS arm64, Linux x64/arm64, Windows x64/arm64), and — for its `local` backend — hardware virtualization: KVM on Linux, Apple Silicon on macOS, or WHP on Windows 10+ |
 | `LocalSandboxRuntime` | — | A reachable local sandbox service |
