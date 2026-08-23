@@ -400,10 +400,13 @@ export function buildRelayfileMountLifecycleShell(
     // full reconcile" sticky loop. Value is a Go duration string ("<n>s");
     // RELAYFILE_BOOTSTRAP_TIMEOUT is left UNSET (0 = unbounded while making
     // progress) - a hard total cap could kill a legitimately long resumable
-    // pull. The `$(${start})` subshell and the initial-sync block below both
+    // pull. The `$( ${start})` command substitution and initial-sync block both
     // inherit this export.
     ...relayfileBootstrapIdleTimeoutEnvShell(initialSyncIdleTimeoutSeconds),
-    `if ! RELAYFILE_MOUNT_PID=$(${start}); then`,
+    // Keep whitespace after `$(`: multi-root start begins with `(`, and dash
+    // otherwise tokenizes `$((` as arithmetic expansion instead of a command
+    // substitution containing a subshell.
+    `if ! RELAYFILE_MOUNT_PID=$( ${start}); then`,
     "  echo '[relayfile-mount] failed to start daemon' >&2",
     "  exit 1",
     "fi",

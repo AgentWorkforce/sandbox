@@ -1,6 +1,13 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, type TestContext } from "node:test";
@@ -9,6 +16,8 @@ import {
   buildRelayfileMountCleanupInvocationShell,
   buildRelayfileMountLifecycleShell,
 } from "./orchestrator.js";
+
+const POSIX_SHELL = existsSync("/bin/dash") ? "/bin/dash" : "/bin/sh";
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -83,7 +92,7 @@ describe("relayfile exact-root lifecycle observability", () => {
       'exit "$MOUNT_EXIT"',
     ].join("\n");
 
-    const result = spawnSync("/bin/sh", ["-c", script], {
+    const result = spawnSync(POSIX_SHELL, ["-c", script], {
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
       encoding: "utf8",
     });
