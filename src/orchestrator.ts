@@ -185,8 +185,19 @@ export class SandboxOrchestrator<Handle> {
       });
     }
 
+    // 90s, not 60s. The idle watchdog cannot see progress before
+    // relayfile-mount emits its first bootstrap checkpoint, and the mount's
+    // atomic full-tree export is silent for up to its own 45s
+    // `defaultExportTimeout` before it falls back to the resumable tree pull
+    // that does checkpoint. A 60s budget therefore guillotines a healthy cold
+    // mount a few seconds into its first real page. 90s is relayfile's own
+    // `defaultBootstrapIdleTimeout`, and the value this package's
+    // `buildRelayfileMountLifecycleShell` already defaults to — the outer
+    // wrapper and the daemon's internal watchdog are a matched pair (see
+    // `relayfileBootstrapIdleTimeoutEnvShell`), so lowering this lowered BOTH.
+    // Total wall clock is still bounded by `initialSyncDeadlineMs`.
     const idleTimeoutMs =
-      options.initialSyncIdleTimeoutMs ?? options.initialSyncTimeoutMs ?? 60_000;
+      options.initialSyncIdleTimeoutMs ?? options.initialSyncTimeoutMs ?? 90_000;
     const initialSyncIdleTimeoutSeconds = relayfileBootstrapIdleTimeoutSeconds(
       idleTimeoutMs / 1000,
     );
