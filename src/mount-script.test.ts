@@ -286,6 +286,16 @@ describe("exact local-layout contract", () => {
       stateDir: join(localRoot, ".state"),
       websocket: false,
     });
+    for (const renderedTemplate of [
+      template.startShellTemplate,
+      template.flushShellTemplate,
+    ]) {
+      assert.match(
+        renderedTemplate,
+        /--remote-path "\$relayfile_mount_remote_path"/,
+        "late-bound exact mounts must retain their remote-path filter",
+      );
+    }
     const values = {
       baseUrl: BASE.baseUrl,
       workspaceId: BASE.workspaceId,

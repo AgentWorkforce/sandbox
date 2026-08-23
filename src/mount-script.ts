@@ -732,7 +732,9 @@ function buildMountPathArg(path: string): string {
 }
 
 const DYNAMIC_LOCAL_DIR = "__relayfile_dynamic_local_dir__";
-const DYNAMIC_REMOTE_PATH = "__relayfile_dynamic_remote_path__";
+// Must be absolute so scopedRemoteRoots/buildMountArgs retain the sentinel
+// until dynamicMountArgs replaces it with the late-bound shell variable.
+const DYNAMIC_REMOTE_PATH = "/__relayfile_dynamic_remote_path__";
 
 function dynamicMountArgs(
   opts: RelayfileMountShellOptions,
