@@ -499,10 +499,29 @@ function buildMountArgs(opts: RelayfileMountShellOptions): string[] {
   ];
 }
 
+/**
+ * Private state file the initial sync is pinned to via `--state-file`.
+ *
+ * `buildIdleWatchedCommand` cancels the sync when this file stops advancing,
+ * so the *only* safe way to name it is to pin it — never to guess where the
+ * mount would otherwise put it. Left to `--state-dir` alone, relayfile-mount
+ * derives `<state-dir>/<sha256(workspace, remote-root, local-root, kind)[:32]>/state.json`
+ * (relayfile `internal/mountsync/state_path.go` → `ResolveMountStatePath`),
+ * a path no caller can reconstruct. See {@link initialSyncProgressFiles}.
+ */
+function initialSyncStateFile(index: number): string {
+  return `/tmp/relayfile-mount-initial-sync-${index}.json`;
+}
+
 function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): string[] {
   const roots = scopedRemoteRoots(opts.paths ?? []);
   if (roots.length === 0) {
-    return [buildRelayfileMountFlushShell(opts)];
+    // Pin the unscoped sync's private state exactly as the scoped branch
+    // below does, so `initialSyncProgressFiles` can name the file the sync
+    // actually writes.
+    return [
+      `${buildRelayfileMountFlushShell(opts)} --state-file ${shellQuote(initialSyncStateFile(0))}`,
+    ];
   }
   const localDir = unscopedLocalDir(opts.localDir, roots);
   return roots
@@ -510,23 +529,32 @@ function buildInitialSyncCommands(opts: RelayfileMountInitialSyncOptions): strin
       const args = [
         ...buildMountArgs({ ...opts, localDir, paths: [] }),
         `--remote-path ${shellQuote(remoteRoot)}`,
-        `--state-file ${shellQuote(`/tmp/relayfile-mount-initial-sync-${index}.json`)}`,
+        `--state-file ${shellQuote(initialSyncStateFile(index))}`,
       ];
       return [`${mountEnvPrefix(opts)}relayfile-mount --once`, ...args].join(" ");
     });
 }
 
+/**
+ * The files whose mtime the idle watchdog reads as "the sync is still making
+ * progress". Every entry MUST be a path `buildInitialSyncCommands` pinned via
+ * `--state-file` — relayfile-mount checkpoints private state every 32 files
+ * during a bootstrap traversal, so a pinned path advances steadily and a
+ * genuine stall is the only thing that stops it.
+ *
+ * The unscoped branch used to name `<state-dir>/.relayfile-mount-state.json`,
+ * which no relayfile-mount build ever writes (the legacy file of that name
+ * lived under the LOCAL root, not the state dir). `[ -f ... ]` was therefore
+ * always false, the marker was touched once at launch and never again, and
+ * the idle watchdog degraded into an unconditional hard kill at the idle
+ * timeout — killing initial syncs that were demonstrably still progressing.
+ */
 function initialSyncProgressFiles(opts: RelayfileMountInitialSyncOptions): string[] {
   const roots = scopedRemoteRoots(opts.paths ?? []);
   if (roots.length === 0) {
-    const stateDir = opts.stateDir;
-    return [
-      `${stateDir.replace(/\/+$/u, "")}/.relayfile-mount-state.json`,
-    ];
+    return [initialSyncStateFile(0)];
   }
-  return roots.map((_remoteRoot, index) =>
-    `/tmp/relayfile-mount-initial-sync-${index}.json`
-  );
+  return roots.map((_remoteRoot, index) => initialSyncStateFile(index));
 }
 
 function buildIdleWatchedCommand(
