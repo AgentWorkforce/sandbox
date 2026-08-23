@@ -1,7 +1,14 @@
 import { describe, it, type TestContext } from "node:test";
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,12 +66,20 @@ if [ -n "\${FAKE_MOUNT_FAIL_LOCAL_DIR:-}" ] && [ "$local_dir" = "$FAKE_MOUNT_FAI
   echo "simulated mount failure: $local_dir" >&2
   exit 23
 fi
+if [ -n "\${FAKE_MOUNT_FAIL_LATER_LOCAL_DIR:-}" ] && [ "$local_dir" = "$FAKE_MOUNT_FAIL_LATER_LOCAL_DIR" ]; then
+  echo "simulated later mount failure: $local_dir" >&2
+  exit 41
+fi
 mkdir -p "$local_dir"
 printf mounted > "$local_dir/.mounted"
 `,
   );
   chmodSync(fakeMount, 0o755);
   return { binDir, localRoot };
+}
+
+function mountCalls(callsPath: string): string[] {
+  return readFileSync(callsPath, "utf8").trim().split("\n");
 }
 
 function testShellQuote(value: string): string {
@@ -250,7 +265,7 @@ describe("exact local-layout contract", () => {
     const { binDir, localRoot } = fakeExactMount(t);
     const firstRoot = join(localRoot, "github/repos/acme/cloud");
     const laterRoot = join(localRoot, "slack/channels/C123");
-    const callsPath = join(localRoot, "cleanup-calls.log");
+    const callsPath = join(binDir, "cleanup-calls.log");
     const shell = buildRelayfileMountCleanupFlushShell({
       ...BASE,
       localDir: localRoot,
@@ -266,6 +281,7 @@ describe("exact local-layout contract", () => {
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           FAKE_MOUNT_CALLS: callsPath,
           FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+          FAKE_MOUNT_FAIL_LATER_LOCAL_DIR: laterRoot,
         },
         encoding: "utf8",
       },
@@ -273,17 +289,15 @@ describe("exact local-layout contract", () => {
 
     assert.equal(result.status, 23, result.stderr);
     assert.equal(existsSync(join(firstRoot, ".mounted")), false);
-    assert.equal(
-      existsSync(join(laterRoot, ".mounted")),
-      true,
-      "a failure in the first exact root must not skip a later teardown flush",
-    );
+    assert.equal(existsSync(join(laterRoot, ".mounted")), false);
+    assert.deepEqual(mountCalls(callsPath), [firstRoot, laterRoot]);
   });
 
   it("attempts every ordinary flush root and returns the first failure", (t) => {
     const { binDir, localRoot } = fakeExactMount(t);
     const firstRoot = join(localRoot, "github/repos/acme/cloud");
     const laterRoot = join(localRoot, "slack/channels/C123");
+    const callsPath = join(binDir, "ordinary-flush-calls.log");
     const shell = buildRelayfileMountFlushShell({
       ...BASE,
       localDir: localRoot,
@@ -294,24 +308,24 @@ describe("exact local-layout contract", () => {
       env: {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_CALLS: callsPath,
         FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+        FAKE_MOUNT_FAIL_LATER_LOCAL_DIR: laterRoot,
       },
       encoding: "utf8",
     });
 
     assert.equal(result.status, 23, result.stderr);
     assert.equal(existsSync(join(firstRoot, ".mounted")), false);
-    assert.equal(
-      existsSync(join(laterRoot, ".mounted")),
-      true,
-      "a first-root failure must not skip later ordinary teardown flushes",
-    );
+    assert.equal(existsSync(join(laterRoot, ".mounted")), false);
+    assert.deepEqual(mountCalls(callsPath), [firstRoot, laterRoot]);
   });
 
   it("attempts every initial-sync root and returns the first failure", (t) => {
     const { binDir, localRoot } = fakeExactMount(t);
     const firstRoot = join(localRoot, "github/repos/acme/cloud");
     const laterRoot = join(localRoot, "slack/channels/C123");
+    const callsPath = join(binDir, "initial-sync-calls.log");
     const shell = buildRelayfileMountInitialSyncShell({
       ...BASE,
       localDir: localRoot,
@@ -322,24 +336,24 @@ describe("exact local-layout contract", () => {
       env: {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_CALLS: callsPath,
         FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+        FAKE_MOUNT_FAIL_LATER_LOCAL_DIR: laterRoot,
       },
       encoding: "utf8",
     });
 
     assert.equal(result.status, 23, result.stderr);
     assert.equal(existsSync(join(firstRoot, ".mounted")), false);
-    assert.equal(
-      existsSync(join(laterRoot, ".mounted")),
-      true,
-      "a first-root failure must not skip later initial-sync roots",
-    );
+    assert.equal(existsSync(join(laterRoot, ".mounted")), false);
+    assert.deepEqual(mountCalls(callsPath), [firstRoot, laterRoot]);
   });
 
   it("attempts every timeout-wrapped initial-sync root", (t) => {
     const { binDir, localRoot } = fakeExactMount(t);
     const firstRoot = join(localRoot, "github/repos/acme/cloud");
     const laterRoot = join(localRoot, "slack/channels/C123");
+    const callsPath = join(binDir, "timed-initial-sync-calls.log");
     const shell = buildRelayfileMountInitialSyncShell({
       ...BASE,
       localDir: localRoot,
@@ -351,18 +365,17 @@ describe("exact local-layout contract", () => {
       env: {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_CALLS: callsPath,
         FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+        FAKE_MOUNT_FAIL_LATER_LOCAL_DIR: laterRoot,
       },
       encoding: "utf8",
     });
 
     assert.equal(result.status, 23, result.stderr);
     assert.equal(existsSync(join(firstRoot, ".mounted")), false);
-    assert.equal(
-      existsSync(join(laterRoot, ".mounted")),
-      true,
-      "a first-root failure must not skip later timeout-wrapped sync roots",
-    );
+    assert.equal(existsSync(join(laterRoot, ".mounted")), false);
+    assert.deepEqual(mountCalls(callsPath), [firstRoot, laterRoot]);
   });
 
   it("renders late-bound shell templates as separate exact mounts", (t) => {
@@ -421,6 +434,7 @@ describe("exact local-layout contract", () => {
     const { binDir, localRoot } = fakeExactMount(t);
     const firstRoot = join(localRoot, "github/repos/acme/cloud");
     const laterRoot = join(localRoot, "slack/channels/C123");
+    const callsPath = join(binDir, "late-bound-flush-calls.log");
     const template = buildRelayfileMountShellTemplate({}, {
       stateDir: join(localRoot, ".state"),
       websocket: false,
@@ -448,18 +462,17 @@ describe("exact local-layout contract", () => {
       env: {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_CALLS: callsPath,
         FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+        FAKE_MOUNT_FAIL_LATER_LOCAL_DIR: laterRoot,
       },
       encoding: "utf8",
     });
 
     assert.equal(result.status, 23, result.stderr);
     assert.equal(existsSync(join(firstRoot, ".mounted")), false);
-    assert.equal(
-      existsSync(join(laterRoot, ".mounted")),
-      true,
-      "a first-root failure must not skip later rendered teardown flushes",
-    );
+    assert.equal(existsSync(join(laterRoot, ".mounted")), false);
+    assert.deepEqual(mountCalls(callsPath), [firstRoot, laterRoot]);
   });
 
   it("surfaces late-bound daemon argument validation failures", (t) => {
