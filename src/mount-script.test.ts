@@ -52,6 +52,13 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ "$layout" != exact ] || [ -z "$local_dir" ]; then exit 2; fi
+if [ -n "\${FAKE_MOUNT_CALLS:-}" ]; then
+  printf '%s\n' "$local_dir" >> "$FAKE_MOUNT_CALLS"
+fi
+if [ -n "\${FAKE_MOUNT_FAIL_LOCAL_DIR:-}" ] && [ "$local_dir" = "$FAKE_MOUNT_FAIL_LOCAL_DIR" ]; then
+  echo "simulated mount failure: $local_dir" >&2
+  exit 23
+fi
 mkdir -p "$local_dir"
 printf mounted > "$local_dir/.mounted"
 `,
@@ -239,6 +246,40 @@ describe("exact local-layout contract", () => {
     );
   });
 
+  it("attempts every cleanup root and returns the first failure", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const firstRoot = join(localRoot, "github/repos/acme/cloud");
+    const laterRoot = join(localRoot, "slack/channels/C123");
+    const callsPath = join(localRoot, "cleanup-calls.log");
+    const shell = buildRelayfileMountCleanupFlushShell({
+      ...BASE,
+      localDir: localRoot,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+    });
+
+    const result = spawnSync(
+      "/bin/sh",
+      ["-c", `relayfile_mount_flush_mode=--once; ${shell}`],
+      {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          FAKE_MOUNT_CALLS: callsPath,
+          FAKE_MOUNT_FAIL_LOCAL_DIR: firstRoot,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(existsSync(join(firstRoot, ".mounted")), false);
+    assert.equal(
+      existsSync(join(laterRoot, ".mounted")),
+      true,
+      "a failure in the first exact root must not skip a later teardown flush",
+    );
+  });
+
   it("renders late-bound shell templates as separate exact mounts", (t) => {
     const { binDir, localRoot } = fakeExactMount(t);
     const template = buildRelayfileMountShellTemplate({}, {
@@ -279,6 +320,118 @@ describe("exact local-layout contract", () => {
       true,
     );
     assert.equal(existsSync(join(localRoot, ".mounted")), false);
+  });
+
+  it("surfaces late-bound daemon argument validation failures", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const template = buildRelayfileMountShellTemplate({}, {
+      stateDir: join(localRoot, ".state"),
+      websocket: false,
+    });
+    const values = {
+      baseUrl: BASE.baseUrl,
+      workspaceId: BASE.workspaceId,
+      localDir: localRoot,
+      token: BASE.token,
+    };
+    for (const testCase of [
+      {
+        pathArgs: " --not-a-path '/bad'",
+        message: /invalid relayfile mount path args/,
+      },
+      {
+        pathArgs: " --remote-path '/github/../secrets'",
+        message: /relayfile remote root contains a traversal segment/,
+      },
+    ]) {
+      let shell = template.startShellTemplate;
+      for (const [key, value] of Object.entries(values)) {
+        const placeholder = template.placeholders[key as keyof typeof values];
+        shell = shell.replace(testShellQuote(placeholder), testShellQuote(value));
+      }
+      shell = shell.replace(template.pathArgsPlaceholderArg, testCase.pathArgs);
+
+      const result = spawnSync("/bin/sh", ["-c", shell], {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      });
+
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, testCase.message);
+    }
+  });
+
+  it("does not mutate an embedding shell's positional parameters", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const template = buildRelayfileMountShellTemplate({}, {
+      stateDir: join(localRoot, ".state"),
+      websocket: false,
+    });
+    const values = {
+      baseUrl: BASE.baseUrl,
+      workspaceId: BASE.workspaceId,
+      localDir: localRoot,
+      token: BASE.token,
+    };
+    let shell = template.flushShellTemplate;
+    for (const [key, value] of Object.entries(values)) {
+      const placeholder = template.placeholders[key as keyof typeof values];
+      shell = shell.replace(testShellQuote(placeholder), testShellQuote(value));
+    }
+    shell = shell.replace(
+      template.pathArgsPlaceholderArg,
+      buildRelayfileMountPathArgsShell(["/slack/channels/C123/**"]),
+    );
+
+    const result = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        `set -- original arguments; ${shell}; [ "$#" -eq 2 ] && [ "$1" = original ] && [ "$2" = arguments ]`,
+      ],
+      {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it("does not double-join a late-bound already joined local directory", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    const joinedRoot = join(localRoot, "github/repos/acme/cloud");
+    const template = buildRelayfileMountShellTemplate({}, {
+      stateDir: join(localRoot, ".state"),
+      websocket: false,
+    });
+    const values = {
+      baseUrl: BASE.baseUrl,
+      workspaceId: BASE.workspaceId,
+      localDir: joinedRoot,
+      token: BASE.token,
+    };
+    let shell = template.flushShellTemplate;
+    for (const [key, value] of Object.entries(values)) {
+      const placeholder = template.placeholders[key as keyof typeof values];
+      shell = shell.replace(testShellQuote(placeholder), testShellQuote(value));
+    }
+    shell = shell.replace(
+      template.pathArgsPlaceholderArg,
+      buildRelayfileMountPathArgsShell(["/github/repos/acme/cloud/**"]),
+    );
+
+    const result = spawnSync("/bin/sh", ["-c", shell], {
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(join(joinedRoot, ".mounted")), true);
+    assert.equal(
+      existsSync(join(joinedRoot, "github/repos/acme/cloud/.mounted")),
+      false,
+    );
   });
 });
 

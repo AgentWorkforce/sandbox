@@ -8,6 +8,7 @@ import {
   buildRelayfileMountInitialSyncStatusShell,
   buildRelayfileMountStartShell,
   parseRelayfileMountInitialSyncStatus,
+  resolveRelayfileMountExactLayout,
   type RelayfileMountDaemonOptions,
   type RelayfileMountShellOptions,
 } from "./mount-script.js";
@@ -374,7 +375,9 @@ export function buildRelayfileMountLifecycleShell(
   // (RELAYFILE_OUTBOX_TIMEOUT, default 60s) or cleanup can SIGKILL a slow but
   // healthy writeback before the independent outbox drain finishes.
   const sync = buildRelayfileMountCleanupFlushShell(config);
-  const flushTimeoutSeconds = options.flushTimeoutSeconds ?? 75;
+  const exactLayout = resolveRelayfileMountExactLayout(config);
+  const flushTimeoutSeconds = (options.flushTimeoutSeconds ?? 75)
+    * Math.max(1, exactLayout.mountLocalDirs.length);
   const initialSyncIdleTimeoutSeconds = relayfileBootstrapIdleTimeoutSeconds(
     options.initialSyncIdleTimeoutSeconds ?? 90,
   );
@@ -514,13 +517,13 @@ function cleanupStatusShell(message: string | undefined): string {
  * teardown via `node` (NOT sed/grep: it needs same-record multi-field
  * correlation — remotePath ∧ dispatchStatus ∧ opId ∧ needsAttention from ONE
  * durable-outbox record — which cross-record grep cannot do safely). Reads
- * ONLY `<localDir>/.relay/outbox/{acked,pending}` (O(outbox), no mirror walk)
- * + the command roots, so it stays off the full-tree reconcile path that can
- * time out on large mirrors. Prints a single integer (undeliverable count) to stdout on
- * success; prints NOTHING and exits non-zero on ANY error / precondition
- * violation, so the caller leaves the signal empty → the TS gate reads it as
- * null and falls back to the outbox-pending signals (feature-detect; can never
- * false-fire from this path).
+ * ONLY each exact mount root's `.relay/outbox/{acked,pending}` (O(outbox), no
+ * mirror walk) + the command roots, so it stays off the full-tree reconcile
+ * path that can time out on large mirrors. Prints a single integer
+ * (undeliverable count) to stdout on success; prints NOTHING and exits non-zero
+ * on ANY error / precondition violation, so the caller leaves the signal empty
+ * → the TS gate reads it as null and falls back to the outbox-pending signals
+ * (feature-detect; can never false-fire from this path).
  *
  * Undeliverable = a THIS-run command draft (newer than the flush marker) whose
  * derived remotePath has NO acked-succeeded receipt AND is either (a) in
@@ -532,13 +535,9 @@ function cleanupStatusShell(message: string | undefined): string {
  * BENIGN in-flight — once an opId is committed, the server owns delivery and
  * sandbox teardown cannot orphan it, so it does NOT count.
  *
- * remotePath derivation is valid only when the configured command roots sit
- * below the caller's `localDir`, so
- * `remotePath == "/" + rel(localDir, draftPath)`. Exact-layout path mounts can
- * place their private outbox below a joined child root instead; in that case
- * this classifier intentionally fails capability detection and returns null,
- * leaving the older pending-state signals in charge rather than emitting a
- * wrong path that could false-fire.
+ * remotePath derivation uses the recovered unscoped base while outbox reads use
+ * the joined exact roots. This preserves full remote paths in receipt matching
+ * without probing the obsolete base `.relay` directory.
  */
 const WRITEBACK_RECEIPT_SCAN_PROGRAM = `"use strict";
 const fs = require("fs");
@@ -579,10 +578,17 @@ function readRecords(dir) {
 }
 try {
   const argv = process.argv.slice(2);
-  const localDir = (argv[0] || "").replace(/\\/+$/g, "");
+  const baseLocalDir = (argv[0] || "").replace(/\\/+$/g, "") || "/";
   const marker = argv[1] || "";
-  const roots = argv.slice(2);
-  if (!localDir || !marker || roots.length === 0) process.exit(1);
+  let mountLocalDirs;
+  try { mountLocalDirs = JSON.parse(argv[2] || "[]"); } catch (e) { process.exit(1); }
+  const roots = argv.slice(3);
+  if (!Array.isArray(mountLocalDirs) || mountLocalDirs.length === 0 || !marker || roots.length === 0) process.exit(1);
+  mountLocalDirs = mountLocalDirs.map((p) => String(p).replace(/\\/+$/g, "") || "/");
+  const belongsToMount = (p) => mountLocalDirs.some((mountDir) =>
+    mountDir === "/" ? p.charAt(0) === "/" : p === mountDir || p.indexOf(mountDir + "/") === 0
+  );
+  if (roots.some((root) => !belongsToMount(root))) process.exit(1);
   const markerMtime = statMtime(marker);
   if (markerMtime === null) process.exit(1);
   const drafts = [];
@@ -596,13 +602,12 @@ try {
       drafts.push(f);
     }
   }
-  const prefix = localDir + "/";
+  const prefix = baseLocalDir === "/" ? "/" : baseLocalDir + "/";
   const draftRemotePaths = [];
   for (const f of drafts) {
     if (f.indexOf(prefix) !== 0) process.exit(1);
-    draftRemotePaths.push(normalizeRemotePath(f.slice(localDir.length)));
+    draftRemotePaths.push(normalizeRemotePath(f.slice(baseLocalDir.length)));
   }
-  const outbox = path.join(localDir, ".relay", "outbox");
   // RECEIPT CAPABILITY DETECT (load-bearing — without it this gate false-fires
   // on every older daemon). The positive gate is valid ONLY on a mount whose
   // outbox emits adapter-dispatch receipts. Daemons that support receipts
@@ -620,21 +625,26 @@ try {
   // outbox-dir setup (which --flush-outbox-once calls even with empty pending).
   // Require BOTH dispatchReceipts===true AND schemaVersion>=2 (the version guard
   // is forward-safe). Absent / parse-fail / not-enabled → treated as absent.
-  let dispatchReceiptsActive = false;
-  try {
-    const cap = JSON.parse(fs.readFileSync(path.join(outbox, "capabilities.json"), "utf8"));
-    dispatchReceiptsActive = !!(
-      cap &&
-      cap.dispatchReceipts === true &&
-      typeof cap.schemaVersion === "number" &&
-      cap.schemaVersion >= 2
-    );
-  } catch (e) {
-    dispatchReceiptsActive = false;
+  const acked = [];
+  const pending = [];
+  for (const mountLocalDir of mountLocalDirs) {
+    const outbox = path.join(mountLocalDir, ".relay", "outbox");
+    let dispatchReceiptsActive = false;
+    try {
+      const cap = JSON.parse(fs.readFileSync(path.join(outbox, "capabilities.json"), "utf8"));
+      dispatchReceiptsActive = !!(
+        cap &&
+        cap.dispatchReceipts === true &&
+        typeof cap.schemaVersion === "number" &&
+        cap.schemaVersion >= 2
+      );
+    } catch (e) {
+      dispatchReceiptsActive = false;
+    }
+    if (!dispatchReceiptsActive) process.exit(1);
+    acked.push(...readRecords(path.join(outbox, "acked")));
+    pending.push(...readRecords(path.join(outbox, "pending")));
   }
-  if (!dispatchReceiptsActive) process.exit(1);
-  const acked = readRecords(path.join(outbox, "acked"));
-  const pending = readRecords(path.join(outbox, "pending"));
   const ackedByRemote = new Map();
   for (const r of acked) {
     if (!r || !r.remotePath) continue;
@@ -666,11 +676,12 @@ try {
  * Compute the writeback-delivery signals into shell vars the cleanup-status
  * printf emits:
  *
- *  - `relayfile_mount_pending_writeback`: the canonical undelivered count from
- *    `<localDir>/.relay/state.json` (the mount/outbox public status file — the
- *    public state lives under localDir, NOT `--state-dir`). Parsed with `sed`
- *    (no `jq` dependency); absent/unparsable → 0. A stamped `revision` is NOT
- *    read here — it is not proof of delivery.
+ *  - `relayfile_mount_pending_writeback`: the sum of canonical undelivered
+ *    counts from every exact mount root's `.relay/state.json` (the mount/outbox
+ *    public status files live under each final `--local-dir`, NOT
+ *    `--state-dir`). Parsed with `sed` (no `jq` dependency);
+ *    absent/unparsable → 0. A stamped `revision` is NOT read here — it is not
+ *    proof of delivery.
  *  - `relayfile_mount_has_pending_writeback` / `relayfile_mount_outbox_needs_attention`:
  *    the unified pending + needs-attention flags from `states` in the same
  *    `.relay/state.json`. `states.hasPendingWriteback` is set by the daemon for
@@ -700,15 +711,22 @@ try {
 function writebackUndeliveredSignalShell(
   options: RelayfileMountLifecycleShellOptions,
 ): string {
-  const stateJson = `${options.localDir.replace(/\/+$/u, "")}/.relay/state.json`;
-  const lines: string[] = [
-    `  if [ -f ${shellQuote(stateJson)} ]; then`,
-    `    relayfile_mount_pending_writeback=$(sed -n 's/.*"pendingWriteback":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' ${shellQuote(stateJson)} 2>/dev/null | head -n 1)`,
-    '    if [ -z "$relayfile_mount_pending_writeback" ]; then relayfile_mount_pending_writeback=0; fi',
-    `    if grep -Eq '"hasPendingWriteback":[[:space:]]*true' ${shellQuote(stateJson)} 2>/dev/null; then relayfile_mount_has_pending_writeback=true; fi`,
-    `    if grep -Eq '"outboxNeedsAttention":[[:space:]]*true' ${shellQuote(stateJson)} 2>/dev/null; then relayfile_mount_outbox_needs_attention=true; fi`,
-    "  fi",
-  ];
+  const exactLayout = resolveRelayfileMountExactLayout({
+    localDir: options.localDir,
+    paths: options.mount?.paths,
+  });
+  const lines: string[] = [];
+  for (const mountLocalDir of exactLayout.mountLocalDirs) {
+    const stateJson = `${mountLocalDir.replace(/\/+$/u, "")}/.relay/state.json`;
+    lines.push(
+      `  if [ -f ${shellQuote(stateJson)} ]; then`,
+      `    relayfile_mount_root_pending_writeback=$(sed -n 's/.*"pendingWriteback":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' ${shellQuote(stateJson)} 2>/dev/null | head -n 1)`,
+      '    if [ -n "$relayfile_mount_root_pending_writeback" ]; then relayfile_mount_pending_writeback=$((relayfile_mount_pending_writeback + relayfile_mount_root_pending_writeback)); fi',
+      `    if grep -Eq '"hasPendingWriteback":[[:space:]]*true' ${shellQuote(stateJson)} 2>/dev/null; then relayfile_mount_has_pending_writeback=true; fi`,
+      `    if grep -Eq '"outboxNeedsAttention":[[:space:]]*true' ${shellQuote(stateJson)} 2>/dev/null; then relayfile_mount_outbox_needs_attention=true; fi`,
+      "  fi",
+    );
+  }
   const commandRoots = (options.commandRootLocalDirs ?? []).filter(
     (dir) => dir.trim().length > 0,
   );
@@ -730,6 +748,13 @@ function writebackUndeliveredSignalShell(
     // protecting: node-absent / mktemp-fail / any program error → the var stays
     // empty → the TS gate reads null → falls back to the outbox-pending signals.
     // The `|| true` + 2>/dev/null guarantee it never perturbs the flush exit code.
+    const receiptMountDirs = exactLayout.mountLocalDirs.filter((mountLocalDir) => {
+      const root = mountLocalDir.replace(/\/+$/u, "") || "/";
+      return commandRoots.some((commandRoot) => {
+        const candidate = commandRoot.replace(/\/+$/u, "") || "/";
+        return root === "/" || candidate === root || candidate.startsWith(`${root}/`);
+      });
+    });
     lines.push(
       '  if [ -n "${RELAYFILE_MOUNT_FLUSH_MARKER:-}" ] && command -v node >/dev/null 2>&1; then',
       "    relayfile_mount_receipt_scan=$(mktemp /tmp/relayfile-receipt-scan.XXXXXX 2>/dev/null || true)",
@@ -737,7 +762,7 @@ function writebackUndeliveredSignalShell(
       `      cat > "$relayfile_mount_receipt_scan" <<'RELAYFILE_RECEIPT_SCAN_EOF'`,
       WRITEBACK_RECEIPT_SCAN_PROGRAM,
       "RELAYFILE_RECEIPT_SCAN_EOF",
-      `      relayfile_mount_command_drafts_undeliverable=$(node "$relayfile_mount_receipt_scan" ${shellQuote(options.localDir)} "$RELAYFILE_MOUNT_FLUSH_MARKER" ${quoted} 2>/dev/null || true)`,
+      `      relayfile_mount_command_drafts_undeliverable=$(node "$relayfile_mount_receipt_scan" ${shellQuote(exactLayout.baseLocalDir)} "$RELAYFILE_MOUNT_FLUSH_MARKER" ${shellQuote(JSON.stringify(receiptMountDirs))} ${quoted} 2>/dev/null || true)`,
       '      rm -f "$relayfile_mount_receipt_scan" 2>/dev/null || true',
       "    fi",
       "  fi",

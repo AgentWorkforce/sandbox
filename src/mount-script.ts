@@ -233,7 +233,17 @@ export function buildRelayfileMountCleanupFlushShell(
     `${mountEnvPrefix(opts)}relayfile-mount "$1"`,
     ...buildMountArgs({ ...opts, ...mount }),
   ].join(" "));
-  return `sh -c ${shellQuote(commands.join(" && "))} relayfile-mount-cleanup "$relayfile_mount_flush_mode"`;
+  const script = [
+    "relayfile_mount_flush_status=0",
+    ...commands.map((command) => [
+      `${command} || {`,
+      "relayfile_mount_flush_code=$?;",
+      'if [ "$relayfile_mount_flush_status" -eq 0 ]; then relayfile_mount_flush_status=$relayfile_mount_flush_code; fi;',
+      "}",
+    ].join(" ")),
+    'exit "$relayfile_mount_flush_status"',
+  ].join("; ");
+  return `sh -c ${shellQuote(script)} relayfile-mount-cleanup "$relayfile_mount_flush_mode"`;
 }
 
 export function buildRelayfileMountInitialSyncShell(
@@ -693,6 +703,23 @@ function exactMounts(localRoot: string, remoteRoots: readonly string[]): ExactMo
   });
 }
 
+/**
+ * Resolve the public on-disk roots owned by the exact-layout mount processes.
+ * Lifecycle consumers use this same computation for timeout budgets and
+ * `.relay` observability so command generation and teardown cannot disagree
+ * about where a mount's public state lives.
+ */
+export function resolveRelayfileMountExactLayout(
+  opts: Pick<RelayfileMountShellOptions, "localDir" | "paths">,
+): { baseLocalDir: string; mountLocalDirs: string[] } {
+  const remoteRoots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
+  const mounts = exactMounts(opts.localDir, remoteRoots);
+  return {
+    baseLocalDir: unscopedLocalDir(opts.localDir, remoteRoots),
+    mountLocalDirs: mounts.map((mount) => mount.localDir),
+  };
+}
+
 function composeMountCommands(commands: readonly string[]): string {
   if (commands.length === 1) {
     return commands[0]!;
@@ -736,8 +763,41 @@ function dynamicMountPathSetup(): string[] {
   return [
     'relayfile_mount_remote_path="$2";',
     "shift 2;",
-    'case "/${relayfile_mount_remote_path#/}/" in */../*|*/./*) echo "relayfile remote root contains a traversal segment" >&2; exit 2 ;; esac;',
     'relayfile_mount_local_dir="${relayfile_mount_local_root%/}/${relayfile_mount_remote_path#/}";',
+  ];
+}
+
+/**
+ * Validate late-bound `--remote-path <root>` pairs before daemon startup and
+ * recover an unscoped base when the rendered localDir already ends with one
+ * of those roots. Validation runs in a command-substitution subshell, so its
+ * `shift` calls do not consume the execution pass's positional arguments.
+ * Callers also wrap the whole template in a subshell, keeping the initial
+ * `set --` private from the embedding shell.
+ */
+function dynamicMountPreflight(pathArgsPlaceholderArg: string): string[] {
+  return [
+    "relayfile_mount_preflight() {",
+    'relayfile_mount_preflight_root="$1";',
+    "shift;",
+    'while [ "$#" -gt 0 ]; do',
+    'if [ "$#" -lt 2 ] || [ "$1" != "--remote-path" ]; then echo "invalid relayfile mount path args" >&2; exit 2; fi;',
+    'relayfile_mount_remote_path="$2";',
+    'case "/${relayfile_mount_remote_path#/}/" in */../*|*/./*) echo "relayfile remote root contains a traversal segment" >&2; exit 2 ;; esac;',
+    'relayfile_mount_remote_suffix="${relayfile_mount_remote_path#/}";',
+    'relayfile_mount_remote_suffix="${relayfile_mount_remote_suffix%/}";',
+    'case "$relayfile_mount_preflight_root" in',
+    '"$relayfile_mount_remote_suffix") relayfile_mount_preflight_root=/ ;;',
+    '*/"$relayfile_mount_remote_suffix") relayfile_mount_preflight_root="${relayfile_mount_preflight_root%"/$relayfile_mount_remote_suffix"}"; [ -n "$relayfile_mount_preflight_root" ] || relayfile_mount_preflight_root=/ ;;',
+    '*/"$relayfile_mount_remote_suffix"/*) relayfile_mount_preflight_root="${relayfile_mount_preflight_root%%"/$relayfile_mount_remote_suffix/"*}"; [ -n "$relayfile_mount_preflight_root" ] || relayfile_mount_preflight_root=/ ;;',
+    "esac;",
+    "shift 2;",
+    "done;",
+    'printf \'%s\\n\' "$relayfile_mount_preflight_root";',
+    "};",
+    `set --${pathArgsPlaceholderArg};`,
+    'relayfile_mount_validated_local_root=$(relayfile_mount_preflight "$relayfile_mount_local_root" "$@") || exit $?;',
+    'relayfile_mount_local_root="$relayfile_mount_validated_local_root";',
   ];
 }
 
@@ -767,8 +827,9 @@ function buildDynamicMountStartTemplate(
     'relayfile_mount_pids="$relayfile_mount_pids $!";',
   ].join(" ");
   return [
+    "(",
     ...dynamicMountTemplateSetup(opts),
-    `set --${pathArgsPlaceholderArg};`,
+    ...dynamicMountPreflight(pathArgsPlaceholderArg),
     'if [ "$#" -eq 0 ]; then',
     'relayfile_mount_local_dir="$relayfile_mount_local_root";',
     `${pathlessStart};`,
@@ -783,7 +844,8 @@ function buildDynamicMountStartTemplate(
     "trap 'kill $relayfile_mount_pids 2>/dev/null || true; wait' INT TERM EXIT;",
     "wait",
     `) >/dev/null 2>&1 & echo $!;`,
-    "fi",
+    "fi;",
+    ")",
   ].join(" ");
 }
 
@@ -800,8 +862,9 @@ function buildDynamicMountOnceTemplate(
     ...dynamicMountArgs(opts, true),
   ].join(" ");
   return [
+    "(",
     ...dynamicMountTemplateSetup(opts),
-    `set --${pathArgsPlaceholderArg};`,
+    ...dynamicMountPreflight(pathArgsPlaceholderArg),
     'if [ "$#" -eq 0 ]; then',
     'relayfile_mount_local_dir="$relayfile_mount_local_root";',
     `${pathlessOnce};`,
@@ -811,7 +874,8 @@ function buildDynamicMountOnceTemplate(
     ...dynamicMountPathSetup(),
     `${dynamicOnce} || exit $?;`,
     "done;",
-    "fi",
+    "fi;",
+    ")",
   ].join(" ");
 }
 
