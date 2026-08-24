@@ -496,6 +496,14 @@ describe("exact local-layout contract", () => {
         pathArgs: " --remote-path '/github/../secrets'",
         message: /relayfile remote root contains a traversal segment/,
       },
+      {
+        pathArgs: " --remote-path 'github/repos/acme/cloud'",
+        message: /relayfile remote root must be absolute/,
+      },
+      {
+        pathArgs: " --remote-path '/'",
+        message: /relayfile remote root must not be empty/,
+      },
     ]) {
       let shell = template.startShellTemplate;
       for (const [key, value] of Object.entries(values)) {
