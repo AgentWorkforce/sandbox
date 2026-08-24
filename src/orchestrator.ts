@@ -206,21 +206,13 @@ export class SandboxOrchestrator<Handle> {
     const initialSyncIdleTimeoutSeconds = relayfileBootstrapIdleTimeoutSeconds(
       idleTimeoutMs / 1000,
     );
-    const start = await this.runtime.runScript(handle, {
-      command: withRelayfileBootstrapIdleTimeout(
-        buildRelayfileMountStartShell(config),
-        initialSyncIdleTimeoutSeconds,
-      ),
-      cwd,
-    });
-    if (start.exitCode !== 0) {
-      throw new Error(`Failed to start relayfile mount: ${start.output}`);
-    }
-
     // The initial sync can outlive any single exec (Daytona's proxy read
     // timeout is ~120s and callers wrap execs in client-side fail-fasts), so
     // it runs detached in the sandbox — keeping the in-sandbox idle watchdog
-    // — while we poll its exit sentinel with short, idempotent execs.
+    // — while we poll its exit sentinel with short, idempotent execs. Complete
+    // it before starting the daemon: both commands acquire the same per-root
+    // mount lease, and the exit sentinel is written only after the one-shot
+    // supervisor has exited and released that lease.
     const initialSyncRun = { runId: relayfileInitialSyncRunId() };
     const launch = await this.runtime.runScript(handle, {
       command: withRelayfileBootstrapIdleTimeout(
@@ -292,6 +284,17 @@ export class SandboxOrchestrator<Handle> {
         );
       }
       await sleepMs(pollIntervalMs);
+    }
+
+    const start = await this.runtime.runScript(handle, {
+      command: withRelayfileBootstrapIdleTimeout(
+        buildRelayfileMountStartShell(config),
+        initialSyncIdleTimeoutSeconds,
+      ),
+      cwd,
+    });
+    if (start.exitCode !== 0) {
+      throw new Error(`Failed to start relayfile mount: ${start.output}`);
     }
 
     const pid = start.output.trim().split(/\s+/).at(-1);
