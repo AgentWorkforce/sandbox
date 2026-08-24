@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,8 +18,13 @@ import {
   buildRelayfileMountStartShell,
   buildRelayfileMountFlushShell,
   buildRelayfileMountInitialSyncShell,
+  buildRelayfileMountInitialSyncBackgroundShell,
   buildRelayfileMountPathArgsShell,
   buildRelayfileMountShellTemplate,
+  RELAYFILE_INITIAL_SYNC_EXIT_PATH,
+  RELAYFILE_INITIAL_SYNC_LOG_PATH,
+  RELAYFILE_INITIAL_SYNC_PID_PATH,
+  RELAYFILE_INITIAL_SYNC_SCRIPT_PATH,
 } from "./mount-script.js";
 
 const TOKEN = "relay_pa_thisisasecrettoken_do_not_leak";
@@ -709,6 +715,285 @@ describe("initial-sync idle watchdog progress files", () => {
       ),
       "armed the legacy `.relayfile-mount-state.json` name, which relayfile-mount " +
         "only ever wrote under the LOCAL root — never under --state-dir",
+    );
+  });
+});
+
+/**
+ * Regression guard for AgentWorkforce/sandbox#30.
+ *
+ * The detached initial-sync launcher generates a shell script under /tmp and
+ * hands it to a background process. Two things went wrong at once:
+ *
+ *   - `cat > <script>` created the file at the process umask default, so under
+ *     the production sandbox's 022 umask the script landed group/world
+ *     readable; and
+ *   - the default `argv` ingress rendered the path-scoped token into that
+ *     script as a `--token` literal.
+ *
+ * Together those left a reusable credential readable by any sibling process in
+ * the sandbox, even though a mode-0600 creds file was already being supplied
+ * alongside the launch command. The script also outlived the sync that used it.
+ *
+ * These tests execute the real launcher through /bin/sh under an explicit 022
+ * umask and assert against the file that actually lands on disk — a string
+ * assertion on the generated shell would not have caught the umask defect.
+ */
+describe("detached initial-sync script credential hygiene (sandbox#30)", () => {
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function waitFor(
+    predicate: () => boolean,
+    { timeoutMs = 15_000, stepMs = 25 } = {},
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) {
+        return true;
+      }
+      await sleep(stepMs);
+    }
+    return predicate();
+  }
+
+  /**
+   * Paths the launcher owns for a given run id. Registered for removal so a
+   * failing assertion cannot leave a credential-bearing file behind in /tmp.
+   */
+  function runPaths(t: TestContext, runId: string): {
+    scriptPath: string;
+    exitPath: string;
+    logPath: string;
+    pidPath: string;
+  } {
+    const paths = {
+      scriptPath: `${RELAYFILE_INITIAL_SYNC_SCRIPT_PATH}.${runId}`,
+      exitPath: `${RELAYFILE_INITIAL_SYNC_EXIT_PATH}.${runId}`,
+      logPath: `${RELAYFILE_INITIAL_SYNC_LOG_PATH}.${runId}`,
+      pidPath: `${RELAYFILE_INITIAL_SYNC_PID_PATH}.${runId}`,
+    };
+    t.after(() => {
+      for (const path of Object.values(paths)) {
+        rmSync(path, { force: true });
+      }
+    });
+    return paths;
+  }
+
+  /**
+   * A relayfile-mount stand-in that blocks until a release file appears, so the
+   * generated script is guaranteed to still be on disk while the test stats it.
+   * The bounded spin means a wedged test cannot leave the fake running forever.
+   */
+  function blockingFakeMount(t: TestContext): {
+    binDir: string;
+    root: string;
+    release: () => void;
+  } {
+    const root = mkdtempSync(join(tmpdir(), "sandbox-sec30-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const binDir = join(root, "bin");
+    const mkdir = spawnSync("mkdir", ["-p", binDir]);
+    assert.equal(mkdir.status, 0, mkdir.stderr?.toString());
+
+    const releasePath = join(root, "release");
+    const fakeMount = join(binDir, "relayfile-mount");
+    writeFileSync(
+      fakeMount,
+      `#!/bin/sh
+attempts=0
+while [ ! -f '${releasePath}' ] && [ "$attempts" -lt 400 ]; do
+  attempts=$((attempts + 1))
+  sleep 0.05
+done
+exit 0
+`,
+    );
+    chmodSync(fakeMount, 0o755);
+    return {
+      binDir,
+      root,
+      release: () => writeFileSync(releasePath, "go"),
+    };
+  }
+
+  function launch(
+    launcher: string,
+    binDir: string,
+  ): ReturnType<typeof spawnSync> {
+    // The explicit 022 umask is the point: it is the production sandbox's
+    // umask, and it is what made `cat >` produce a 0644 script.
+    return spawnSync("/bin/sh", ["-c", `umask 022; ${launcher}`], {
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      encoding: "utf8",
+    });
+  }
+
+  it("creates the generated script at mode exactly 0600 under a 022 umask", async (t) => {
+    const runId = "sec30-mode";
+    const { scriptPath } = runPaths(t, runId);
+    const { binDir, root, release } = blockingFakeMount(t);
+
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      {
+        ...BASE,
+        localDir: join(root, "workspace"),
+        stateDir: join(root, "state"),
+        credsFilePath: join(root, "creds.json"),
+      },
+      { runId },
+    );
+    const result = launch(launcher, binDir);
+    assert.equal(result.status, 0, result.stderr);
+
+    assert.equal(
+      await waitFor(() => existsSync(scriptPath)),
+      true,
+      "launcher never produced the generated initial-sync script",
+    );
+
+    const mode = statSync(scriptPath).mode & 0o777;
+    assert.equal(
+      mode.toString(8),
+      "600",
+      "the generated script may carry a credential and must never be readable " +
+        "by another user or process in the sandbox",
+    );
+
+    release();
+  });
+
+  it("keeps the token literal out of the generated script under creds-file ingress", async (t) => {
+    const runId = "sec30-no-literal";
+    const { scriptPath } = runPaths(t, runId);
+    const { binDir, root, release } = blockingFakeMount(t);
+
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      {
+        ...BASE,
+        localDir: join(root, "workspace"),
+        stateDir: join(root, "state"),
+        credsFilePath: join(root, "creds.json"),
+        tokenIngress: "creds-file",
+      },
+      { runId },
+    );
+
+    assert.doesNotMatch(
+      launcher,
+      /--token/,
+      "creds-file ingress must not render --token anywhere in the launcher",
+    );
+    assert.ok(
+      !launcher.includes(TOKEN),
+      "creds-file ingress must not render the token literal in the launcher",
+    );
+    assert.match(launcher, /RELAYFILE_MOUNT_CREDS_FILE=/);
+
+    const result = launch(launcher, binDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      await waitFor(() => existsSync(scriptPath)),
+      true,
+      "launcher never produced the generated initial-sync script",
+    );
+
+    const contents = readFileSync(scriptPath, "utf8");
+    assert.ok(
+      !contents.includes(TOKEN),
+      "the on-disk generated script still contains the credential literal",
+    );
+    assert.equal(statSync(scriptPath).mode & 0o777, 0o600);
+
+    release();
+  });
+
+  it("still renders --token for the default argv ingress (older daemons)", () => {
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      { ...BASE, credsFilePath: "/etc/relayfile/creds.json" },
+      { runId: "sec30-compat" },
+    );
+    // A creds file alone must NOT silently drop the flag: pre-creds binaries
+    // ignore RELAYFILE_MOUNT_CREDS_FILE, so dropping --token for them would
+    // turn a working mount into a silent authentication failure. Removing the
+    // literal is opt-in via tokenIngress.
+    assert.match(launcher, /--token/);
+    assert.ok(launcher.includes(TOKEN));
+  });
+
+  it("rejects creds-file ingress that has no creds file to read", () => {
+    assert.throws(
+      () =>
+        buildRelayfileMountInitialSyncBackgroundShell(
+          { ...BASE, tokenIngress: "creds-file" },
+          { runId: "sec30-guard" },
+        ),
+      /credsFilePath/,
+      "creds-file ingress renders no token by any route, so a missing creds " +
+        "file must fail loudly at build time",
+    );
+  });
+
+  it("removes the generated script once the detached sync exits", async (t) => {
+    const runId = "sec30-cleanup";
+    const { scriptPath, exitPath, logPath } = runPaths(t, runId);
+    const { binDir, root, release } = blockingFakeMount(t);
+
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      {
+        ...BASE,
+        localDir: join(root, "workspace"),
+        stateDir: join(root, "state"),
+        credsFilePath: join(root, "creds.json"),
+        tokenIngress: "creds-file",
+      },
+      { runId },
+    );
+    const result = launch(launcher, binDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      await waitFor(() => existsSync(scriptPath)),
+      true,
+      "launcher never produced the generated initial-sync script",
+    );
+
+    release();
+
+    assert.equal(
+      await waitFor(() => existsSync(exitPath)),
+      true,
+      "detached sync never wrote its exit sentinel",
+    );
+    // The script is removed BEFORE the exit sentinel lands, so a poller that
+    // has observed completion can never race back and read the script.
+    assert.equal(
+      existsSync(scriptPath),
+      false,
+      "the generated script outlived the sync that used it",
+    );
+    // Non-secret diagnostics are deliberately preserved for failure analysis.
+    assert.equal(readFileSync(exitPath, "utf8").trim(), "0");
+    assert.equal(existsSync(logPath), true, "the sync log must be preserved");
+  });
+
+  it("verifies the landed mode before handing the script to a detached process", () => {
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      { ...BASE, credsFilePath: "/etc/relayfile/creds.json" },
+      { runId: "sec30-order" },
+    );
+    assert.match(
+      launcher,
+      /\(umask 077 && cat > /,
+      "the mode must be constrained at creation, not by a chmod after the " +
+        "write, which would leave a readable window",
+    );
+    const verifyAt = launcher.indexOf("relayfile_initial_sync_mode=");
+    const launchAt = launcher.indexOf("nohup sh -c");
+    assert.ok(verifyAt > 0, "expected a post-write mode verification");
+    assert.ok(
+      verifyAt < launchAt,
+      "the mode check must run before the script is handed to the detached process",
     );
   });
 });

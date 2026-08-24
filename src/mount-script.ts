@@ -66,10 +66,22 @@ export type RelayfileMountShellOptions = {
    *     omitted from argv entirely. Requires a daemon build that reads the
    *     `RELAYFILE_MOUNT_TOKEN` env var. Confirm that capability before
    *     flipping the default to `'env'`.
+   *   - `'creds-file'`: no token literal is rendered at all — not in argv, not
+   *     in the env prefix. The daemon reads the credential from the mode-0600
+   *     file named by `credsFilePath`, which is therefore required. This is the
+   *     only ingress that leaves a generated on-disk script free of a reusable
+   *     credential, so it is what the detached initial-sync launcher should use
+   *     wherever the daemon build is known to honour RELAYFILE_MOUNT_CREDS_FILE.
    *
-   * The credentials-in-argv exposure was tracked as AgentWorkforce/sandbox#21.
+   * `'creds-file'` is opt-in rather than implied by `credsFilePath` alone.
+   * Pre-creds binaries ignore the unknown env var (see `credsFilePath`), so
+   * dropping `--token` for them would turn a working mount into a silent
+   * authentication failure rather than a loud one.
+   *
+   * The credentials-in-argv exposure was tracked as AgentWorkforce/sandbox#21;
+   * the credential-in-generated-script exposure as AgentWorkforce/sandbox#30.
    */
-  tokenIngress?: "argv" | "env";
+  tokenIngress?: "argv" | "env" | "creds-file";
 };
 
 /**
@@ -95,6 +107,8 @@ const EXACT_LOCAL_LAYOUT_ARG = `--local-layout ${shellQuote("exact")}`;
  * RELAYFILE_MOUNT_CREDS_FILE (see `credsFilePath` docs for the version-skew
  * rationale). When `tokenIngress === 'env'`, adds
  * RELAYFILE_MOUNT_TOKEN=<literal> so the launch token never enters argv.
+ * When `tokenIngress === 'creds-file'` no token literal is emitted at all —
+ * the creds file is the sole ingress.
  * The explicit `env` executable is required because initial-sync commands can
  * sit directly behind coreutils `timeout`, which does not shell-parse a bare
  * `VAR=value` assignment.
@@ -102,6 +116,14 @@ const EXACT_LOCAL_LAYOUT_ARG = `--local-layout ${shellQuote("exact")}`;
 function mountEnvPrefix(
   opts: Pick<RelayfileMountShellOptions, "credsFilePath" | "tokenIngress" | "token">,
 ): string {
+  if (opts.tokenIngress === "creds-file" && !opts.credsFilePath) {
+    // Fail at build time, not as an unauthenticated daemon in the sandbox:
+    // this ingress deliberately renders no token, so without a creds file the
+    // command carries no credential by any route.
+    throw new Error(
+      "relayfile mount tokenIngress 'creds-file' requires credsFilePath",
+    );
+  }
   const parts: string[] = [];
   if (opts.credsFilePath) {
     parts.push(`RELAYFILE_MOUNT_CREDS_FILE=${shellQuote(opts.credsFilePath)}`);
@@ -325,18 +347,41 @@ export function buildRelayfileMountInitialSyncBackgroundShell(
     "fi;",
     "relayfile_initial_sync_pid=$!;",
     `echo "$relayfile_initial_sync_pid" > ${shellQuote(pidPath)};`,
-    'wait "$relayfile_initial_sync_pid";',
-    `echo $? > ${shellQuote(exitPath)}`,
+    "relayfile_initial_sync_status=0;",
+    'wait "$relayfile_initial_sync_pid" || relayfile_initial_sync_status=$?;',
+    // Shred the generated script the moment the sync is done with it, and do
+    // it BEFORE the exit sentinel lands: a poller that sees the sentinel must
+    // never be able to race back and read the script. The log, pid and exit
+    // sentinels survive — they are the non-secret failure diagnostics.
+    `rm -f ${shellQuote(scriptPath)};`,
+    `echo "$relayfile_initial_sync_status" > ${shellQuote(exitPath)}`,
   ].join(" ");
   return [
     "set -e",
-    `rm -f ${shellQuote(scriptPath)} ${shellQuote(exitPath)} ${shellQuote(logPath)} ${shellQuote(pidPath)} &&`,
-    // Quoted heredoc delimiter: the sync shell lands in the script file
-    // verbatim, with no re-quoting hazards from nesting it in `sh -c`.
-    `cat > ${shellQuote(scriptPath)} <<'RELAYFILE_INITIAL_SYNC_EOF'
+    `rm -f ${shellQuote(scriptPath)} ${shellQuote(exitPath)} ${shellQuote(logPath)} ${shellQuote(pidPath)}`,
+    // The script can carry a credential (see `tokenIngress`), so it must never
+    // exist group/world-readable for even an instant. `umask 077` in a subshell
+    // constrains the mode at creation — a chmod after the write would leave a
+    // readable window a sibling process could win. Quoted heredoc delimiter:
+    // the sync shell lands in the file verbatim, with no re-quoting hazards
+    // from nesting it in `sh -c`.
+    `(umask 077 && cat > ${shellQuote(scriptPath)}) <<'RELAYFILE_INITIAL_SYNC_EOF'
 ${syncShell}
-RELAYFILE_INITIAL_SYNC_EOF
-`,
+RELAYFILE_INITIAL_SYNC_EOF`,
+    // Defence in depth: confirm the mode that actually landed before handing
+    // the script to a detached process. GNU/busybox spell it `stat -c %a`,
+    // BSD `stat -f %Lp`. If neither exists we cannot read the mode back, but
+    // the umask above already fixed it at creation, so `unknown` is tolerated
+    // rather than failing a sandbox shut for lacking `stat`.
+    `relayfile_initial_sync_mode=$(stat -c %a ${shellQuote(scriptPath)} 2>/dev/null || stat -f %Lp ${shellQuote(scriptPath)} 2>/dev/null || echo unknown)`,
+    'case "$relayfile_initial_sync_mode" in',
+    "  600|unknown) ;;",
+    "  *)",
+    `    rm -f ${shellQuote(scriptPath)};`,
+    '    echo "relayfile initial sync script is mode $relayfile_initial_sync_mode, not 600; refusing to launch" >&2;',
+    "    exit 1",
+    "    ;;",
+    "esac",
     `nohup sh -c ${shellQuote(runner)} >/dev/null 2>&1 & echo $!`,
   ].join("\n");
 }
@@ -479,10 +524,13 @@ function buildMountArgs(opts: RelayfileMountShellOptions): string[] {
     `--workspace ${shellQuote(opts.workspaceId)}`,
     `--local-dir ${shellQuote(opts.localDir)}`,
     `--state-dir ${shellQuote(opts.stateDir)}`,
-    // Token goes via env prefix (see mountEnvPrefix) when tokenIngress === 'env',
-    // so it never enters argv. Otherwise it is emitted as --token for
+    // Token goes via env prefix (see mountEnvPrefix) when tokenIngress === 'env'
+    // and is not rendered at all when tokenIngress === 'creds-file', so in
+    // neither case does it enter argv. Otherwise it is emitted as --token for
     // backwards compat with daemon builds that only read the flag.
-    ...(opts.tokenIngress === "env" ? [] : [`--token ${shellQuote(opts.token)}`]),
+    ...(opts.tokenIngress === "env" || opts.tokenIngress === "creds-file"
+      ? []
+      : [`--token ${shellQuote(opts.token)}`]),
     ...(opts.websocket === false ? ["--websocket=false"] : []),
     ...(opts.lazyRepos ? ["--lazy-repos"] : []),
     ...scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true })
