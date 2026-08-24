@@ -39,6 +39,25 @@ function recordingRuntime() {
  * their first real page — see AgentWorkforce/sandbox-router#11.
  */
 describe("startMount initial-sync idle budget", () => {
+  it("finishes the one-shot initial sync before starting the daemon", async () => {
+    const { orchestrator, commands } = recordingRuntime();
+    await orchestrator.startMount({ id: "sbx" }, MOUNT);
+
+    const initialSyncIndex = commands.findIndex((command) =>
+      command.includes("relayfile-initial-sync-exit:"),
+    );
+    const daemonIndex = commands.findIndex((command) =>
+      command.includes("nohup relayfile-mount"),
+    );
+
+    assert.notEqual(initialSyncIndex, -1, "initial sync was never launched");
+    assert.notEqual(daemonIndex, -1, "daemon was never started");
+    assert.ok(
+      initialSyncIndex < daemonIndex,
+      "daemon must not hold the mount lease while one-shot initial sync runs",
+    );
+  });
+
   it("defaults to 90s, matching relayfile's own bootstrap idle timeout", async () => {
     const { orchestrator, commands } = recordingRuntime();
     await orchestrator.startMount({ id: "sbx" }, MOUNT);
