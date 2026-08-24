@@ -1,0 +1,7 @@
+{"at":"2026-08-24T09:17:22.649Z","runId":"a37-idle-20260824091709-269a96","event":"created","resource":"agent37-instance","id":"5z0a0kf8x4"}
+{"at":"2026-08-24T09:17:23.047Z","runId":"a37-idle-20260824091709-269a96","event":"verified","resource":"provider-idle-config","autoSleep":true,"idleTimeoutSeconds":60}
+{"at":"2026-08-24T09:17:23.919Z","runId":"a37-idle-20260824091709-269a96","event":"verified","resource":"provider-ready","execExitCode":0}
+{"at":"2026-08-24T09:20:20.531Z","runId":"a37-idle-20260824091709-269a96","event":"verified","resource":"provider-auto-sleep","status":"sleeping","durationMs":176614}
+{"at":"2026-08-24T09:20:26.287Z","runId":"a37-idle-20260824091709-269a96","event":"verified","resource":"provider-wake","status":"running","execExitCode":0,"durationMs":5756}
+{"at":"2026-08-24T09:20:39.118Z","runId":"a37-idle-20260824091709-269a96","event":"verified","resource":"controller-stop-resume","stopMs":3712,"resumeReadyMs":9118,"postResumeExec":true}
+{"at":"2026-08-24T09:20:46.801Z","runId":"a37-idle-20260824091709-269a96","event":"destroyed","resource":"agent37-instance","id":"5z0a0kf8x4","reason":"success","verifiedGone":true}

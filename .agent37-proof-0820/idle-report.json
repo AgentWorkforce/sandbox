@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "runId": "a37-idle-20260824091709-269a96",
+  "metrics": {
+    "create_ms": 13366,
+    "provider_ready_ms": 872,
+    "provider_auto_sleep_ms": 176614,
+    "provider_wake_ready_ms": 5756,
+    "controller_stop_ms": 3712,
+    "controller_resume_ready_ms": 9118,
+    "destroy_ms": 7358,
+    "verified_gone_ms": 323
+  },
+  "idle": {
+    "configuredAutoSleep": true,
+    "configuredIdleTimeoutSeconds": 60,
+    "observedSleeping": true
+  },
+  "measurement": {
+    "provider_auto_sleep_ms": "successful readiness exec return to first GET status=sleeping",
+    "provider_wake_ready_ms": "first observed sleeping to status=running plus successful node --version exec",
+    "controller_stop_ms": "stop request start to first GET status=stopped",
+    "controller_resume_ready_ms": "first observed stopped to status=running plus successful node --version exec",
+    "destroy_ms": "idempotent DELETE wall time",
+    "verified_gone_ms": "DELETE return to first GET 404"
+  },
+  "cost": {
+    "upperBoundUsd": 0.000441,
+    "capUsd": 0.05
+  }
+}

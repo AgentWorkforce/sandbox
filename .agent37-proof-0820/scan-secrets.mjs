@@ -4,7 +4,7 @@ import { join } from 'node:path';
 const names = ['RELAY_NODE_TOKEN', 'RELAY_WORKER_AGENT_TOKEN', 'RELAYFILE_TOKEN', 'RELAYHISTORY_ACCESS_TOKEN'];
 const secrets = names.map((name) => process.env[name]).filter((value) => typeof value === 'string' && value.length > 0);
 if (secrets.length !== names.length) throw new Error('secret scanner missing a named inherited value');
-const roots = ['/opt/agent37-proof', '/root/.relayfile', '/root/.agentworkforce'];
+const roots = ['/tmp/agent37-proof', `${process.env.HOME ?? ''}/.relayfile`, `${process.env.HOME ?? ''}/.agentworkforce`];
 let files = 0;
 let leaks = 0;
 function walk(path) {

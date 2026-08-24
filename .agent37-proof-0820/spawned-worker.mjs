@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createAgentClient } from '@agent-relay/sdk';
 
-const root = '/opt/agent37-proof';
+const root = '/tmp/agent37-proof';
 const runId = process.env.PROOF_RUN_ID ?? '';
 const expected = process.env.PROOF_SENTINEL ?? '';
 const finalMarker = process.env.PROOF_FINAL_MARKER ?? '';
@@ -36,4 +36,3 @@ const trajectory = {
 writeFileSync(`${root}/trajectories/final-${runId}.json`, JSON.stringify(trajectory));
 await client.send('general', `AGENT37_WORKER_QUIESCED ${runId}`);
 writeFileSync(`${root}/state/worker-quiesced.json`, JSON.stringify({ ok: true, runId }));
-

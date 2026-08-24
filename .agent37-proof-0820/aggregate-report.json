@@ -1,0 +1,75 @@
+{
+  "ok": true,
+  "provider": "agent37",
+  "recordedAt": "2026-08-24T09:21:00Z",
+  "primaryLifecycleRun": {
+    "runId": "a37-20260824091154-21583d",
+    "outcome": "success",
+    "metrics": {
+      "bare_create_ms": 12741,
+      "provider_ready_ms": 1183,
+      "agent_relay_ready_ms": 146723,
+      "bootstrap_gap_ms": 133982,
+      "history_first_cloud_receipt_ms": 2198,
+      "targeted_spawn_ready_ms": 6204,
+      "repo_mount_read_ms": 7360,
+      "history_drain_before_destroy_ms": 5681,
+      "destroy_ms": 6424,
+      "verified_gone_ms": 328
+    }
+  },
+  "secondaryLifecycleRun": {
+    "runId": "a37-20260824090702-4599f9",
+    "outcome": "lifecycle assertions succeeded; harness reported failure because Relayfile DELETE returned queued HTTP 202 before the verification fix",
+    "metrics": {
+      "bare_create_ms": 13037,
+      "provider_ready_ms": 1243,
+      "agent_relay_ready_ms": 164494,
+      "bootstrap_gap_ms": 151457,
+      "history_first_cloud_receipt_ms": 2266,
+      "targeted_spawn_ready_ms": 5373,
+      "repo_mount_read_ms": 7426,
+      "history_drain_before_destroy_ms": 7690,
+      "destroy_ms": 4851,
+      "verified_gone_ms": 288
+    }
+  },
+  "idleProbe": {
+    "runId": "a37-idle-20260824091709-269a96",
+    "configuredAutoSleep": true,
+    "configuredIdleTimeoutSeconds": 60,
+    "observedSleeping": true,
+    "metrics": {
+      "create_ms": 13366,
+      "provider_ready_ms": 872,
+      "provider_auto_sleep_ms": 176614,
+      "provider_wake_ready_ms": 5756,
+      "controller_stop_ms": 3712,
+      "controller_resume_ready_ms": 9118,
+      "destroy_ms": 7358,
+      "verified_gone_ms": 323
+    }
+  },
+  "actualApiSurface": {
+    "hostingExecRequestResponse": true,
+    "instanceFilePutGet": true,
+    "relayfileMountReadable": true,
+    "sseConversationOnly": false,
+    "sandboxRuntimeFit": "yes"
+  },
+  "idleConclusion": {
+    "providerAutoSleepExists": true,
+    "controllerStopResumeExists": true,
+    "backgroundRelayNodePreventsSleep": false,
+    "pricing": {
+      "sleepTolerantDailyUsdCandidate": 0.0248,
+      "uninterruptedDailyUsdCandidate": 0.1565,
+      "conclusion": "The lower figure is defensible only for sleep-tolerant, controller-woken workloads. For an uninterrupted long-running Relay node, use the always-on figure."
+    }
+  },
+  "cleanup": {
+    "primaryLifecycleVerifiedGone": true,
+    "idleProbeVerifiedGone": true,
+    "proofTaggedInstancesAfterRuns": 0
+  }
+}

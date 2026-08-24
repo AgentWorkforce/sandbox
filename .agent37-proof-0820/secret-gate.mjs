@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { Agent37Runtime, composeScript } from '/Users/khaliqgant/Projects/AgentWorkforce/.worktrees/sandbox-agent37-0819/src/agent37/runtime.ts';
+import { Agent37Runtime, composeScript } from '../src/agent37/runtime.ts';
 
 const secret = `dummy_${randomBytes(24).toString('hex')}`;
 const root = mkdtempSync(join(tmpdir(), 'agent37-secret-gate-'));

@@ -1,20 +1,86 @@
 {
-  "ok": false,
-  "error": "remote exit 1: sh: 1: cd: can't cd to /opt/agent37-proof\n",
-  "cleanupFailures": [],
-  "reportPath": "/Users/khaliqgant/Projects/AgentWorkforce/sandbox/.agent37-proof-0820/report.json",
-  "ledgerPath": "/Users/khaliqgant/Projects/AgentWorkforce/sandbox/.agent37-proof-0820/resource-ledger.jsonl",
-  "runId": "a37-20260820124257-7d3cee",
+  "ok": true,
+  "runId": "a37-20260824091154-21583d",
+  "provider": "agent37",
+  "sampleCount": 1,
   "metrics": {
-    "bare_create_ms": 12671,
-    "provider_ready_ms": "UNKNOWN",
-    "agent_relay_ready_ms": "UNKNOWN",
-    "bootstrap_gap_ms": "UNKNOWN",
-    "history_first_cloud_receipt_ms": "UNKNOWN",
-    "targeted_spawn_ready_ms": "UNKNOWN",
-    "repo_mount_read_ms": "UNKNOWN",
-    "history_drain_before_destroy_ms": "UNKNOWN",
-    "destroy_ms": "UNKNOWN",
-    "verified_gone_ms": "UNKNOWN"
+    "bare_create_ms": 12741,
+    "provider_ready_ms": 1183,
+    "agent_relay_ready_ms": 146723,
+    "bootstrap_gap_ms": 133982,
+    "history_first_cloud_receipt_ms": 2198,
+    "targeted_spawn_ready_ms": 6204,
+    "repo_mount_read_ms": 7360,
+    "history_drain_before_destroy_ms": 5681,
+    "destroy_ms": 6424,
+    "verified_gone_ms": 328
+  },
+  "versions": {
+    "agentRelay": "11.8.0",
+    "relayfile": "0.10.45",
+    "relayhistory": "b5a469b9132f51512e47496fb01c912469bcfd63"
+  },
+  "proof": {
+    "nodeOnline": true,
+    "targetedSpawnConfirmed": true,
+    "repoMountSentinelRead": true,
+    "firstHistoryReceipt": true,
+    "finalHistoryReceipt": true,
+    "providerHostingExec": true,
+    "providerFilePutGet": true,
+    "providerAutoSleep": "UNKNOWN",
+    "controllerStopResume": true,
+    "destroyRaceNegativeControl": "PASS",
+    "providerGone": true
+  },
+  "apiSurface": {
+    "hostingExecRequestResponse": true,
+    "providerFilePutGet": true,
+    "providerTransferPlane": "instance-file-api",
+    "sseConversationOnly": false,
+    "conclusion": "actual hosting-plane exec and instance-plane file round trips succeeded"
+  },
+  "fileSurface": {
+    "hostingExec": true,
+    "providerPutGet": true,
+    "providerRoundTripBytes": 46,
+    "relayfileMount": true,
+    "instanceUrlPresent": true,
+    "providerTransferPlane": "instance-file-api"
+  },
+  "idle": {
+    "providerAutoSleep": "UNKNOWN",
+    "configuredAutoSleep": false,
+    "configuredIdleTimeoutSeconds": 300,
+    "observedAutoSleep": false,
+    "controllerStopResume": true,
+    "stopMs": 4750,
+    "resumeReadyMs": 11083,
+    "providerAutoSleepReason": "disabled for the uninterrupted full-lifecycle sample; measured by the separate idle probe",
+    "proofRootRetainedAfterResume": true
+  },
+  "measurement": {
+    "bare_create_ms": "wall time of POST create through parsed running instance response",
+    "provider_ready_ms": "create return to successful node --version exec with exit code 0",
+    "agent_relay_ready_ms": "create start to Relay roster status=online with spawn:proof capability",
+    "bootstrap_gap_ms": "agent_relay_ready_ms minus bare_create_ms",
+    "history_first_cloud_receipt_ms": "ai-hist push start to pair-check matching marker, session id, and event id",
+    "targeted_spawn_ready_ms": "placement request start to worker-written ready file containing run id",
+    "repo_mount_read_ms": "placement request start to worker-written mount-read file after exact sentinel comparison",
+    "history_drain_before_destroy_ms": "quiesce request to final cloud pair-check matching marker, session id, and event id",
+    "destroy_ms": "DELETE lifecycle call wall time",
+    "verified_gone_ms": "DELETE return to first GET-by-id null assertion"
+  },
+  "cleanup": {
+    "nodeOffline": true,
+    "mountStopped": true,
+    "sentinelDeleted": true,
+    "relayAgentsReleased": true,
+    "relayhistorySessionRevoked": true,
+    "relayWorkspaceDisposableKeyDiscarded": true
+  },
+  "cost": {
+    "upperBoundUsd": 0.000442,
+    "capUsd": 0.3
   }
 }

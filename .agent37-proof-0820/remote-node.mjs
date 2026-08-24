@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { action, defineNode, serveNode } from '@agent-relay/fleet';
 import { z } from 'zod';
 
-const root = '/opt/agent37-proof';
+const root = '/tmp/agent37-proof';
 const publicEnv = {
   PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
   HOME: '/root',
@@ -43,7 +43,7 @@ const proof = action({
 const definition = defineNode({
   name: process.env.RELAY_NODE_NAME ?? 'agent37-proof-node',
   maxAgents: 1,
-  version: 'agent-relay-11.8.0-agent37-proof1',
+  version: 'agent-relay-11.8.0-agent37-proof4',
   repoPaths: { 'agent37/proof': `${root}/repo` },
   capabilities: { 'spawn:proof': proof },
 });
@@ -71,4 +71,3 @@ await serveNode({
   onRegistered: () => process.stdout.write('[node] registered\n'),
 });
 await stopWatch;
-
