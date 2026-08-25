@@ -846,13 +846,30 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     // caller's workdir was unusable.
     //
     // The probe is skipped when no cwd was requested — there is nothing to
-    // verify — and its own `requestTimeoutMs` matches the main exec so the
-    // caller's wait budget bounds both halves.
+    // verify.
+    //
+    // When both the probe and the main exec run, they share ONE request
+    // budget: `requestTimeoutMs` from the caller is a total wait limit for
+    // `runScript`, not per-exec. Passing the full timeout to each call in
+    // sequence would let a two-hop runScript wait up to `2 × requestTimeoutMs`,
+    // silently exceeding the caller's contract. Instead, capture a monotonic
+    // start, and pass the remaining budget to each downstream `execRaw`.
+    // Node's `Date.now()` is a millisecond wall clock; a small skew between
+    // successive reads is fine because the budget is coarse to begin with.
+    const startAt = options.requestTimeoutMs !== undefined ? Date.now() : undefined;
+    const remainingBudgetMs = (): number | undefined => {
+      if (options.requestTimeoutMs === undefined || startAt === undefined) return undefined;
+      const remaining = options.requestTimeoutMs - (Date.now() - startAt);
+      // The client treats `<= 0` as "no timeout at all", which would silently
+      // uncancel an already-expired request. Floor at 1 so an over-budget
+      // call still aborts immediately rather than running to completion.
+      return remaining <= 0 ? 1 : remaining;
+    };
     if (cwd) {
       const probe = await this.execRaw(
         handle.id,
         `cd ${shellQuote(cwd)}\n`,
-        options.requestTimeoutMs,
+        remainingBudgetMs(),
       );
       // Only a KNOWN nonzero exit is proof of a workdir fault. An unknown
       // outcome (no exit_code in the response) is exactly that — unknown —
@@ -874,7 +891,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     // lifetime, and it got here only because the provider's own cap already
     // satisfies it — turning it into an HTTP abort would abandon the response
     // while the command ran on.
-    const result = await this.execRaw(handle.id, script, options.requestTimeoutMs);
+    const result = await this.execRaw(handle.id, script, remainingBudgetMs());
     return {
       output: combineOutput(result.stdout, result.stderr),
       ...(result.stdout ? { stdout: result.stdout } : {}),
