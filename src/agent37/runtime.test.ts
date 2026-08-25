@@ -132,6 +132,7 @@ function execCommand(request: RecordedRequest): string {
   return parsed.command as string;
 }
 
+
 /** Strip comments so a source scan reads code, not the prose explaining it. */
 function withoutComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
@@ -905,7 +906,13 @@ describe("Agent37Runtime.runScript", () => {
       env: { TOKEN_NAME: "it's fine" },
     });
 
-    const request = h.requests[0] as RecordedRequest;
+    // Two exec calls when cwd is set: pre-execution cwd probe, then the
+    // composed script itself. The probe body carries only the cwd — the
+    // sandbox has no material with which to spoof the workdir signal.
+    assert.equal(h.requests.length, 2);
+    assert.equal(execCommand(h.requests[0] as RecordedRequest), "cd '/work/repo'\n");
+
+    const request = h.requests[1] as RecordedRequest;
     assert.equal(request.url, `${TEST_BASE_URL}/v1/instances/ab12cd34ef/exec`);
     const parsed = JSON.parse(bodyText(request)) as Record<string, unknown>;
     assert.deepEqual(
@@ -913,20 +920,125 @@ describe("Agent37Runtime.runScript", () => {
       ["command"],
       "exec takes exactly one field; anything else is rejected by the API",
     );
+    // No in-band marker: reclassification is decided by the probe, not by
+    // scanning the composed script's output. The cd guard is a plain
+    // `|| exit 191` so a race between the probe and the exec does not let
+    // the user command run in the shell's inherited directory.
     assert.equal(
       parsed.command,
-      "cd '/work/repo' || exit 1\nexport TOKEN_NAME='it'\\''s fine'\nnpm test\n",
+      "cd '/work/repo' || exit 191\nexport TOKEN_NAME='it'\\''s fine'\nnpm test\n",
     );
     assert.deepEqual(result, { output: "ok\n", stdout: "ok\n", exitCode: 0 });
   });
 
-  it("falls back to the handle's workdir and omits cd when there is none", async () => {
+  it("falls back to the handle's workdir and omits both the probe and the cd when there is none", async () => {
     const h = harness(() => ({ json: { exit_code: 0, stdout: "", stderr: "" } }));
     const runtime = makeRuntime(h);
+    // Handle carries a workdir: probe first, then composed script.
     await runtime.runScript({ ...RUNNING_HANDLE, workdir: "/from/handle" }, { command: "ls" });
-    assert.match(execCommand(h.requests[0] as RecordedRequest), /^cd '\/from\/handle' \|\| exit 1\n/);
+    assert.equal(execCommand(h.requests[0] as RecordedRequest), "cd '/from/handle'\n");
+    assert.match(
+      execCommand(h.requests[1] as RecordedRequest),
+      /^cd '\/from\/handle' \|\| exit 191\nls\n$/,
+    );
+    // No workdir anywhere: no probe, no cd guard. Bare command only.
     await runtime.runScript(RUNNING_HANDLE, { command: "ls" });
-    assert.equal(execCommand(h.requests[1] as RecordedRequest), "ls\n");
+    assert.equal(execCommand(h.requests[2] as RecordedRequest), "ls\n");
+  });
+
+  it("names an unusable workdir before running any user command", async () => {
+    // The regression this guards: ten unrelated probes against `workdir:
+    // '/root'` all came back exit 1, and the lane concluded /root did not
+    // exist. It exists — root-owned, mode 0700, unreachable by the template's
+    // `node` user — and every exit 1 was the `cd`. The pre-execution probe
+    // catches this before any user command runs.
+    const h = harness(() => ({
+      json: {
+        exit_code: 1,
+        stdout: "",
+        stderr: "sh: 1: cd: can't cd to /root\n",
+      },
+    }));
+    const runtime = makeRuntime(h);
+    await assert.rejects(
+      runtime.runScript(RUNNING_HANDLE, { command: "id", cwd: "/root" }),
+      (error: unknown) => {
+        assert.ok(error instanceof pkg.Agent37WorkdirUnusableError);
+        assert.equal(error.instanceId, "ab12cd34ef");
+        assert.equal(error.workdir, "/root");
+        assert.match(error.output, /can't cd to \/root/);
+        return true;
+      },
+    );
+    // Only the probe ran — the user command never got a chance to execute.
+    assert.equal(h.requests.length, 1);
+    assert.equal(execCommand(h.requests[0] as RecordedRequest), "cd '/root'\n");
+  });
+
+  it("does not reclassify when a hostile command tries to fake a workdir failure from inside the sandbox", async () => {
+    // The probe is the only signal a user command inside the sandbox cannot
+    // reach — it runs no user script and its exit code comes straight from
+    // the shell. Whatever a command prints or which code it exits with, if
+    // the probe said the cwd is usable, the result is an ordinary command
+    // exit, never `Agent37WorkdirUnusableError`.
+    const h = harness((_request, index) => {
+      if (index === 0) {
+        // Probe: cd succeeds; the workdir is fine.
+        return { json: { exit_code: 0, stdout: "", stderr: "" } };
+      }
+      // Main script: hostile command exits 191 and prints the deprecated
+      // marker prefix in an attempt to look like a workdir fault.
+      return {
+        json: {
+          exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
+          stdout: "",
+          stderr: `${pkg.AGENT37_WORKDIR_UNUSABLE_MARKER}\nhostile output\n`,
+        },
+      };
+    });
+    const result = await makeRuntime(h).runScript(RUNNING_HANDLE, {
+      command: `printf '%s\\n' '${pkg.AGENT37_WORKDIR_UNUSABLE_MARKER}' >&2; exit 191`,
+      cwd: "/work",
+    });
+    assert.equal(result.exitCode, pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE);
+    assert.match(result.output, /hostile output/);
+  });
+
+  it("does not treat an unknown probe outcome as a workdir failure", async () => {
+    // A response that omits `exit_code` is unknown, not a `cd` failure. If
+    // the probe returns nothing conclusive, run the user command anyway and
+    // let its own outcome speak — spoofing the workdir classifier through a
+    // malformed probe response must not be possible.
+    const h = harness((_request, index) => {
+      if (index === 0) {
+        // Probe: no exit_code — unknown outcome.
+        return { json: { stdout: "", stderr: "" } };
+      }
+      return { json: { exit_code: 0, stdout: "ran", stderr: "" } };
+    });
+    const result = await makeRuntime(h).runScript(RUNNING_HANDLE, {
+      command: "true",
+      cwd: "/work",
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.output, "ran");
+  });
+
+  it("passes the caller's requestTimeoutMs to the pre-execution probe", async () => {
+    // The probe must be bounded by the same request budget as the main exec
+    // — otherwise `runScript` could outlive the caller's wait limit whenever
+    // a cwd is set.
+    const h = harness(() => ({ json: { exit_code: 0, stdout: "", stderr: "" } }));
+    await makeRuntime(h).runScript(RUNNING_HANDLE, {
+      command: "true",
+      cwd: "/work",
+      requestTimeoutMs: 1234,
+    });
+    assert.equal(h.requests.length, 2);
+    // AbortController presence on the probe request is the observable proof
+    // that the timeout was propagated to `execRaw`.
+    assert.equal((h.requests[0] as RecordedRequest).hasSignal, true, "probe must carry an abort signal");
+    assert.equal((h.requests[1] as RecordedRequest).hasSignal, true, "main exec must carry an abort signal");
   });
 
   it("reports a nonzero exit as a result, not an error, and combines the streams", async () => {

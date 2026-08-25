@@ -301,6 +301,72 @@ export class Agent37UnknownExitCodeError extends Error {
 }
 
 /**
+ * Exit status the composed script leaves behind when its own `cd` guard
+ * trips — i.e. the cwd went away between the pre-execution probe and the
+ * script's own `cd`, and the user command was not permitted to run in the
+ * shell's inherited directory instead.
+ *
+ * Reclassification of a run to {@link Agent37WorkdirUnusableError} is
+ * decided by the out-of-band probe in {@link Agent37Runtime.runScript}, not
+ * by scanning the result for this code — the code exists so the composed
+ * script fails visibly instead of silently misdirecting the user command,
+ * not as a signal a user command could not also produce. The probe is what
+ * a user command inside the sandbox cannot reach.
+ *
+ * The original bug that shaped this design: a lane pointed an Agent37
+ * instance at `workdir: '/root'`, watched ten unrelated probes all return
+ * exit 1, and concluded from it that `/root` did not exist. It does exist
+ * — as `drwx------ root root`, unreachable by the template's `node` user —
+ * and every one of those exit 1s was the `cd`. The pre-execution probe
+ * catches that class of fault before any user command runs.
+ */
+export const AGENT37_WORKDIR_UNUSABLE_EXIT_CODE = 191;
+
+/**
+ * @deprecated The workdir-unusable classifier no longer relies on an in-band
+ * marker string — reclassification is decided by an out-of-band probe. This
+ * constant is preserved only so callers that pattern-match legacy shell
+ * output for debugging continue to compile. It is not emitted by
+ * {@link composeScript}.
+ */
+export const AGENT37_WORKDIR_UNUSABLE_MARKER = "__agent37_workdir_unusable__";
+
+/**
+ * Raised when the instance could not enter the requested working directory.
+ *
+ * This is a *configuration* fault, not a command failure: nothing the caller
+ * asked to run ever ran. Reporting it as `exitCode: 191` would leave the
+ * caller to infer that from stderr, which is exactly the inference that got
+ * made wrongly before. So it is named instead.
+ *
+ * The most common cause is a `workdir` that belongs to another user. Agent37's
+ * template runs as `node` (uid 1000) with `HOME=/home/node`; `/root` exists but
+ * is mode 0700 and owned by root, so pointing a launch at it fails every
+ * command on the box. See `docs/agent37.md`.
+ */
+export class Agent37WorkdirUnusableError extends Error {
+  /** Instance the command was sent to. */
+  readonly instanceId: string;
+  /** The directory the script could not enter. */
+  readonly workdir: string;
+  /** Whatever the shell said, kept so the underlying reason is not lost. */
+  readonly output: string;
+
+  constructor(instanceId: string, workdir: string, output: string) {
+    super(
+      `Agent37 could not enter working directory "${workdir}" on instance ` +
+        `"${instanceId}", so the command never ran. Check that the directory ` +
+        `exists and is readable by the template's user — the Agent37 template ` +
+        `runs as "node" with HOME=/home/node, and /root is root-owned mode 0700.`,
+    );
+    this.name = "Agent37WorkdirUnusableError";
+    this.instanceId = instanceId;
+    this.workdir = workdir;
+    this.output = output;
+  }
+}
+
+/**
  * Raised when a caller asks for a command lifetime Agent37 cannot enforce.
  *
  * `timeoutMs` on the port means the command is no longer running once it
@@ -771,6 +837,52 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       assertValidEnv(options.env);
     }
     const cwd = options.cwd ?? handle.workdir;
+    // Prove the cwd is usable BEFORE running any user code. This is the only
+    // signal a user command cannot spoof: the probe runs no user script, so
+    // whatever is inside the sandbox has nothing to interpose on the probe's
+    // exit code and no way to mutate the cwd's accessibility before the
+    // probe sees it. A later `cd` failure inside the user's own exec is
+    // therefore always the command's own result, never proof that the
+    // caller's workdir was unusable.
+    //
+    // The probe is skipped when no cwd was requested — there is nothing to
+    // verify.
+    //
+    // When both the probe and the main exec run, they share ONE request
+    // budget: `requestTimeoutMs` from the caller is a total wait limit for
+    // `runScript`, not per-exec. Passing the full timeout to each call in
+    // sequence would let a two-hop runScript wait up to `2 × requestTimeoutMs`,
+    // silently exceeding the caller's contract. Instead, capture a monotonic
+    // start, and pass the remaining budget to each downstream `execRaw`.
+    // Node's `Date.now()` is a millisecond wall clock; a small skew between
+    // successive reads is fine because the budget is coarse to begin with.
+    const startAt = options.requestTimeoutMs !== undefined ? Date.now() : undefined;
+    const remainingBudgetMs = (): number | undefined => {
+      if (options.requestTimeoutMs === undefined || startAt === undefined) return undefined;
+      const remaining = options.requestTimeoutMs - (Date.now() - startAt);
+      // The client treats `<= 0` as "no timeout at all", which would silently
+      // uncancel an already-expired request. Floor at 1 so an over-budget
+      // call still aborts immediately rather than running to completion.
+      return remaining <= 0 ? 1 : remaining;
+    };
+    if (cwd) {
+      const probe = await this.execRaw(
+        handle.id,
+        `cd ${shellQuote(cwd)}\n`,
+        remainingBudgetMs(),
+      );
+      // Only a KNOWN nonzero exit is proof of a workdir fault. An unknown
+      // outcome (no exit_code in the response) is exactly that — unknown —
+      // and treating it as a `cd` failure would let a malformed response
+      // spoof the reclassification.
+      if (probe.exit_code !== null && probe.exit_code !== 0) {
+        throw new Agent37WorkdirUnusableError(
+          handle.id,
+          cwd,
+          combineOutput(probe.stdout, probe.stderr),
+        );
+      }
+    }
     const script = composeScript(options.command, {
       ...(cwd ? { cwd } : {}),
       ...(options.env ? { env: options.env } : {}),
@@ -779,7 +891,7 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     // lifetime, and it got here only because the provider's own cap already
     // satisfies it — turning it into an HTTP abort would abandon the response
     // while the command ran on.
-    const result = await this.execRaw(handle.id, script, options.requestTimeoutMs);
+    const result = await this.execRaw(handle.id, script, remainingBudgetMs());
     return {
       output: combineOutput(result.stdout, result.stderr),
       ...(result.stdout ? { stdout: result.stdout } : {}),
@@ -1208,7 +1320,17 @@ export function composeScript(
 ): string {
   const lines: string[] = [];
   if (options.cwd) {
-    lines.push(`cd ${shellQuote(options.cwd)} || exit 1`);
+    // Fail-fast guard: if the pre-execution probe passed but the cwd went
+    // away between the two exec calls, do NOT let the user command run in
+    // whatever directory the shell inherits — that is exactly the class of
+    // silent misdirection the workdir-unusable classifier exists to prevent.
+    // The sentinel exit code stays consistent for debuggability, but the
+    // caller no longer relies on any in-band marker: reclassification is
+    // decided by the out-of-band probe in {@link Agent37Runtime.runScript}.
+    // POSIX `sh`, not bash: Agent37's exec plane runs dash.
+    lines.push(
+      `cd ${shellQuote(options.cwd)} || exit ${AGENT37_WORKDIR_UNUSABLE_EXIT_CODE}`,
+    );
   }
   for (const [key, value] of Object.entries(options.env ?? {})) {
     lines.push(`export ${key}=${shellQuote(value)}`);
