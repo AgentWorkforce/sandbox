@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 
 import type {
@@ -302,47 +301,35 @@ export class Agent37UnknownExitCodeError extends Error {
 }
 
 /**
- * Marker the composed script writes to stderr when its `cd` fails, and the
- * exit status it leaves behind.
+ * Exit status the composed script leaves behind when its own `cd` guard
+ * trips — i.e. the cwd went away between the pre-execution probe and the
+ * script's own `cd`, and the user command was not permitted to run in the
+ * shell's inherited directory instead.
  *
- * Both exist because a bare `cd <dir> || exit 1` is *indistinguishable from the
- * command's own failure*, and that ambiguity has already cost real time: a
- * lane pointed an Agent37 instance at `workdir: '/root'`, watched ten
- * unrelated probes all return exit 1, and concluded from it that `/root` did
- * not exist. It does exist — as `drwx------ root root`, unreachable by the
- * template's `node` user — and every one of those exit 1s was the `cd`, not
- * the command. Re-pointed at the real home, all ten passed.
+ * Reclassification of a run to {@link Agent37WorkdirUnusableError} is
+ * decided by the out-of-band probe in {@link Agent37Runtime.runScript}, not
+ * by scanning the result for this code — the code exists so the composed
+ * script fails visibly instead of silently misdirecting the user command,
+ * not as a signal a user command could not also produce. The probe is what
+ * a user command inside the sandbox cannot reach.
  *
- * The status alone is not proof (a command may legitimately exit 191), and the
- * marker alone is not proof (a command may legitimately print it), so
- * {@link Agent37Runtime.runScript} requires both before it reclassifies a
- * result as a workdir fault. Requiring "both" is not enough on its own either:
- * a valid command can print the fixed prefix *and* exit 191 in the same run,
- * so {@link composeScript} appends a per-invocation nonce that the running
- * command has no way to see. See {@link makeWorkdirUnusableMarker}.
+ * The original bug that shaped this design: a lane pointed an Agent37
+ * instance at `workdir: '/root'`, watched ten unrelated probes all return
+ * exit 1, and concluded from it that `/root` did not exist. It does exist
+ * — as `drwx------ root root`, unreachable by the template's `node` user —
+ * and every one of those exit 1s was the `cd`. The pre-execution probe
+ * catches that class of fault before any user command runs.
  */
 export const AGENT37_WORKDIR_UNUSABLE_EXIT_CODE = 191;
 
 /**
- * Stable prefix for the workdir-unusable sentinel line.
- *
- * The full marker emitted by any given composed script is this prefix followed
- * by a per-invocation nonce, so an unrelated command cannot spoof it.
- *
- * @see AGENT37_WORKDIR_UNUSABLE_EXIT_CODE
+ * @deprecated The workdir-unusable classifier no longer relies on an in-band
+ * marker string — reclassification is decided by an out-of-band probe. This
+ * constant is preserved only so callers that pattern-match legacy shell
+ * output for debugging continue to compile. It is not emitted by
+ * {@link composeScript}.
  */
 export const AGENT37_WORKDIR_UNUSABLE_MARKER = "__agent37_workdir_unusable__";
-
-/**
- * Build a per-invocation workdir-unusable sentinel line.
- *
- * The prefix stays discoverable to a human reading the raw output, and the
- * nonce guarantees the line cannot be reproduced by a command whose own output
- * happens to include the prefix.
- */
-export function makeWorkdirUnusableMarker(): string {
-  return `${AGENT37_WORKDIR_UNUSABLE_MARKER}${randomUUID().replace(/-/g, "")}`;
-}
 
 /**
  * Raised when the instance could not enter the requested working directory.
@@ -850,43 +837,44 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       assertValidEnv(options.env);
     }
     const cwd = options.cwd ?? handle.workdir;
-    // Per-invocation nonce, generated only when a cd is actually emitted. A
-    // command that legitimately prints the fixed prefix and exits 191 will
-    // not carry this suffix, so reclassification cannot collide with it.
-    const workdirUnusableMarker = cwd ? makeWorkdirUnusableMarker() : undefined;
+    // Prove the cwd is usable BEFORE running any user code. This is the only
+    // signal a user command cannot spoof: the probe runs no user script, so
+    // whatever is inside the sandbox has nothing to interpose on the probe's
+    // exit code and no way to mutate the cwd's accessibility before the
+    // probe sees it. A later `cd` failure inside the user's own exec is
+    // therefore always the command's own result, never proof that the
+    // caller's workdir was unusable.
+    //
+    // The probe is skipped when no cwd was requested — there is nothing to
+    // verify — and its own `requestTimeoutMs` matches the main exec so the
+    // caller's wait budget bounds both halves.
+    if (cwd) {
+      const probe = await this.execRaw(
+        handle.id,
+        `cd ${shellQuote(cwd)}\n`,
+        options.requestTimeoutMs,
+      );
+      // Only a KNOWN nonzero exit is proof of a workdir fault. An unknown
+      // outcome (no exit_code in the response) is exactly that — unknown —
+      // and treating it as a `cd` failure would let a malformed response
+      // spoof the reclassification.
+      if (probe.exit_code !== null && probe.exit_code !== 0) {
+        throw new Agent37WorkdirUnusableError(
+          handle.id,
+          cwd,
+          combineOutput(probe.stdout, probe.stderr),
+        );
+      }
+    }
     const script = composeScript(options.command, {
       ...(cwd ? { cwd } : {}),
       ...(options.env ? { env: options.env } : {}),
-      ...(workdirUnusableMarker ? { workdirUnusableMarker } : {}),
     });
     // Only `requestTimeoutMs` becomes an abort signal. `timeoutMs` is a command
     // lifetime, and it got here only because the provider's own cap already
     // satisfies it — turning it into an HTTP abort would abandon the response
     // while the command ran on.
     const result = await this.execRaw(handle.id, script, options.requestTimeoutMs);
-    // Reclassify before the result is shaped: a command that never ran must not
-    // be reported as a command that ran and failed.
-    //
-    // The in-band signals (exit code + nonce marker) are a fast negative filter
-    // — if either is absent this cannot be a `cd` failure and we skip the
-    // out-of-band probe. When both are present, a hostile command could still
-    // have recovered the nonce from `/proc/self/cmdline` and forged the pair,
-    // so we confirm by re-issuing the `cd` in a fresh exec that runs *no*
-    // user command. That probe is a plain shell built-in with no arguments the
-    // user chose, so it cannot be lied to from inside the sandbox.
-    if (
-      cwd &&
-      workdirUnusableMarker &&
-      result.exit_code === AGENT37_WORKDIR_UNUSABLE_EXIT_CODE &&
-      combineOutput(result.stdout, result.stderr).includes(workdirUnusableMarker) &&
-      (await this.probeCwdUnusable(handle.id, cwd))
-    ) {
-      throw new Agent37WorkdirUnusableError(
-        handle.id,
-        cwd,
-        combineOutput(result.stdout, result.stderr),
-      );
-    }
     return {
       output: combineOutput(result.stdout, result.stderr),
       ...(result.stdout ? { stdout: result.stdout } : {}),
@@ -1073,22 +1061,6 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   private forget(id: string): void {
     this.ownership.delete(id);
     this.instanceUrls.delete(id);
-  }
-
-  /**
-   * Out-of-band verification that `cd <cwd>` cannot succeed on this instance.
-   *
-   * Runs a plain `cd` with no user command through a fresh exec. The command
-   * body carries only the caller's cwd — not the nonce and not their command
-   * — so the sandbox has no material with which to forge a specific exit
-   * code, and any nonzero result is the shell's own report of the mount.
-   * Returns `true` when the `cd` really would have failed (i.e. the
-   * workdir-unusable reclassification is correct), `false` when the fast
-   * signals were a spoof or a coincidence.
-   */
-  private async probeCwdUnusable(id: string, cwd: string): Promise<boolean> {
-    const probe = await this.execRaw(id, `cd ${shellQuote(cwd)}\n`);
-    return probe.exit_code !== 0;
   }
 
   private async execRaw(
@@ -1327,28 +1299,20 @@ export function assertValidEnv(env: Record<string, string>): void {
  */
 export function composeScript(
   command: string,
-  options: {
-    cwd?: string;
-    env?: Record<string, string>;
-    /**
-     * Sentinel line the `cd` failure branch writes to stderr. Callers wiring
-     * this into a reclassifier should pass a unique value per invocation (see
-     * {@link makeWorkdirUnusableMarker}) so command output cannot spoof the
-     * failure signal. Defaults to the stable prefix for compose-only use.
-     */
-    workdirUnusableMarker?: string;
-  } = {},
+  options: { cwd?: string; env?: Record<string, string> } = {},
 ): string {
   const lines: string[] = [];
   if (options.cwd) {
-    // POSIX `sh`, not bash: Agent37's exec plane runs dash, where a bashism
-    // like ${PIPESTATUS[0]} is a "Bad substitution". `{ …; }` and `printf` are
-    // both POSIX, so this line runs on either shell.
-    const marker = options.workdirUnusableMarker ?? AGENT37_WORKDIR_UNUSABLE_MARKER;
+    // Fail-fast guard: if the pre-execution probe passed but the cwd went
+    // away between the two exec calls, do NOT let the user command run in
+    // whatever directory the shell inherits — that is exactly the class of
+    // silent misdirection the workdir-unusable classifier exists to prevent.
+    // The sentinel exit code stays consistent for debuggability, but the
+    // caller no longer relies on any in-band marker: reclassification is
+    // decided by the out-of-band probe in {@link Agent37Runtime.runScript}.
+    // POSIX `sh`, not bash: Agent37's exec plane runs dash.
     lines.push(
-      `cd ${shellQuote(options.cwd)} || { printf '%s\\n' ` +
-        `${shellQuote(marker)} >&2; ` +
-        `exit ${AGENT37_WORKDIR_UNUSABLE_EXIT_CODE}; }`,
+      `cd ${shellQuote(options.cwd)} || exit ${AGENT37_WORKDIR_UNUSABLE_EXIT_CODE}`,
     );
   }
   for (const [key, value] of Object.entries(options.env ?? {})) {
