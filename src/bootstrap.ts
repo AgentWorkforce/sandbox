@@ -109,8 +109,12 @@ export type RelayfileMountLinkShellOptions = {
 export function buildRelayfileMountLinkShell(opts: RelayfileMountLinkShellOptions): string {
   const binDir = requireAbsolutePath(opts.binDir, "binDir");
   const linkName = requireNonEmpty(opts.linkName ?? "relayfile-mount", "linkName");
-  if (linkName.includes("/")) {
-    throw new Error(`linkName must be a bare filename; got ${JSON.stringify(linkName)}`);
+  // `.` and `..` slip past the `/` check but `ln -sf src ..` follows the
+  // directory and creates the link one level up. Reject them explicitly.
+  if (linkName.includes("/") || linkName === "." || linkName === "..") {
+    throw new Error(
+      `linkName must be a bare filename other than "." or ".."; got ${JSON.stringify(linkName)}`,
+    );
   }
   for (const root of opts.searchRoots ?? []) {
     requireAbsolutePath(root, "searchRoots entry");
@@ -137,20 +141,37 @@ export function buildRelayfileMountLinkShell(opts: RelayfileMountLinkShellOption
     "process.stdout.write(found);";
 
   const rootsExpr = (opts.searchRoots ?? []).map((root) => shellQuote(root)).join(" ");
-  const npmRoot = '"$(npm root -g 2>/dev/null)"';
+  // Only fall back to npm's global root when the caller did not name their own
+  // — otherwise a stale global `agent-relay` wins the search over the roots
+  // that were explicitly requested, contradicting the option's documented
+  // ordering.
+  const useNpmFallback = !opts.searchRoots || opts.searchRoots.length === 0;
+  const argsExpr = useNpmFallback
+    ? `"$(npm root -g 2>/dev/null)"${rootsExpr ? ` ${rootsExpr}` : ""}`
+    : rootsExpr;
+  const linkPath = `${binDir}/${linkName}`;
 
   return [
     `set -e`,
     `mkdir -p ${shellQuote(binDir)}`,
-    `__rf_src=$(node -e ${shellQuote(resolver)} -- ${npmRoot}${rootsExpr ? ` ${rootsExpr}` : ""}) || {`,
+    `__rf_src=$(node -e ${shellQuote(resolver)} -- ${argsExpr}) || {`,
     `  printf '%s\\n' 'relayfile-mount not found: no @relayfile/mount-<platform>-<arch> beside the installed agent-relay package. Install agent-relay first.' >&2`,
     `  exit 1`,
     `}`,
-    `ln -sf "$__rf_src" ${shellQuote(`${binDir}/${linkName}`)}`,
-    `command -v ${shellQuote(linkName)} >/dev/null 2>&1 || {`,
+    `ln -sf "$__rf_src" ${shellQuote(linkPath)}`,
+    // `command -v` alone is not enough: another `${linkName}` earlier on PATH
+    // wins the lookup and the bare invocation silently runs the wrong binary.
+    // Verify the resolved path is the one this snippet just created; if PATH
+    // is misordered we fail loud rather than leaving a box that looks fine.
+    `__rf_which=$(command -v ${shellQuote(linkName)} 2>/dev/null || true)`,
+    `if [ -z "$__rf_which" ]; then`,
     `  printf '%s\\n' ${shellQuote(`${linkName} linked into ${binDir} but not on PATH; add ${binDir} to PATH`)} >&2`,
     `  exit 1`,
-    `}`,
+    `fi`,
+    `if [ "$__rf_which" != ${shellQuote(linkPath)} ]; then`,
+    `  printf '%s\\n' ${shellQuote(`${linkName} on PATH resolves to a different binary than ${linkPath}; prepend ${binDir} to PATH`)} >&2`,
+    `  exit 1`,
+    `fi`,
     `printf '%s\\n' "$__rf_src"`,
   ].join("\n");
 }
@@ -267,16 +288,33 @@ export function buildGhInstallShell(opts: GhInstallShellOptions): string {
     );
   }
 
+  const ghPath = `${binDir}/gh`;
   lines.push(
     `tar -xzf "$__gh_tgz" -C ${shellQuote(workDir)}`,
-    `cp ${shellQuote(workDir)}/"\${__gh_name}"/bin/gh ${shellQuote(`${binDir}/gh`)}`,
-    `chmod 0755 ${shellQuote(`${binDir}/gh`)}`,
+    `cp ${shellQuote(workDir)}/"\${__gh_name}"/bin/gh ${shellQuote(ghPath)}`,
+    `chmod 0755 ${shellQuote(ghPath)}`,
     `rm -rf "$__gh_tgz" ${shellQuote(workDir)}/"\${__gh_name}"`,
-    `command -v gh >/dev/null 2>&1 || {`,
+    // Presence + resolved-path check: an older `gh` earlier on PATH would
+    // otherwise win the lookup and the caller would keep the pre-existing
+    // version despite this snippet returning success.
+    `__gh_which=$(command -v gh 2>/dev/null || true)`,
+    `if [ -z "$__gh_which" ]; then`,
     `  printf '%s\\n' ${shellQuote(`gh installed into ${binDir} but not on PATH; add ${binDir} to PATH`)} >&2`,
     `  exit 1`,
+    `fi`,
+    `if [ "$__gh_which" != ${shellQuote(ghPath)} ]; then`,
+    `  printf '%s\\n' ${shellQuote(`gh on PATH resolves to a different binary than ${ghPath}; prepend ${binDir} to PATH`)} >&2`,
+    `  exit 1`,
+    `fi`,
+    // Capture before piping: `gh --version | head -1` masks a nonzero `gh`
+    // exit because dash has no pipefail and `head` still returns 0. Verify
+    // status directly, then trim to the first line for the printed sanity
+    // check.
+    `__gh_ver_out=$(gh --version) || {`,
+    `  printf '%s\\n' 'gh --version failed; installed binary is not runnable' >&2`,
+    `  exit 1`,
     `}`,
-    `gh --version | head -1`,
+    `printf '%s\\n' "$__gh_ver_out" | head -1`,
   );
 
   return lines.join("\n");
@@ -347,11 +385,20 @@ export function buildClaudeConfigSeedShell(opts: ClaudeConfigSeedShellOptions): 
 
   // Read/modify/write in one node process so a concurrent bootstrap step
   // cannot interleave between the read and the write.
+  //
+  // Two subtleties enforced below:
+  //   - `JSON.parse(...)||{}` silently coerces `null`, `false`, `0`, and `""`
+  //     to `{}`, which would let an invalid config be clobbered instead of
+  //     rejected. Let the object-shape validation catch every non-object.
+  //   - `fs.writeFileSync({ mode: 0o600 })` only applies the mode when the
+  //     file is being created; on the repair path the existing perms survive.
+  //     Follow the write with an explicit `chmodSync(0o600)` so the contract
+  //     holds for both first-run and rewrite.
   const script =
     "const fs=require('fs'),path=require('path');" +
     "const p=process.env.__CLAUDE_CONFIG_PATH;" +
     "let cfg={};" +
-    "try{cfg=JSON.parse(fs.readFileSync(p,'utf8'))||{};}catch(e){" +
+    "try{cfg=JSON.parse(fs.readFileSync(p,'utf8'));}catch(e){" +
     "if(e&&e.code!=='ENOENT')throw e;}" +
     "if(typeof cfg!=='object'||cfg===null||Array.isArray(cfg))" +
     "throw new Error('existing Claude config is not a JSON object: '+p);" +
@@ -370,6 +417,7 @@ export function buildClaudeConfigSeedShell(opts: ClaudeConfigSeedShellOptions): 
     "approved=1;}" +
     "fs.mkdirSync(path.dirname(p),{recursive:true});" +
     "fs.writeFileSync(p,JSON.stringify(cfg,null,2),{mode:0o600});" +
+    "fs.chmodSync(p,0o600);" +
     "process.stdout.write('claude-config-seeded onboarding=1 apiKeyApproved='+approved+'\\n');";
 
   return [

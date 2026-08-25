@@ -134,6 +134,53 @@ describe("buildRelayfileMountLinkShell", () => {
       () => buildRelayfileMountLinkShell({ binDir: "/tmp/bin", linkName: "a/b" }),
       /bare filename/,
     );
+    // `.` and `..` slip past the `/` check but `ln -sf src ..` follows the
+    // directory and drops the link one level above the bin dir. Reject both.
+    assert.throws(
+      () => buildRelayfileMountLinkShell({ binDir: "/tmp/bin", linkName: "." }),
+      /"\." or "\.\."/,
+    );
+    assert.throws(
+      () => buildRelayfileMountLinkShell({ binDir: "/tmp/bin", linkName: ".." }),
+      /"\." or "\.\."/,
+    );
+  });
+
+  it("does not consult npm's global root when explicit searchRoots are supplied", () => {
+    // A stale global `agent-relay` earlier in the resolver's argv would win
+    // the search over an explicitly named root, contradicting the option's
+    // documented ordering.
+    const withRoots = buildRelayfileMountLinkShell({
+      binDir: "/home/node/.local/bin",
+      searchRoots: ["/opt/vendored"],
+    });
+    assert.ok(!/npm root -g/.test(withRoots), "must not fall back to npm root when searchRoots given");
+
+    const withoutRoots = buildRelayfileMountLinkShell({ binDir: "/home/node/.local/bin" });
+    assert.match(withoutRoots, /npm root -g/, "must fall back to npm root when searchRoots omitted");
+  });
+
+  it("fails loud when a different binary shadows the linked one on PATH", async () => {
+    const root = await scratch();
+    try {
+      const globalRoot = await fakeGlobalRoot(root);
+      const binDir = join(root, "bin");
+      // A prior `relayfile-mount` sits earlier on PATH; the linked binary is
+      // present at the requested location but PATH order is wrong. The
+      // snippet must refuse rather than pretend everything is fine.
+      const shadow = join(root, "shadow");
+      await mkdir(shadow, { recursive: true });
+      await writeFile(join(shadow, "relayfile-mount"), "#!/bin/sh\nprintf 'shadow\\n'\n");
+      await chmod(join(shadow, "relayfile-mount"), 0o755);
+      const result = await sh(
+        buildRelayfileMountLinkShell({ binDir, searchRoots: [globalRoot] }),
+        { env: { PATH: `${shadow}:${binDir}:${process.env.PATH ?? ""}` } },
+      );
+      assert.notEqual(result.code, 0, "must not report success when PATH resolves to another binary");
+      assert.match(result.stderr, /prepend .* to PATH/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -166,14 +213,15 @@ describe("buildGhInstallShell", () => {
       const { baseUrl } = await fakeRelease(root, "9.9.9");
       const binDir = join(root, "bin");
       const workDir = join(root, "work");
-      const result = await sh(
-        buildGhInstallShell({ version: "9.9.9", binDir, workDir, releaseBaseUrl: baseUrl }),
-        { env: { PATH: `${binDir}:${process.env.PATH ?? ""}` } },
-      );
+      const script = buildGhInstallShell({ version: "9.9.9", binDir, workDir, releaseBaseUrl: baseUrl });
+      // No root anywhere in the generated shell: that is the whole constraint.
+      // Assert on the shell we built, not on `gh --version` output — the
+      // stdout scan cannot detect `sudo` and would keep passing after the
+      // constraint stopped holding.
+      assert.ok(!/\bsudo\b/.test(script), "no sudo in generated shell");
+      const result = await sh(script, { env: { PATH: `${binDir}:${process.env.PATH ?? ""}` } });
       assert.equal(result.code, 0, result.stderr);
       assert.match(result.stdout, /gh version 9\.9\.9/);
-      // No root anywhere in the generated shell: that is the whole constraint.
-      assert.ok(!/\bsudo\b/.test(result.stdout));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -237,6 +285,66 @@ describe("buildGhInstallShell", () => {
       () => buildGhInstallShell({ version: "2.82.1", binDir: "/x", sha256: "nope" }),
       /64 lowercase hex/,
     );
+  });
+
+  it("fails loud when the installed binary cannot run, instead of masking through head", async () => {
+    // The regression this guards: `gh --version | head -1` used to hide a
+    // nonzero `gh` exit because dash has no pipefail and `head` still exits
+    // 0. A build that cannot run on this image now reports failure.
+    const root = await scratch();
+    try {
+      const arch = process.arch === "arm64" ? "arm64" : "amd64";
+      const version = "9.9.9";
+      const name = `gh_${version}_linux_${arch}`;
+      const stage = join(root, "stage", name, "bin");
+      await mkdir(stage, { recursive: true });
+      // A `gh` that always exits nonzero — stand-in for a binary that cannot
+      // run on the image (missing loader, wrong arch, corrupted).
+      await writeFile(join(stage, "gh"), "#!/bin/sh\nexit 1\n");
+      await chmod(join(stage, "gh"), 0o755);
+      const releases = join(root, "releases", `v${version}`);
+      await mkdir(releases, { recursive: true });
+      await run("tar", ["-czf", join(releases, `${name}.tar.gz`), "-C", join(root, "stage"), name]);
+      const binDir = join(root, "bin");
+      const result = await sh(
+        buildGhInstallShell({
+          version,
+          binDir,
+          workDir: join(root, "work"),
+          releaseBaseUrl: `file://${join(root, "releases")}`,
+        }),
+        { env: { PATH: `${binDir}:${process.env.PATH ?? ""}` } },
+      );
+      assert.notEqual(result.code, 0, "must not mask a broken gh install");
+      assert.match(result.stderr, /gh --version failed/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails loud when a different gh is earlier on PATH", async () => {
+    const root = await scratch();
+    try {
+      const { baseUrl } = await fakeRelease(root, "9.9.9");
+      const binDir = join(root, "bin");
+      const shadow = join(root, "shadow");
+      await mkdir(shadow, { recursive: true });
+      await writeFile(join(shadow, "gh"), "#!/bin/sh\nprintf 'shadow gh\\n'\n");
+      await chmod(join(shadow, "gh"), 0o755);
+      const result = await sh(
+        buildGhInstallShell({
+          version: "9.9.9",
+          binDir,
+          workDir: join(root, "work"),
+          releaseBaseUrl: baseUrl,
+        }),
+        { env: { PATH: `${shadow}:${binDir}:${process.env.PATH ?? ""}` } },
+      );
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /prepend .* to PATH/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -346,6 +454,45 @@ describe("buildClaudeConfigSeedShell", () => {
       assert.notEqual(result.code, 0);
       assert.match(result.stderr, /not a JSON object/);
       assert.equal(await readFile(configPath, "utf8"), "[1,2,3]");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a bare JSON null, false, 0, or empty string as the config", async () => {
+    // These used to be coerced to `{}` by `JSON.parse(...)||{}`, so the shape
+    // validation never saw them and the file was silently clobbered.
+    for (const payload of ["null", "false", "0", '""']) {
+      const root = await scratch();
+      try {
+        const configPath = join(root, ".claude.json");
+        await writeFile(configPath, payload);
+        const result = await seed(configPath, {});
+        assert.notEqual(result.code, 0, `expected failure on payload ${payload}`);
+        assert.match(result.stderr, /not a JSON object/);
+        assert.equal(await readFile(configPath, "utf8"), payload, "invalid config must survive");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("re-enforces mode 0600 when rewriting an existing permissive config", async () => {
+    // The regression this guards: `fs.writeFileSync({ mode: 0o600 })` only
+    // applies the mode when the file is being created. A world-readable
+    // config kept its permissions after this snippet ran, leaving the API
+    // key tail behind mode 0644.
+    const root = await scratch();
+    try {
+      const configPath = join(root, ".claude.json");
+      await writeFile(configPath, "{}", { mode: 0o644 });
+      await chmod(configPath, 0o644);
+      const before = await sh(`ls -l ${configPath} | cut -c1-10`);
+      assert.equal(before.stdout.trim(), "-rw-r--r--");
+      const result = await seed(configPath, { ANTHROPIC_API_KEY: "sk-ant-" + "q".repeat(30) });
+      assert.equal(result.code, 0, result.stderr);
+      const after = await sh(`ls -l ${configPath} | cut -c1-10`);
+      assert.equal(after.stdout.trim(), "-rw-------", "rewrite must tighten mode to 0600");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
