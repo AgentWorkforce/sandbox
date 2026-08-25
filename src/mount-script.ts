@@ -294,6 +294,16 @@ export const RELAYFILE_INITIAL_SYNC_SCRIPT_PATH = "/tmp/relayfile-initial-sync.s
 export const RELAYFILE_INITIAL_SYNC_EXIT_PATH = "/tmp/relayfile-initial-sync.exit";
 export const RELAYFILE_INITIAL_SYNC_LOG_PATH = "/tmp/relayfile-initial-sync.log";
 export const RELAYFILE_INITIAL_SYNC_PID_PATH = "/tmp/relayfile-initial-sync.pid";
+/**
+ * Written by the runner the instant `wait` returns — after the child has been
+ * reaped, before the exit sentinel is published. It marks the completion
+ * window: the runner knows the exit status but has not written it yet, so the
+ * child PID is already dead while the sync is in fact finishing normally. The
+ * status probe treats this as in-progress, otherwise its dead-PID heuristic
+ * reports a false exit 127 on a perfectly healthy sync.
+ */
+export const RELAYFILE_INITIAL_SYNC_REAPED_PATH =
+  "/tmp/relayfile-initial-sync.reaped";
 
 export type RelayfileMountInitialSyncRunOptions = {
   runId?: string;
@@ -338,6 +348,10 @@ export function buildRelayfileMountInitialSyncBackgroundShell(
     RELAYFILE_INITIAL_SYNC_PID_PATH,
     runOptions.runId,
   );
+  const reapedPath = relayfileInitialSyncPath(
+    RELAYFILE_INITIAL_SYNC_REAPED_PATH,
+    runOptions.runId,
+  );
   const syncShell = buildRelayfileMountInitialSyncShell(opts);
   const runner = [
     "if command -v setsid >/dev/null 2>&1; then",
@@ -349,16 +363,23 @@ export function buildRelayfileMountInitialSyncBackgroundShell(
     `echo "$relayfile_initial_sync_pid" > ${shellQuote(pidPath)};`,
     "relayfile_initial_sync_status=0;",
     'wait "$relayfile_initial_sync_pid" || relayfile_initial_sync_status=$?;',
+    // Claim the completion window before anything else runs in it. From here
+    // the child PID is dead but the exit status is not yet published, and the
+    // status probe would otherwise read that dead PID as a crash. `:` is a
+    // shell builtin, so this is a bare redirection — no fork stands between
+    // `wait` returning and the window being marked.
+    `: > ${shellQuote(reapedPath)};`,
     // Shred the generated script the moment the sync is done with it, and do
     // it BEFORE the exit sentinel lands: a poller that sees the sentinel must
-    // never be able to race back and read the script. The log, pid and exit
-    // sentinels survive — they are the non-secret failure diagnostics.
+    // never be able to race back and read the script. `rm` is a fork+exec and
+    // sits entirely inside the window marked above. The log, pid, reaped and
+    // exit sentinels survive — they are the non-secret failure diagnostics.
     `rm -f ${shellQuote(scriptPath)};`,
     `echo "$relayfile_initial_sync_status" > ${shellQuote(exitPath)}`,
   ].join(" ");
   return [
     "set -e",
-    `rm -f ${shellQuote(scriptPath)} ${shellQuote(exitPath)} ${shellQuote(logPath)} ${shellQuote(pidPath)}`,
+    `rm -f ${shellQuote(scriptPath)} ${shellQuote(exitPath)} ${shellQuote(logPath)} ${shellQuote(pidPath)} ${shellQuote(reapedPath)}`,
     // The script can carry a credential (see `tokenIngress`), so it must never
     // exist group/world-readable for even an instant. `umask 077` in a subshell
     // constrains the mode at creation — a chmod after the write would leave a
@@ -401,9 +422,21 @@ export function buildRelayfileMountInitialSyncStatusShell(
     RELAYFILE_INITIAL_SYNC_PID_PATH,
     runOptions.runId,
   );
+  const reapedPath = relayfileInitialSyncPath(
+    RELAYFILE_INITIAL_SYNC_REAPED_PATH,
+    runOptions.runId,
+  );
   return [
     `if [ -f ${shellQuote(exitPath)} ]; then`,
     `echo "${RELAYFILE_INITIAL_SYNC_EXIT_MARKER}$(cat ${shellQuote(exitPath)})";`,
+    // The completion window: the child is reaped, the exit sentinel is on its
+    // way. Report in-progress rather than falling through to the dead-PID
+    // check below, which would call a healthy sync a crash. If the runner is
+    // itself killed inside this window the sync stalls to the caller's
+    // deadline instead — an honest "did not finish" beats a false failure on
+    // the healthy path, which is the only path this window is reached on.
+    `elif [ -f ${shellQuote(reapedPath)} ]; then`,
+    `echo ${RELAYFILE_INITIAL_SYNC_RUNNING_MARKER};`,
     `elif [ -f ${shellQuote(pidPath)} ]; then`,
     `relayfile_initial_sync_pid=$(cat ${shellQuote(pidPath)} 2>/dev/null || true);`,
     'case "$relayfile_initial_sync_pid" in',

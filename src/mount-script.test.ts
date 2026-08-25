@@ -19,11 +19,15 @@ import {
   buildRelayfileMountFlushShell,
   buildRelayfileMountInitialSyncShell,
   buildRelayfileMountInitialSyncBackgroundShell,
+  buildRelayfileMountInitialSyncStatusShell,
   buildRelayfileMountPathArgsShell,
   buildRelayfileMountShellTemplate,
+  parseRelayfileMountInitialSyncStatus,
+  type RelayfileMountInitialSyncStatus,
   RELAYFILE_INITIAL_SYNC_EXIT_PATH,
   RELAYFILE_INITIAL_SYNC_LOG_PATH,
   RELAYFILE_INITIAL_SYNC_PID_PATH,
+  RELAYFILE_INITIAL_SYNC_REAPED_PATH,
   RELAYFILE_INITIAL_SYNC_SCRIPT_PATH,
 } from "./mount-script.js";
 
@@ -809,12 +813,14 @@ describe("detached initial-sync script credential hygiene (sandbox#30)", () => {
     exitPath: string;
     logPath: string;
     pidPath: string;
+    reapedPath: string;
   } {
     const paths = {
       scriptPath: `${RELAYFILE_INITIAL_SYNC_SCRIPT_PATH}.${runId}`,
       exitPath: `${RELAYFILE_INITIAL_SYNC_EXIT_PATH}.${runId}`,
       logPath: `${RELAYFILE_INITIAL_SYNC_LOG_PATH}.${runId}`,
       pidPath: `${RELAYFILE_INITIAL_SYNC_PID_PATH}.${runId}`,
+      reapedPath: `${RELAYFILE_INITIAL_SYNC_REAPED_PATH}.${runId}`,
     };
     t.after(() => {
       for (const path of Object.values(paths)) {
@@ -1097,6 +1103,217 @@ exit 0
     // Nothing should be holding the fake mount, but release it the way the
     // other launching tests do so a surprise child cannot outlive the test.
     release();
+  });
+
+  /**
+   * A relayfile-mount stand-in that exits immediately with a chosen status, so
+   * the runner reaches its completion window straight away.
+   */
+  function instantFakeMount(
+    t: TestContext,
+    exitCode: number,
+  ): { binDir: string; root: string } {
+    const root = mkdtempSync(join(tmpdir(), "sandbox-sec30-window-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const binDir = join(root, "bin");
+    const mkdir = spawnSync("mkdir", ["-p", binDir]);
+    assert.equal(mkdir.status, 0, mkdir.stderr?.toString());
+    const fakeMount = join(binDir, "relayfile-mount");
+    writeFileSync(fakeMount, `#!/bin/sh\nexit ${exitCode}\n`);
+    chmodSync(fakeMount, 0o755);
+    return { binDir, root };
+  }
+
+  /**
+   * Wedge the runner open inside its completion window. The runner removes the
+   * generated script between reaping the child and publishing the exit
+   * sentinel; a `rm` that performs the removal and then blocks holds that
+   * window open for as long as the test needs, so the window is observed
+   * rather than raced for.
+   *
+   * Only the runner's own `rm -f <script>` is intercepted: the launcher's
+   * pre-run sweep passes five paths, and the sync script's idle-marker removal
+   * names a different file.
+   */
+  function installHoldingRm(
+    binDir: string,
+    scriptPath: string,
+    enteredPath: string,
+    releasePath: string,
+  ): void {
+    const rm = join(binDir, "rm");
+    writeFileSync(
+      rm,
+      `#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$2" = '${scriptPath}' ]; then
+  /bin/rm -f "$2"
+  : > '${enteredPath}'
+  attempts=0
+  while [ ! -f '${releasePath}' ] && [ "$attempts" -lt 400 ]; do
+    attempts=$((attempts + 1))
+    sleep 0.05
+  done
+  exit 0
+fi
+exec /bin/rm "$@"
+`,
+    );
+    chmodSync(rm, 0o755);
+  }
+
+  /** Run the real status probe the way the orchestrator's poll loop does. */
+  function probeStatus(runId: string): RelayfileMountInitialSyncStatus {
+    const probe = spawnSync(
+      "/bin/sh",
+      ["-c", buildRelayfileMountInitialSyncStatusShell({ runId })],
+      { encoding: "utf8" },
+    );
+    assert.equal(probe.status, 0, probe.stderr);
+    return parseRelayfileMountInitialSyncStatus(probe.stdout);
+  }
+
+  /**
+   * Removing the script after the sync is done with it (the credential fix
+   * above) put a fork+exec between reaping the child and publishing its exit
+   * status. Inside that interval the pid file names a dead process, so the
+   * probe's dead-PID heuristic called a healthy sync a crash — `exit 127`,
+   * which `startMount` turns into a failed mount. Reported by CodeRabbit on
+   * PR #39.
+   *
+   * This must-fire holds the window open and polls the real probe inside it.
+   * Before the completion marker it fails on the first poll.
+   */
+  it("does not report a failure inside the completion window", async (t) => {
+    const runId = "sec30-window";
+    const { scriptPath, exitPath, reapedPath, pidPath } = runPaths(t, runId);
+    const { binDir, root } = instantFakeMount(t, 0);
+    const enteredPath = join(root, "rm-entered");
+    const releasePath = join(root, "rm-release");
+    installHoldingRm(binDir, scriptPath, enteredPath, releasePath);
+
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      {
+        ...BASE,
+        localDir: join(root, "workspace"),
+        stateDir: join(root, "state"),
+        credsFilePath: join(root, "creds.json"),
+        tokenIngress: "creds-file",
+      },
+      { runId },
+    );
+    const result = launch(launcher, binDir);
+    assert.equal(result.status, 0, result.stderr);
+
+    assert.equal(
+      await waitFor(() => existsSync(enteredPath)),
+      true,
+      "the runner never reached the script removal",
+    );
+
+    // Confirm this really is the window before asserting anything about it:
+    // child reaped, script gone, exit status not yet published.
+    assert.equal(existsSync(reapedPath), true, "the window was never marked");
+    assert.equal(existsSync(scriptPath), false, "the script was not removed");
+    assert.equal(existsSync(pidPath), true, "the pid file is what misleads the probe");
+    assert.equal(existsSync(exitPath), false, "the exit sentinel landed too early");
+
+    for (let poll = 0; poll < 25; poll += 1) {
+      const status = probeStatus(runId);
+      assert.deepEqual(
+        status,
+        { state: "running" },
+        `probe reported ${JSON.stringify(status)} inside the completion ` +
+          "window; startMount turns a non-zero exit here into a failed mount " +
+          "for a sync that is finishing normally",
+      );
+      await sleep(10);
+    }
+
+    assert.equal(
+      existsSync(exitPath),
+      false,
+      "the window closed on its own, so those polls proved nothing",
+    );
+
+    writeFileSync(releasePath, "go");
+    assert.equal(
+      await waitFor(() => existsSync(exitPath)),
+      true,
+      "the exit sentinel never landed after the window closed",
+    );
+    assert.deepEqual(probeStatus(runId), { state: "exited", exitCode: 0 });
+  });
+
+  /**
+   * The must-not-fire. Same on-disk state as the window above, minus the
+   * completion marker: a sync whose runner died without ever publishing an
+   * exit status is still a failure, and the marker must not soften that.
+   */
+  it("still reports a failure for a sync that died before completion", (t) => {
+    const runId = "sec30-died";
+    const { pidPath, reapedPath } = runPaths(t, runId);
+    // Above both Linux's default pid_max and macOS's, so it names no process
+    // on any host and cannot be reused out from under the assertion.
+    writeFileSync(pidPath, "4194305\n");
+
+    assert.deepEqual(
+      probeStatus(runId),
+      { state: "exited", exitCode: 127 },
+      "a dead sync with no exit status must still read as a failure",
+    );
+
+    // The marker is the only difference between the two states.
+    writeFileSync(reapedPath, "");
+    assert.deepEqual(probeStatus(runId), { state: "running" });
+  });
+
+  it("still reports a genuinely failed sync as a failure end to end", async (t) => {
+    const runId = "sec30-failed";
+    const { exitPath } = runPaths(t, runId);
+    const { binDir, root } = instantFakeMount(t, 3);
+
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      {
+        ...BASE,
+        localDir: join(root, "workspace"),
+        stateDir: join(root, "state"),
+        credsFilePath: join(root, "creds.json"),
+        tokenIngress: "creds-file",
+      },
+      { runId },
+    );
+    const result = launch(launcher, binDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      await waitFor(() => existsSync(exitPath)),
+      true,
+      "the exit sentinel never landed",
+    );
+
+    const status = probeStatus(runId);
+    assert.equal(status.state, "exited");
+    assert.notEqual(
+      status.state === "exited" ? status.exitCode : 0,
+      0,
+      "a sync whose mount failed must not be reported as a success",
+    );
+  });
+
+  it("clears a stale completion marker before a new run", (t) => {
+    // A marker left by a previous run would make this run's dead-PID check
+    // unreachable, so the launcher's pre-run sweep has to take it.
+    const runId = "sec30-stale";
+    const { reapedPath } = runPaths(t, runId);
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      { ...BASE, credsFilePath: "/etc/relayfile/creds.json" },
+      { runId },
+    );
+    const sweep = launcher.split("\n").find((line) => line.startsWith("rm -f "));
+    assert.ok(sweep, "expected a pre-run sweep");
+    assert.ok(
+      sweep.includes(reapedPath),
+      "the pre-run sweep must clear a stale completion marker",
+    );
   });
 
   it("constrains the mode at creation rather than by a chmod after the write", () => {
