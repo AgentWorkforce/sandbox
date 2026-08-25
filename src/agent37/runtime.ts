@@ -301,6 +301,63 @@ export class Agent37UnknownExitCodeError extends Error {
 }
 
 /**
+ * Marker the composed script writes to stderr when its `cd` fails, and the
+ * exit status it leaves behind.
+ *
+ * Both exist because a bare `cd <dir> || exit 1` is *indistinguishable from the
+ * command's own failure*, and that ambiguity has already cost real time: a
+ * lane pointed an Agent37 instance at `workdir: '/root'`, watched ten
+ * unrelated probes all return exit 1, and concluded from it that `/root` did
+ * not exist. It does exist — as `drwx------ root root`, unreachable by the
+ * template's `node` user — and every one of those exit 1s was the `cd`, not
+ * the command. Re-pointed at the real home, all ten passed.
+ *
+ * The status alone is not proof (a command may legitimately exit 191), and the
+ * marker alone is not proof (a command may legitimately print it), so
+ * {@link Agent37Runtime.runScript} requires both before it reclassifies a
+ * result as a workdir fault.
+ */
+export const AGENT37_WORKDIR_UNUSABLE_EXIT_CODE = 191;
+
+/** @see AGENT37_WORKDIR_UNUSABLE_EXIT_CODE */
+export const AGENT37_WORKDIR_UNUSABLE_MARKER = "__agent37_workdir_unusable__";
+
+/**
+ * Raised when the instance could not enter the requested working directory.
+ *
+ * This is a *configuration* fault, not a command failure: nothing the caller
+ * asked to run ever ran. Reporting it as `exitCode: 191` would leave the
+ * caller to infer that from stderr, which is exactly the inference that got
+ * made wrongly before. So it is named instead.
+ *
+ * The most common cause is a `workdir` that belongs to another user. Agent37's
+ * template runs as `node` (uid 1000) with `HOME=/home/node`; `/root` exists but
+ * is mode 0700 and owned by root, so pointing a launch at it fails every
+ * command on the box. See `docs/agent37.md`.
+ */
+export class Agent37WorkdirUnusableError extends Error {
+  /** Instance the command was sent to. */
+  readonly instanceId: string;
+  /** The directory the script could not enter. */
+  readonly workdir: string;
+  /** Whatever the shell said, kept so the underlying reason is not lost. */
+  readonly output: string;
+
+  constructor(instanceId: string, workdir: string, output: string) {
+    super(
+      `Agent37 could not enter working directory "${workdir}" on instance ` +
+        `"${instanceId}", so the command never ran. Check that the directory ` +
+        `exists and is readable by the template's user — the Agent37 template ` +
+        `runs as "node" with HOME=/home/node, and /root is root-owned mode 0700.`,
+    );
+    this.name = "Agent37WorkdirUnusableError";
+    this.instanceId = instanceId;
+    this.workdir = workdir;
+    this.output = output;
+  }
+}
+
+/**
  * Raised when a caller asks for a command lifetime Agent37 cannot enforce.
  *
  * `timeoutMs` on the port means the command is no longer running once it
@@ -780,6 +837,19 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     // satisfies it — turning it into an HTTP abort would abandon the response
     // while the command ran on.
     const result = await this.execRaw(handle.id, script, options.requestTimeoutMs);
+    // Reclassify before the result is shaped: a command that never ran must not
+    // be reported as a command that ran and failed.
+    if (
+      cwd &&
+      result.exit_code === AGENT37_WORKDIR_UNUSABLE_EXIT_CODE &&
+      combineOutput(result.stdout, result.stderr).includes(AGENT37_WORKDIR_UNUSABLE_MARKER)
+    ) {
+      throw new Agent37WorkdirUnusableError(
+        handle.id,
+        cwd,
+        combineOutput(result.stdout, result.stderr),
+      );
+    }
     return {
       output: combineOutput(result.stdout, result.stderr),
       ...(result.stdout ? { stdout: result.stdout } : {}),
@@ -1208,7 +1278,14 @@ export function composeScript(
 ): string {
   const lines: string[] = [];
   if (options.cwd) {
-    lines.push(`cd ${shellQuote(options.cwd)} || exit 1`);
+    // POSIX `sh`, not bash: Agent37's exec plane runs dash, where a bashism
+    // like ${PIPESTATUS[0]} is a "Bad substitution". `{ …; }` and `printf` are
+    // both POSIX, so this line runs on either shell.
+    lines.push(
+      `cd ${shellQuote(options.cwd)} || { printf '%s\\n' ` +
+        `${shellQuote(AGENT37_WORKDIR_UNUSABLE_MARKER)} >&2; ` +
+        `exit ${AGENT37_WORKDIR_UNUSABLE_EXIT_CODE}; }`,
+    );
   }
   for (const [key, value] of Object.entries(options.env ?? {})) {
     lines.push(`export ${key}=${shellQuote(value)}`);

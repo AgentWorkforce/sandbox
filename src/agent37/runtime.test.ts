@@ -915,7 +915,8 @@ describe("Agent37Runtime.runScript", () => {
     );
     assert.equal(
       parsed.command,
-      "cd '/work/repo' || exit 1\nexport TOKEN_NAME='it'\\''s fine'\nnpm test\n",
+      "cd '/work/repo' || { printf '%s\\n' '__agent37_workdir_unusable__' >&2; exit 191; }\n" +
+        "export TOKEN_NAME='it'\\''s fine'\nnpm test\n",
     );
     assert.deepEqual(result, { output: "ok\n", stdout: "ok\n", exitCode: 0 });
   });
@@ -924,9 +925,69 @@ describe("Agent37Runtime.runScript", () => {
     const h = harness(() => ({ json: { exit_code: 0, stdout: "", stderr: "" } }));
     const runtime = makeRuntime(h);
     await runtime.runScript({ ...RUNNING_HANDLE, workdir: "/from/handle" }, { command: "ls" });
-    assert.match(execCommand(h.requests[0] as RecordedRequest), /^cd '\/from\/handle' \|\| exit 1\n/);
+    assert.match(execCommand(h.requests[0] as RecordedRequest), /^cd '\/from\/handle' \|\| \{ printf /);
     await runtime.runScript(RUNNING_HANDLE, { command: "ls" });
     assert.equal(execCommand(h.requests[1] as RecordedRequest), "ls\n");
+  });
+
+  it("names an unusable workdir instead of reporting it as a failed command", async () => {
+    // The regression this guards: ten unrelated probes against `workdir:
+    // '/root'` all came back exit 1, and the lane concluded /root did not
+    // exist. It exists — root-owned, mode 0700, unreachable by the template's
+    // `node` user — and every exit 1 was the `cd`.
+    const h = harness(() => ({
+      json: {
+        exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
+        stdout: "",
+        stderr: `${pkg.AGENT37_WORKDIR_UNUSABLE_MARKER}\nsh: 1: cd: can't cd to /root\n`,
+      },
+    }));
+    const runtime = makeRuntime(h);
+    await assert.rejects(
+      runtime.runScript(RUNNING_HANDLE, { command: "id", cwd: "/root" }),
+      (error: unknown) => {
+        assert.ok(error instanceof pkg.Agent37WorkdirUnusableError);
+        assert.equal(error.instanceId, "ab12cd34ef");
+        assert.equal(error.workdir, "/root");
+        assert.match(error.output, /can't cd to \/root/);
+        return true;
+      },
+    );
+  });
+
+  it("requires BOTH the sentinel status and the marker before reclassifying", async () => {
+    // Either signal alone belongs to the command, not to the `cd`. A command
+    // is free to exit 191, and a command is free to print the marker.
+    const statusOnly = harness(() => ({
+      json: { exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE, stdout: "", stderr: "boom" },
+    }));
+    const first = await makeRuntime(statusOnly).runScript(RUNNING_HANDLE, {
+      command: "exit 191",
+      cwd: "/work",
+    });
+    assert.equal(first.exitCode, pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE);
+
+    const markerOnly = harness(() => ({
+      json: { exit_code: 1, stdout: pkg.AGENT37_WORKDIR_UNUSABLE_MARKER, stderr: "" },
+    }));
+    const second = await makeRuntime(markerOnly).runScript(RUNNING_HANDLE, {
+      command: "echo marker",
+      cwd: "/work",
+    });
+    assert.equal(second.exitCode, 1);
+  });
+
+  it("does not reclassify when no cwd was requested, because no cd was emitted", async () => {
+    const h = harness(() => ({
+      json: {
+        exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
+        stdout: "",
+        stderr: pkg.AGENT37_WORKDIR_UNUSABLE_MARKER,
+      },
+    }));
+    const runtime = makeRuntime(h, { defaultHomeDir: "/home/node" });
+    const result = await runtime.runScript(RUNNING_HANDLE, { command: "sh -c 'exit 191'" });
+    assert.equal(result.exitCode, pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE);
   });
 
   it("reports a nonzero exit as a result, not an error, and combines the streams", async () => {
