@@ -758,6 +758,49 @@ describe("detached initial-sync script credential hygiene (sandbox#30)", () => {
   }
 
   /**
+   * Read the mode of the file that actually landed the way the launcher itself
+   * does — through `stat`, asserted by the exit code of the comparison rather
+   * than by a string match in JS. GNU/busybox spell it `stat -c %a`, BSD
+   * `stat -f %Lp`.
+   */
+  function assertLandedMode(path: string, expected: string): void {
+    const check = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        'mode=$(stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null)' +
+          ' || exit 2; printf %s "$mode"; [ "$mode" = "$2" ]',
+        "sh",
+        path,
+        expected,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(
+      check.status,
+      2,
+      `could not stat the file the launcher actually created: ${path}`,
+    );
+    assert.equal(
+      check.status,
+      0,
+      `expected ${path} to land at mode ${expected}, got ${check.stdout}`,
+    );
+  }
+
+  /**
+   * The launcher tolerates `unknown` when neither `stat` spelling exists, so
+   * the refusal path below can only be exercised where one of them works.
+   */
+  function statSupported(): boolean {
+    const probe = spawnSync("/bin/sh", [
+      "-c",
+      "stat -c %a /tmp >/dev/null 2>&1 || stat -f %Lp /tmp >/dev/null 2>&1",
+    ]);
+    return probe.status === 0;
+  }
+
+  /**
    * Paths the launcher owns for a given run id. Registered for removal so a
    * failing assertion cannot leave a credential-bearing file behind in /tmp.
    */
@@ -853,12 +896,22 @@ exit 0
       "launcher never produced the generated initial-sync script",
     );
 
+    // The property under test is the mode of the file on disk, so it is read
+    // back off the real file: once by `stat` (exit code), once through node.
+    assertLandedMode(scriptPath, "600");
     const mode = statSync(scriptPath).mode & 0o777;
     assert.equal(
       mode.toString(8),
       "600",
       "the generated script may carry a credential and must never be readable " +
         "by another user or process in the sandbox",
+    );
+    // ...and this is why the mode is the whole fix: under the default argv
+    // ingress the credential really is sitting in that file.
+    assert.ok(
+      readFileSync(scriptPath, "utf8").includes(TOKEN),
+      "expected the default ingress to put the credential in the script, " +
+        "which is what makes the 0600 mode load-bearing",
     );
 
     release();
@@ -904,6 +957,7 @@ exit 0
       !contents.includes(TOKEN),
       "the on-disk generated script still contains the credential literal",
     );
+    assertLandedMode(scriptPath, "600");
     assert.equal(statSync(scriptPath).mode & 0o777, 0o600);
 
     release();
@@ -977,17 +1031,83 @@ exit 0
     assert.equal(existsSync(logPath), true, "the sync log must be preserved");
   });
 
-  it("verifies the landed mode before handing the script to a detached process", () => {
+  /**
+   * The gating test for the mode check: it runs the check rather than reading
+   * it. The launcher is mutated back to the pre-fix creation mode (`umask 022`
+   * in place of `umask 077`), which is the exact regression the check exists to
+   * catch, and then executed — so a check that is present in the generated text
+   * but broken at runtime fails here instead of passing a string match.
+   */
+  it("refuses to launch, at runtime, when the script does not land at 0600", async (t) => {
+    if (!statSupported()) {
+      t.skip("no stat -c/-f available; the launcher tolerates an unknown mode");
+      return;
+    }
+    const runId = "sec30-refuse";
+    const { scriptPath, exitPath, pidPath, logPath } = runPaths(t, runId);
+    const { binDir, root, release } = blockingFakeMount(t);
+
+    const launcher = buildRelayfileMountInitialSyncBackgroundShell(
+      {
+        ...BASE,
+        localDir: join(root, "workspace"),
+        stateDir: join(root, "state"),
+        credsFilePath: join(root, "creds.json"),
+      },
+      { runId },
+    );
+    const defective = launcher.replace(
+      "(umask 077 && cat > ",
+      "(umask 022 && cat > ",
+    );
+    assert.notEqual(
+      defective,
+      launcher,
+      "the mode must be constrained at creation by `umask 077`, not by a " +
+        "chmod after the write, which would leave a readable window",
+    );
+
+    const result = launch(defective, binDir);
+
+    assert.notEqual(
+      result.status,
+      0,
+      "a script that landed group/world readable must abort the launch",
+    );
+    assert.match(
+      result.stderr ?? "",
+      /is mode 644, not 600; refusing to launch/,
+      "expected the refusal to name the mode that actually landed",
+    );
+    assert.equal(
+      existsSync(scriptPath),
+      false,
+      "the readable script must be removed, not left in /tmp",
+    );
+    // Nothing may have been handed to a detached process: no pid, no log, no
+    // exit sentinel, because the sync never started.
+    assert.equal(existsSync(pidPath), false, "a sync was started anyway");
+    assert.equal(existsSync(logPath), false, "a sync was started anyway");
+    assert.equal(
+      await waitFor(() => existsSync(exitPath), { timeoutMs: 500 }),
+      false,
+      "a sync was started anyway",
+    );
+
+    // Nothing should be holding the fake mount, but release it the way the
+    // other launching tests do so a surprise child cannot outlive the test.
+    release();
+  });
+
+  it("constrains the mode at creation rather than by a chmod after the write", () => {
+    // Fast unit alongside the executing test above: creation order is a
+    // property of the generated text, and a chmod-after-write would leave a
+    // readable window that a mode assertion on the finished file cannot see.
     const launcher = buildRelayfileMountInitialSyncBackgroundShell(
       { ...BASE, credsFilePath: "/etc/relayfile/creds.json" },
       { runId: "sec30-order" },
     );
-    assert.match(
-      launcher,
-      /\(umask 077 && cat > /,
-      "the mode must be constrained at creation, not by a chmod after the " +
-        "write, which would leave a readable window",
-    );
+    assert.match(launcher, /\(umask 077 && cat > /);
     const verifyAt = launcher.indexOf("relayfile_initial_sync_mode=");
     const launchAt = launcher.indexOf("nohup sh -c");
     assert.ok(verifyAt > 0, "expected a post-write mode verification");
