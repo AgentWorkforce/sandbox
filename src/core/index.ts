@@ -63,3 +63,6 @@ export type {
 
 // --- relayfile-mount shell builders ----------------------------------------
 export * from "../mount-script.js";
+
+// --- sandbox bootstrap shell builders --------------------------------------
+export * from "../bootstrap.js";

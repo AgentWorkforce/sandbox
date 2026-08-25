@@ -18,6 +18,7 @@
   },
   "files": [
     "dist",
+    "docs/agent37.md",
     "docs/freestyle.md",
     "README.md",
     "LICENSE",
