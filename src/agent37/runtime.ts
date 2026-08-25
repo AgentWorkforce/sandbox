@@ -866,11 +866,20 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     const result = await this.execRaw(handle.id, script, options.requestTimeoutMs);
     // Reclassify before the result is shaped: a command that never ran must not
     // be reported as a command that ran and failed.
+    //
+    // The in-band signals (exit code + nonce marker) are a fast negative filter
+    // — if either is absent this cannot be a `cd` failure and we skip the
+    // out-of-band probe. When both are present, a hostile command could still
+    // have recovered the nonce from `/proc/self/cmdline` and forged the pair,
+    // so we confirm by re-issuing the `cd` in a fresh exec that runs *no*
+    // user command. That probe is a plain shell built-in with no arguments the
+    // user chose, so it cannot be lied to from inside the sandbox.
     if (
       cwd &&
       workdirUnusableMarker &&
       result.exit_code === AGENT37_WORKDIR_UNUSABLE_EXIT_CODE &&
-      combineOutput(result.stdout, result.stderr).includes(workdirUnusableMarker)
+      combineOutput(result.stdout, result.stderr).includes(workdirUnusableMarker) &&
+      (await this.probeCwdUnusable(handle.id, cwd))
     ) {
       throw new Agent37WorkdirUnusableError(
         handle.id,
@@ -1064,6 +1073,22 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
   private forget(id: string): void {
     this.ownership.delete(id);
     this.instanceUrls.delete(id);
+  }
+
+  /**
+   * Out-of-band verification that `cd <cwd>` cannot succeed on this instance.
+   *
+   * Runs a plain `cd` with no user command through a fresh exec. The command
+   * body carries only the caller's cwd — not the nonce and not their command
+   * — so the sandbox has no material with which to forge a specific exit
+   * code, and any nonzero result is the shell's own report of the mount.
+   * Returns `true` when the `cd` really would have failed (i.e. the
+   * workdir-unusable reclassification is correct), `false` when the fast
+   * signals were a spoof or a coincidence.
+   */
+  private async probeCwdUnusable(id: string, cwd: string): Promise<boolean> {
+    const probe = await this.execRaw(id, `cd ${shellQuote(cwd)}\n`);
+    return probe.exit_code !== 0;
   }
 
   private async execRaw(

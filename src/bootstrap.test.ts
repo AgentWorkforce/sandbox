@@ -182,6 +182,25 @@ describe("buildRelayfileMountLinkShell", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("accepts a binDir with a trailing slash without flagging the install as shadowed", async () => {
+    // `command -v` normalizes the resolved PATH entry, so a `binDir` of
+    // `/foo/` would compare against `/foo//name` if we naïvely concatenated
+    // and the post-link verification would fail a good install.
+    const root = await scratch();
+    try {
+      const globalRoot = await fakeGlobalRoot(root);
+      const binDir = join(root, "bin");
+      const result = await sh(
+        buildRelayfileMountLinkShell({ binDir: `${binDir}/`, searchRoots: [globalRoot] }),
+        { env: { PATH: `${binDir}:${process.env.PATH ?? ""}` } },
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout.trim(), /bin\/relayfile-mount$/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildGhInstallShell", () => {

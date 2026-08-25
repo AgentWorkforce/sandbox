@@ -950,15 +950,22 @@ describe("Agent37Runtime.runScript", () => {
     // '/root'` all came back exit 1, and the lane concluded /root did not
     // exist. It exists — root-owned, mode 0700, unreachable by the template's
     // `node` user — and every exit 1 was the `cd`.
-    const h = harness((request) => ({
-      json: {
-        exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
-        stdout: "",
-        // The composed script chose a fresh nonce for this call; echo it back
-        // so the runtime sees the marker it is actually looking for.
-        stderr: `${extractWorkdirUnusableMarker(request)}\nsh: 1: cd: can't cd to /root\n`,
-      },
-    }));
+    const h = harness((request, index) => {
+      if (index === 0) {
+        // Main script: cd failed, sentinel + marker present.
+        return {
+          json: {
+            exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
+            stdout: "",
+            stderr: `${extractWorkdirUnusableMarker(request)}\nsh: 1: cd: can't cd to /root\n`,
+          },
+        };
+      }
+      // Out-of-band verification probe: cd would also fail here.
+      return {
+        json: { exit_code: 1, stdout: "", stderr: "sh: 1: cd: can't cd to /root\n" },
+      };
+    });
     const runtime = makeRuntime(h);
     await assert.rejects(
       runtime.runScript(RUNNING_HANDLE, { command: "id", cwd: "/root" }),
@@ -970,6 +977,39 @@ describe("Agent37Runtime.runScript", () => {
         return true;
       },
     );
+    // Two exec calls: the composed script, then the out-of-band cd probe.
+    assert.equal(h.requests.length, 2);
+    assert.equal(execCommand(h.requests[1] as RecordedRequest), "cd '/root'\n");
+  });
+
+  it("does not reclassify when a command forges the nonce but the workdir is actually usable", async () => {
+    // The in-band signals are a fast filter, not the whole answer: a hostile
+    // command can recover the nonce from its own /proc/self/cmdline and print
+    // it back, then exit 191. The out-of-band cd probe is what closes the
+    // gap — the probe runs no user command, so the sandbox has no material
+    // with which to forge its exit code.
+    const spoof = harness((request, index) => {
+      if (index === 0) {
+        return {
+          json: {
+            exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
+            stdout: "",
+            stderr: `${extractWorkdirUnusableMarker(request)}\n`,
+          },
+        };
+      }
+      // Probe: cd succeeds; the workdir is fine.
+      return { json: { exit_code: 0, stdout: "", stderr: "" } };
+    });
+    const result = await makeRuntime(spoof).runScript(RUNNING_HANDLE, {
+      command: "grep __agent37_workdir_unusable__ /proc/self/cmdline >&2; exit 191",
+      cwd: "/work",
+    });
+    assert.equal(result.exitCode, pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE);
+    // The probe still ran — that is what the fix is; the two exec calls prove
+    // the runtime did not accept the in-band pair on faith.
+    assert.equal(spoof.requests.length, 2);
+    assert.equal(execCommand(spoof.requests[1] as RecordedRequest), "cd '/work'\n");
   });
 
   it("requires BOTH the sentinel status and the marker before reclassifying", async () => {

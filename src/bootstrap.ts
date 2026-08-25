@@ -149,7 +149,12 @@ export function buildRelayfileMountLinkShell(opts: RelayfileMountLinkShellOption
   const argsExpr = useNpmFallback
     ? `"$(npm root -g 2>/dev/null)"${rootsExpr ? ` ${rootsExpr}` : ""}`
     : rootsExpr;
-  const linkPath = `${binDir}/${linkName}`;
+  // Strip a trailing slash before joining: `command -v` normalizes the PATH
+  // entry that resolves the lookup, so a `binDir` of `/foo/` would otherwise
+  // build an expected `linkPath` of `/foo//name` that never matches the
+  // normalized `/foo/name` and the post-link verification would fail a
+  // perfectly good install.
+  const linkPath = `${binDir.replace(/\/+$/, "")}/${linkName}`;
 
   return [
     `set -e`,
@@ -288,7 +293,12 @@ export function buildGhInstallShell(opts: GhInstallShellOptions): string {
     );
   }
 
-  const ghPath = `${binDir}/gh`;
+  // Strip a trailing slash before joining: `command -v` normalizes the PATH
+  // entry that resolves the lookup, so a `binDir` of `/foo/` would otherwise
+  // build an expected `ghPath` of `/foo//gh` that never matches the
+  // normalized `/foo/gh` and the post-install verification would fail a
+  // perfectly good install.
+  const ghPath = `${binDir.replace(/\/+$/, "")}/gh`;
   lines.push(
     `tar -xzf "$__gh_tgz" -C ${shellQuote(workDir)}`,
     `cp ${shellQuote(workDir)}/"\${__gh_name}"/bin/gh ${shellQuote(ghPath)}`,
