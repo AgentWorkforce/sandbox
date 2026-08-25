@@ -7,7 +7,7 @@ defects" are not properties of Agent37 at all.
 
 ## The template, and the one setting that matters
 
-```
+```text
 user      node (uid 1000, gid 1000)
 HOME      /home/node
 cwd       /            (the exec plane's default when no cwd is given)
@@ -24,7 +24,7 @@ single most consequential line in an Agent37 integration.
 enter it. So a launch that sets `workdir: '/root'` does not fail once, it fails
 *every command on the box*, identically:
 
-```
+```console
 $ id; echo PWD=$PWD          →  exit 1
 sh: 1: cd: can't cd to /root
 ```
@@ -86,7 +86,7 @@ different failure from a missing binary, and only the second is exit 127.
 `relayfile-mount` is a **userspace sync daemon**, not a kernel or FUSE mount.
 On a completely healthy Agent37 box:
 
-```
+```console
 $ mount | grep -i relayfile     →  exit 1, no output
 ```
 
