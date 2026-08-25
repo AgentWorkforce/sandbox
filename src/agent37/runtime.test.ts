@@ -132,6 +132,20 @@ function execCommand(request: RecordedRequest): string {
   return parsed.command as string;
 }
 
+/**
+ * Pull the per-invocation workdir-unusable marker out of a recorded exec body.
+ *
+ * Tests that want to simulate a `cd` failure must echo back the exact marker
+ * the runtime chose for that call — the shared prefix alone will no longer
+ * trigger reclassification, which is precisely the collision the nonce closes.
+ */
+function extractWorkdirUnusableMarker(request: RecordedRequest): string {
+  const cmd = execCommand(request);
+  const match = cmd.match(/__agent37_workdir_unusable__[0-9a-f]{32}/);
+  assert.ok(match, `expected a workdir-unusable marker in composed script:\n${cmd}`);
+  return match[0];
+}
+
 /** Strip comments so a source scan reads code, not the prose explaining it. */
 function withoutComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
@@ -913,10 +927,11 @@ describe("Agent37Runtime.runScript", () => {
       ["command"],
       "exec takes exactly one field; anything else is rejected by the API",
     );
-    assert.equal(
-      parsed.command,
-      "cd '/work/repo' || { printf '%s\\n' '__agent37_workdir_unusable__' >&2; exit 191; }\n" +
-        "export TOKEN_NAME='it'\\''s fine'\nnpm test\n",
+    // The sentinel marker carries a per-invocation nonce so command output
+    // cannot spoof the workdir-unusable signal; everything else is fixed.
+    assert.match(
+      parsed.command as string,
+      /^cd '\/work\/repo' \|\| \{ printf '%s\\n' '__agent37_workdir_unusable__[0-9a-f]{32}' >&2; exit 191; \}\nexport TOKEN_NAME='it'\\''s fine'\nnpm test\n$/,
     );
     assert.deepEqual(result, { output: "ok\n", stdout: "ok\n", exitCode: 0 });
   });
@@ -935,11 +950,13 @@ describe("Agent37Runtime.runScript", () => {
     // '/root'` all came back exit 1, and the lane concluded /root did not
     // exist. It exists — root-owned, mode 0700, unreachable by the template's
     // `node` user — and every exit 1 was the `cd`.
-    const h = harness(() => ({
+    const h = harness((request) => ({
       json: {
         exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
         stdout: "",
-        stderr: `${pkg.AGENT37_WORKDIR_UNUSABLE_MARKER}\nsh: 1: cd: can't cd to /root\n`,
+        // The composed script chose a fresh nonce for this call; echo it back
+        // so the runtime sees the marker it is actually looking for.
+        stderr: `${extractWorkdirUnusableMarker(request)}\nsh: 1: cd: can't cd to /root\n`,
       },
     }));
     const runtime = makeRuntime(h);
@@ -975,6 +992,25 @@ describe("Agent37Runtime.runScript", () => {
       cwd: "/work",
     });
     assert.equal(second.exitCode, 1);
+  });
+
+  it("does not reclassify when a command reproduces the fixed prefix and exits 191", async () => {
+    // Requiring both signals is not enough on its own: a valid command can
+    // print the bare marker string AND exit 191 in the same run. The
+    // per-invocation nonce is what makes the pair spoofproof.
+    const collide = harness(() => ({
+      json: {
+        exit_code: pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE,
+        stdout: "",
+        // Marker prefix without the nonce the composed script actually chose.
+        stderr: `${pkg.AGENT37_WORKDIR_UNUSABLE_MARKER}\ncommand output that happens to include the prefix\n`,
+      },
+    }));
+    const result = await makeRuntime(collide).runScript(RUNNING_HANDLE, {
+      command: `printf '%s\\n' '${pkg.AGENT37_WORKDIR_UNUSABLE_MARKER}' >&2; exit 191`,
+      cwd: "/work",
+    });
+    assert.equal(result.exitCode, pkg.AGENT37_WORKDIR_UNUSABLE_EXIT_CODE);
   });
 
   it("does not reclassify when no cwd was requested, because no cd was emitted", async () => {

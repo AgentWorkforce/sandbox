@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 
 import type {
@@ -315,12 +316,33 @@ export class Agent37UnknownExitCodeError extends Error {
  * The status alone is not proof (a command may legitimately exit 191), and the
  * marker alone is not proof (a command may legitimately print it), so
  * {@link Agent37Runtime.runScript} requires both before it reclassifies a
- * result as a workdir fault.
+ * result as a workdir fault. Requiring "both" is not enough on its own either:
+ * a valid command can print the fixed prefix *and* exit 191 in the same run,
+ * so {@link composeScript} appends a per-invocation nonce that the running
+ * command has no way to see. See {@link makeWorkdirUnusableMarker}.
  */
 export const AGENT37_WORKDIR_UNUSABLE_EXIT_CODE = 191;
 
-/** @see AGENT37_WORKDIR_UNUSABLE_EXIT_CODE */
+/**
+ * Stable prefix for the workdir-unusable sentinel line.
+ *
+ * The full marker emitted by any given composed script is this prefix followed
+ * by a per-invocation nonce, so an unrelated command cannot spoof it.
+ *
+ * @see AGENT37_WORKDIR_UNUSABLE_EXIT_CODE
+ */
 export const AGENT37_WORKDIR_UNUSABLE_MARKER = "__agent37_workdir_unusable__";
+
+/**
+ * Build a per-invocation workdir-unusable sentinel line.
+ *
+ * The prefix stays discoverable to a human reading the raw output, and the
+ * nonce guarantees the line cannot be reproduced by a command whose own output
+ * happens to include the prefix.
+ */
+export function makeWorkdirUnusableMarker(): string {
+  return `${AGENT37_WORKDIR_UNUSABLE_MARKER}${randomUUID().replace(/-/g, "")}`;
+}
 
 /**
  * Raised when the instance could not enter the requested working directory.
@@ -828,9 +850,14 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
       assertValidEnv(options.env);
     }
     const cwd = options.cwd ?? handle.workdir;
+    // Per-invocation nonce, generated only when a cd is actually emitted. A
+    // command that legitimately prints the fixed prefix and exits 191 will
+    // not carry this suffix, so reclassification cannot collide with it.
+    const workdirUnusableMarker = cwd ? makeWorkdirUnusableMarker() : undefined;
     const script = composeScript(options.command, {
       ...(cwd ? { cwd } : {}),
       ...(options.env ? { env: options.env } : {}),
+      ...(workdirUnusableMarker ? { workdirUnusableMarker } : {}),
     });
     // Only `requestTimeoutMs` becomes an abort signal. `timeoutMs` is a command
     // lifetime, and it got here only because the provider's own cap already
@@ -841,8 +868,9 @@ export class Agent37Runtime implements SandboxRuntime, WorkflowRuntime {
     // be reported as a command that ran and failed.
     if (
       cwd &&
+      workdirUnusableMarker &&
       result.exit_code === AGENT37_WORKDIR_UNUSABLE_EXIT_CODE &&
-      combineOutput(result.stdout, result.stderr).includes(AGENT37_WORKDIR_UNUSABLE_MARKER)
+      combineOutput(result.stdout, result.stderr).includes(workdirUnusableMarker)
     ) {
       throw new Agent37WorkdirUnusableError(
         handle.id,
@@ -1274,16 +1302,27 @@ export function assertValidEnv(env: Record<string, string>): void {
  */
 export function composeScript(
   command: string,
-  options: { cwd?: string; env?: Record<string, string> } = {},
+  options: {
+    cwd?: string;
+    env?: Record<string, string>;
+    /**
+     * Sentinel line the `cd` failure branch writes to stderr. Callers wiring
+     * this into a reclassifier should pass a unique value per invocation (see
+     * {@link makeWorkdirUnusableMarker}) so command output cannot spoof the
+     * failure signal. Defaults to the stable prefix for compose-only use.
+     */
+    workdirUnusableMarker?: string;
+  } = {},
 ): string {
   const lines: string[] = [];
   if (options.cwd) {
     // POSIX `sh`, not bash: Agent37's exec plane runs dash, where a bashism
     // like ${PIPESTATUS[0]} is a "Bad substitution". `{ …; }` and `printf` are
     // both POSIX, so this line runs on either shell.
+    const marker = options.workdirUnusableMarker ?? AGENT37_WORKDIR_UNUSABLE_MARKER;
     lines.push(
       `cd ${shellQuote(options.cwd)} || { printf '%s\\n' ` +
-        `${shellQuote(AGENT37_WORKDIR_UNUSABLE_MARKER)} >&2; ` +
+        `${shellQuote(marker)} >&2; ` +
         `exit ${AGENT37_WORKDIR_UNUSABLE_EXIT_CODE}; }`,
     );
   }

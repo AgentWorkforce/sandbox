@@ -10,6 +10,7 @@ export {
   Agent37Runtime,
   Agent37UnknownExitCodeError,
   Agent37WorkdirUnusableError,
+  makeWorkdirUnusableMarker,
 } from "./runtime.js";
 export type {
   Agent37BundleFile,
