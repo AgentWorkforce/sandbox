@@ -175,6 +175,18 @@ export type {
 } from "./vercel/config.js";
 
 export {
+  RunloopCommandTimeoutError,
+  RunloopCreateTimeoutUnsupportedError,
+  RunloopForeignDevboxError,
+  RunloopNotFoundError,
+  RunloopRuntime,
+  RunloopUnknownExitCodeError,
+  runloopWorkflowCapabilities,
+} from "./runloop/runtime.js";
+export type { RunloopRuntimeDependencies } from "./runloop/runtime.js";
+export type { RunloopRuntimeOptions } from "./runloop/config.js";
+
+export {
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
   ModalForeignSandboxError,

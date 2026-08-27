@@ -15,6 +15,7 @@ const providerEntrypoints = [
   "local",
   "microsandbox",
   "modal",
+  "runloop",
   "vercel",
 ] as const;
 
