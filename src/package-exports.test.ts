@@ -9,6 +9,7 @@ const sourceRoot = path.join(repositoryRoot, "src");
 const providerEntrypoints = [
   "agent37",
   "agentcore",
+  "blaxel",
   "daytona",
   "depot",
   "e2b",

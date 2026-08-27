@@ -199,6 +199,18 @@ export type { DepotRuntimeDependencies } from "./depot/runtime.js";
 export type { DepotResources, DepotRuntimeOptions } from "./depot/config.js";
 
 export {
+  BlaxelCreateTimeoutUnsupportedError,
+  BlaxelDestroyVerificationError,
+  BlaxelForeignSandboxError,
+  BlaxelNotFoundError,
+  BlaxelRuntime,
+  BlaxelUnknownExitCodeError,
+  blaxelWorkflowCapabilities,
+} from "./blaxel/runtime.js";
+export type { BlaxelRuntimeDependencies } from "./blaxel/runtime.js";
+export type { BlaxelRuntimeOptions } from "./blaxel/config.js";
+
+export {
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
   ModalForeignSandboxError,

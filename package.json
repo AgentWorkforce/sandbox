@@ -34,6 +34,7 @@
   "peerDependencies": {
     "@aws-sdk/client-bedrock-agentcore": ">=3.1115.0 <4.0.0",
     "@aws-sdk/client-bedrock-agentcore-control": ">=3.1115.0 <4.0.0",
+    "@blaxel/core": ">=0.3.13 <0.4.0",
     "@daytonaio/sdk": ">=0.180.0 <0.206.0",
     "@depot/sandbox": ">=0.1.0-beta.3 <0.2.0",
     "@runloop/api-client": ">=1.31.0 <2.0.0",
@@ -48,6 +49,9 @@
       "optional": true
     },
     "@aws-sdk/client-bedrock-agentcore-control": {
+      "optional": true
+    },
+    "@blaxel/core": {
       "optional": true
     },
     "@daytonaio/sdk": {
@@ -78,6 +82,7 @@
   "devDependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1115.0",
     "@aws-sdk/client-bedrock-agentcore-control": "^3.1115.0",
+    "@blaxel/core": "^0.3.13",
     "@daytonaio/sdk": "^0.205.1",
     "@depot/sandbox": "^0.1.0-beta.3",
     "@runloop/api-client": "^1.31.0",
