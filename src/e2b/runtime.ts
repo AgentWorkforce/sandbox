@@ -167,6 +167,11 @@ export type E2BSandboxRuntimeOptions = {
   apiKey: string;
   /** Account-specific template or snapshot identifier used for every launch. */
   template: string;
+  /**
+   * Stable home directory baked into the selected template. When supplied,
+   * every created or reattached handle carries it without an extra exec.
+   */
+  defaultHomeDir?: string;
   /** Maximum lifetime granted to an asynchronous command and its sandbox. */
   runBudgetMs?: number;
   /**
@@ -217,6 +222,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 
   private readonly apiKey: string;
   private readonly template: string;
+  private readonly defaultHomeDir?: string;
   private readonly runBudgetMs: number;
   private readonly syncRunBudgetMs: number;
   private readonly sandboxLifetimeMs: number;
@@ -235,8 +241,13 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     if (!template) {
       throw new Error("E2B sandbox template is required");
     }
+    const defaultHomeDir = options.defaultHomeDir?.trim();
+    if (options.defaultHomeDir !== undefined && !defaultHomeDir) {
+      throw new Error("E2B default home directory must be a non-empty string");
+    }
     this.apiKey = apiKey;
     this.template = template;
+    this.defaultHomeDir = defaultHomeDir;
     this.runBudgetMs = positiveDuration(options.runBudgetMs, DEFAULT_RUN_BUDGET_MS);
     this.syncRunBudgetMs = positiveDuration(options.syncRunBudgetMs, this.runBudgetMs);
     this.sandboxLifetimeMs = positiveDuration(
@@ -771,6 +782,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     info: E2BSandboxInfo,
     options: E2BAttachedSandboxOptions,
   ): RuntimeHandle {
+    const homeDir = options.homeDir ?? this.defaultHomeDir;
     const existing = this.registrations.get(info.sandboxId);
     this.registrations.set(info.sandboxId, {
       ...(existing?.sandbox ? { sandbox: existing.sandbox } : {}),
@@ -779,7 +791,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     });
     return {
       ...handleFromE2BInfo(info),
-      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ...(homeDir ? { homeDir } : {}),
       ...(options.workdir ? { workdir: options.workdir } : {}),
     };
   }
@@ -788,6 +800,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     sandbox: E2BSandbox,
     options: E2BAttachedSandboxOptions & { owned: boolean },
   ): RuntimeHandle {
+    const homeDir = options.homeDir ?? this.defaultHomeDir;
     this.registrations.set(sandbox.sandboxId, {
       sandbox,
       owned: options.owned,
@@ -796,7 +809,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     return {
       id: sandbox.sandboxId,
       state: "STARTED",
-      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ...(homeDir ? { homeDir } : {}),
       ...(options.workdir ? { workdir: options.workdir } : {}),
     };
   }

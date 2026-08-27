@@ -71,6 +71,21 @@ describe("E2BSandboxRuntime public contract", () => {
     assert.equal(calls.create.length, 0);
   });
 
+  it("must-not-fire: rejects an explicitly empty default home directory", () => {
+    const { statics, calls } = fakeStatics();
+
+    assert.throws(
+      () => new E2BSandboxRuntime({
+        apiKey: API_KEY,
+        template: TEMPLATE,
+        defaultHomeDir: "  ",
+        sandbox: statics,
+      }),
+      /default home directory/u,
+    );
+    assert.equal(calls.create.length, 0);
+  });
+
   it("must-not-fire: rejects an empty API key instead of allowing SDK ambient fallback", () => {
     const { statics, calls } = fakeStatics();
 
@@ -144,6 +159,20 @@ describe("E2BSandboxRuntime launch and lookup", () => {
       template: TEMPLATE,
       options: { apiKey: API_KEY, requestTimeoutMs: 77_000, timeoutMs: 1_800_000 },
     }]);
+  });
+
+  it("must-fire: carries a configured template home directory on created handles", async () => {
+    const sandbox = fakeSandbox({ id: "sbx-home-configured" });
+    const runtime = createRuntime(
+      fakeStatics({ createSandbox: sandbox }).statics,
+      { defaultHomeDir: "/home/user" },
+    );
+
+    const handle = await runtime.launch();
+
+    assert.equal(handle.homeDir, "/home/user");
+    assert.equal(await runtime.getHomeDir(handle), "/home/user");
+    assert.equal(sandbox.calls.run.length, 0);
   });
 
   it("must-not-fire: propagates launch failures unchanged", async () => {
@@ -1263,6 +1292,7 @@ function fakeStatics(options: {
 function createRuntime(
   statics: E2BSandboxStatics,
   options: {
+    defaultHomeDir?: string;
     runBudgetMs?: number;
     syncRunBudgetMs?: number;
     createTimeoutMs?: number;
