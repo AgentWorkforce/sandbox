@@ -10,6 +10,7 @@ const providerEntrypoints = [
   "agent37",
   "agentcore",
   "daytona",
+  "depot",
   "e2b",
   "freestyle",
   "local",

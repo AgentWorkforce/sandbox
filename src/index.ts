@@ -187,6 +187,18 @@ export type { RunloopRuntimeDependencies } from "./runloop/runtime.js";
 export type { RunloopRuntimeOptions } from "./runloop/config.js";
 
 export {
+  DepotCommandTimeoutError,
+  DepotCreateTimeoutUnsupportedError,
+  DepotDestroyVerificationError,
+  DepotForeignSandboxError,
+  DepotNotFoundError,
+  DepotRuntime,
+  depotWorkflowCapabilities,
+} from "./depot/runtime.js";
+export type { DepotRuntimeDependencies } from "./depot/runtime.js";
+export type { DepotResources, DepotRuntimeOptions } from "./depot/config.js";
+
+export {
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
   ModalForeignSandboxError,
