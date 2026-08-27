@@ -211,6 +211,19 @@ export type { BlaxelRuntimeDependencies } from "./blaxel/runtime.js";
 export type { BlaxelRuntimeOptions } from "./blaxel/config.js";
 
 export {
+  KernelCreateTimeoutUnsupportedError,
+  KernelDestroyVerificationError,
+  KernelForeignBrowserError,
+  KernelNotFoundError,
+  KernelRuntime,
+  KernelTagLimitError,
+  KernelUnknownExitCodeError,
+  kernelWorkflowCapabilities,
+} from "./kernel/runtime.js";
+export type { KernelRuntimeDependencies } from "./kernel/runtime.js";
+export type { KernelRuntimeOptions } from "./kernel/config.js";
+
+export {
   ModalCapabilityMismatchError,
   ModalDeadlineExceededError,
   ModalForeignSandboxError,

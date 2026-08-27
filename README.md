@@ -31,9 +31,10 @@ import { SandboxOrchestrator } from "@agent-relay/sandbox/core";
 import { DaytonaRuntime } from "@agent-relay/sandbox/daytona";
 ```
 
-The provider entrypoints are `agent37`, `agentcore`, `daytona`, `e2b`,
-`freestyle`, `local`, `microsandbox`, `modal`, and `vercel`. Each points at its
-own barrel, so a bundler does not have to resolve the other optional provider SDKs.
+The provider entrypoints are `agent37`, `agentcore`, `blaxel`, `daytona`,
+`depot`, `e2b`, `freestyle`, `kernel`, `local`, `microsandbox`, `modal`,
+`runloop`, and `vercel`. Each points at its own barrel, so a bundler does not
+have to resolve the other optional provider SDKs.
 The root `@agent-relay/sandbox` barrel still exports the complete historical
 surface for compatibility, but new runtime imports should use `core` plus one
 provider subpath.
@@ -52,10 +53,14 @@ same as this package's:
 
 | Adapter | Peer dependency | Requirements beyond this package's |
 | --- | --- | --- |
+| `BlaxelRuntime` | `@blaxel/core` 0.3.x | Workspace identifier |
 | `DaytonaRuntime` | `@daytonaio/sdk` 0.180–0.205 | — |
+| `DepotRuntime` | `@depot/sandbox` 0.1 beta | — |
 | `E2BSandboxRuntime` | `e2b` | — |
+| `KernelRuntime` | `@onkernel/sdk` 0.96.x | — |
 | `MicrosandboxRuntime` | `microsandbox` | **Node.js 22+**, a platform-specific native addon (macOS arm64, Linux x64/arm64, Windows x64/arm64), and — for its `local` backend — hardware virtualization: KVM on Linux, Apple Silicon on macOS, or WHP on Windows 10+ |
 | `LocalSandboxRuntime` | — | A reachable local sandbox service |
+| `RunloopRuntime` | `@runloop/api-client` 1.x | — |
 
 The package itself keeps a Node 20 floor, because a consumer that never touches
 the microsandbox adapter never loads that SDK: it is imported lazily, at first
@@ -235,6 +240,23 @@ the settled reason a Vercel sandbox has no never-idle tier. `filesystem` is
 deliberately left `"unknown"`: durability is per-instance configuration
 (`persistent`), and surviving a stop/resume is the same round trip `lifecycle`
 is still awaiting live proof of.
+
+### Kernel runtime contract
+
+`KernelRuntime` uses Kernel's browser VM as a command sandbox through the
+official SDK's process and filesystem APIs. Browser names and native tags form
+the ownership boundary, tag filters power reattachment and lookup, synchronous
+process execution supplies separate buffered streams and a provider deadline,
+and the filesystem API transfers binary data without text encoding.
+
+Kernel browser sessions end after an inactivity timeout, and their files do not
+survive deletion, so the capability modes are `idle-timeout` and `ephemeral`.
+The SDK can spawn a background process and expose a live SSE output stream, but
+it has no durable log-read or replay-cursor operation. The adapter therefore
+does not claim async execution: a caller that reconnects after a crash could
+poll status but could not reliably recover the command output. PTY exists in the
+SDK but is not reachable through this package's port, and explicit stop/start
+lifecycle is absent.
 
 ### Modal runtime contract
 

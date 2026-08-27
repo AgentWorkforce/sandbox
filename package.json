@@ -37,6 +37,7 @@
     "@blaxel/core": ">=0.3.13 <0.4.0",
     "@daytonaio/sdk": ">=0.180.0 <0.206.0",
     "@depot/sandbox": ">=0.1.0-beta.3 <0.2.0",
+    "@onkernel/sdk": ">=0.96.0 <0.97.0",
     "@runloop/api-client": ">=1.31.0 <2.0.0",
     "@vercel/sandbox": ">=3.0.1 <4.0.0",
     "e2b": ">=2.35.0 <3.0.0",
@@ -58,6 +59,9 @@
       "optional": true
     },
     "@depot/sandbox": {
+      "optional": true
+    },
+    "@onkernel/sdk": {
       "optional": true
     },
     "@runloop/api-client": {
@@ -85,6 +89,7 @@
     "@blaxel/core": "^0.3.13",
     "@daytonaio/sdk": "^0.205.1",
     "@depot/sandbox": "^0.1.0-beta.3",
+    "@onkernel/sdk": "^0.96.0",
     "@runloop/api-client": "^1.31.0",
     "@types/node": "^22",
     "@vercel/sandbox": "3.0.1",
