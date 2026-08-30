@@ -89,7 +89,7 @@ describe("startMount initial-sync idle budget", () => {
     );
   });
 
-  it("makes the readiness sync complete and uses bounded foreground concurrency", async () => {
+  it("requests a complete readiness traversal with bounded foreground concurrency", async () => {
     const { orchestrator, commands } = recordingRuntime();
     await orchestrator.startMount({ id: "sbx" }, MOUNT);
 
