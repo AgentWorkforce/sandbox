@@ -88,4 +88,65 @@ describe("startMount initial-sync idle budget", () => {
       "explicit idle timeout was not propagated",
     );
   });
+
+  it("makes the readiness sync complete and uses bounded foreground concurrency", async () => {
+    const { orchestrator, commands } = recordingRuntime();
+    await orchestrator.startMount({ id: "sbx" }, MOUNT);
+
+    const initialSync = commands.find((command) =>
+      command.includes("RELAYFILE_BOOTSTRAP_READ_CONCURRENCY="),
+    );
+    assert.ok(initialSync, "initial sync was never launched");
+    assert.match(
+      initialSync,
+      /export RELAYFILE_BOOTSTRAP_MAX_FILES_PER_CYCLE=-1/u,
+    );
+    assert.match(
+      initialSync,
+      /export RELAYFILE_BOOTSTRAP_READ_CONCURRENCY=64/u,
+    );
+
+    const daemon = commands.find((command) => command.includes("nohup relayfile-mount"));
+    assert.ok(daemon, "daemon was never started");
+    assert.doesNotMatch(daemon, /RELAYFILE_BOOTSTRAP_MAX_FILES_PER_CYCLE/u);
+    assert.doesNotMatch(daemon, /RELAYFILE_BOOTSTRAP_READ_CONCURRENCY/u);
+  });
+
+  it("honours explicit initial-sync traversal controls", async () => {
+    const { orchestrator, commands } = recordingRuntime();
+    await orchestrator.startMount({ id: "sbx" }, MOUNT, {
+      initialSyncMaxFilesPerCycle: 8_000,
+      initialSyncReadConcurrency: 32,
+    });
+
+    const initialSync = commands.find((command) =>
+      command.includes("RELAYFILE_BOOTSTRAP_READ_CONCURRENCY="),
+    );
+    assert.ok(initialSync, "initial sync was never launched");
+    assert.match(
+      initialSync,
+      /export RELAYFILE_BOOTSTRAP_MAX_FILES_PER_CYCLE=8000/u,
+    );
+    assert.match(
+      initialSync,
+      /export RELAYFILE_BOOTSTRAP_READ_CONCURRENCY=32/u,
+    );
+  });
+
+  it("rejects invalid initial-sync traversal controls before touching the sandbox", async () => {
+    for (const options of [
+      { initialSyncMaxFilesPerCycle: 0 },
+      { initialSyncMaxFilesPerCycle: -2 },
+      { initialSyncReadConcurrency: 0 },
+      { initialSyncReadConcurrency: 65 },
+      { initialSyncReadConcurrency: 1.5 },
+    ]) {
+      const { orchestrator, commands } = recordingRuntime();
+      await assert.rejects(
+        orchestrator.startMount({ id: "sbx" }, MOUNT, options),
+        /initialSync(?:MaxFilesPerCycle|ReadConcurrency)/u,
+      );
+      assert.deepEqual(commands, []);
+    }
+  });
 });

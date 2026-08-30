@@ -107,6 +107,16 @@ export type StartMountOptions = {
   initialSyncDeadlineMs?: number;
   /** Cadence of the short status-probe execs. */
   initialSyncPollIntervalMs?: number;
+  /**
+   * Parallel Relayfile reads used only by the detached initial materialization.
+   * Relayfile supports at most 64. The daemon keeps its own normal default.
+   */
+  initialSyncReadConcurrency?: number;
+  /**
+   * Relayfile tree-bootstrap file budget used only by initial materialization.
+   * `-1` means one complete, resumable traversal instead of a partial cycle.
+   */
+  initialSyncMaxFilesPerCycle?: number;
   killExisting?: boolean;
 };
 
@@ -175,6 +185,12 @@ export class SandboxOrchestrator<Handle> {
     options: StartMountOptions = {},
   ): Promise<RelayfileMountHandle> {
     const cwd = options.cwd;
+    const initialSyncMaxFilesPerCycle = relayfileInitialSyncMaxFilesPerCycle(
+      options.initialSyncMaxFilesPerCycle ?? -1,
+    );
+    const initialSyncReadConcurrency = relayfileInitialSyncReadConcurrency(
+      options.initialSyncReadConcurrency ?? 64,
+    );
     const mkdir = await this.runtime.runScript(handle, {
       command: `mkdir -p ${shellQuote(config.localDir)}`,
       cwd,
@@ -206,6 +222,18 @@ export class SandboxOrchestrator<Handle> {
     const initialSyncIdleTimeoutSeconds = relayfileBootstrapIdleTimeoutSeconds(
       idleTimeoutMs / 1000,
     );
+    // startMount does not hand back a daemon until its initial materialization
+    // exits 0. Relayfile's ordinary 2,000-file cycle budget is correct for a
+    // background daemon, but `--once` also exits 0 after that partial cycle.
+    // On a large full-root workspace that makes the orchestration boundary say
+    // "ready" while most files are still absent. Run this one detached
+    // materialization without the per-cycle ceiling; its existing idle and
+    // wall-clock watchdogs still bound it, and Relayfile's persisted traversal
+    // checkpoints make a killed attempt resumable.
+    // Large workspaces that exceed the aggregate export ceiling fall back to
+    // one HTTP read per file. Relayfile deliberately supports up to 64 bounded
+    // bootstrap readers. Use that supported ceiling for the foreground
+    // readiness barrier only; the long-lived daemon retains its normal default.
     // The initial sync can outlive any single exec (Daytona's proxy read
     // timeout is ~120s and callers wrap execs in client-side fail-fasts), so
     // it runs detached in the sandbox — keeping the in-sandbox idle watchdog
@@ -215,7 +243,7 @@ export class SandboxOrchestrator<Handle> {
     // supervisor has exited and released that lease.
     const initialSyncRun = { runId: relayfileInitialSyncRunId() };
     const launch = await this.runtime.runScript(handle, {
-      command: withRelayfileBootstrapIdleTimeout(
+      command: withRelayfileInitialSyncEnvironment(
         buildRelayfileMountInitialSyncBackgroundShell(
           {
             ...config,
@@ -224,6 +252,8 @@ export class SandboxOrchestrator<Handle> {
           initialSyncRun,
         ),
         initialSyncIdleTimeoutSeconds,
+        initialSyncReadConcurrency,
+        initialSyncMaxFilesPerCycle,
       ),
       cwd,
     });
@@ -516,6 +546,38 @@ function withRelayfileBootstrapIdleTimeout(
 ): string {
   return [
     ...relayfileBootstrapIdleTimeoutEnvShell(idleTimeoutSeconds),
+    command,
+  ].join("\n");
+}
+
+function relayfileInitialSyncReadConcurrency(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 64) {
+    throw new Error(
+      "initialSyncReadConcurrency must be an integer between 1 and 64",
+    );
+  }
+  return value;
+}
+
+function relayfileInitialSyncMaxFilesPerCycle(value: number): number {
+  if (!Number.isInteger(value) || value === 0 || value < -1) {
+    throw new Error(
+      "initialSyncMaxFilesPerCycle must be -1 or a positive integer",
+    );
+  }
+  return value;
+}
+
+function withRelayfileInitialSyncEnvironment(
+  command: string,
+  idleTimeoutSeconds: number | undefined,
+  readConcurrency: number,
+  maxFilesPerCycle: number,
+): string {
+  return [
+    ...relayfileBootstrapIdleTimeoutEnvShell(idleTimeoutSeconds),
+    `export RELAYFILE_BOOTSTRAP_READ_CONCURRENCY=${readConcurrency}`,
+    `export RELAYFILE_BOOTSTRAP_MAX_FILES_PER_CYCLE=${maxFilesPerCycle}`,
     command,
   ].join("\n");
 }
