@@ -319,7 +319,15 @@ export function buildRelayfileMountInitialSyncCompletionGuardShell(
     `  process.exit(${RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE});`,
     "}",
   ].join(" ");
-  return ["node", "-e", shellQuote(program), ...stateFiles.map(shellQuote)].join(" ");
+  return [
+    "(",
+    "if ! command -v node >/dev/null 2>&1; then",
+    "  echo 'relayfile initial sync readiness validation requires node' >&2;",
+    "  exit 69;",
+    "fi;",
+    `node -e ${shellQuote(program)} ${stateFiles.map(shellQuote).join(" ")};`,
+    ")",
+  ].join(" ");
 }
 
 export const RELAYFILE_INITIAL_SYNC_SCRIPT_PATH = "/tmp/relayfile-initial-sync.sh";

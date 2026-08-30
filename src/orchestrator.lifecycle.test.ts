@@ -47,6 +47,14 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -z "$local_dir" ]; then exit 2; fi
 mkdir -p "$local_dir"
+if [ "\${FAKE_MOUNT_WRITE_STATE:-}" = 1 ]; then
+  mkdir -p "$local_dir/.relay"
+  if [ "\${FAKE_MOUNT_INCOMPLETE:-}" = 1 ]; then
+    printf '%s' '{"bootstrap":{"cursor":"resume"}}' > "$local_dir/.relay/state.json"
+  else
+    printf '%s' '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"}' > "$local_dir/.relay/state.json"
+  fi
+fi
 exit 0
 `,
   );
@@ -55,6 +63,35 @@ exit 0
 }
 
 describe("relayfile exact-root lifecycle observability", () => {
+  it("contains incomplete readiness when lifecycle initial sync may continue", (t) => {
+    const { binDir, localRoot } = fakeLifecycleMount(t);
+    const lifecycle = buildRelayfileMountLifecycleShell({
+      localDir: localRoot,
+      mount: {
+        baseUrl: "https://relayfile.example",
+        workspaceId: "wsp_abc",
+        stateDir: join(localRoot, ".state"),
+        token: "relay_pa_test",
+        websocket: false,
+      },
+      initialSyncPaths: ["/github/repos/acme/cloud/**"],
+      continueOnInitialSyncFailure: true,
+    });
+    const result = spawnSync(POSIX_SHELL, ["-c", `${lifecycle}\necho lifecycle-continued`], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        FAKE_MOUNT_WRITE_STATE: "1",
+        FAKE_MOUNT_INCOMPLETE: "1",
+      },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /lifecycle-continued/u);
+    assert.match(result.stderr, /initial sync failed; continuing/u);
+  });
+
   it("aggregates writeback state and receipt scans from joined mount roots", (t) => {
     const { binDir, localRoot } = fakeLifecycleMount(t);
     const slackRoot = join(localRoot, "slack/channels/C123");

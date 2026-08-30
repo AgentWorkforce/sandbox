@@ -219,6 +219,11 @@ describe("exact local-layout contract", () => {
       localDir: root,
       paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
     });
+    assert.match(
+      guard,
+      /command -v node[^]*node -e/u,
+      "guard must validate its declared guest Node prerequisite before use",
+    );
 
     const complete = spawnSync("/bin/sh", ["-c", guard], { encoding: "utf8" });
     assert.equal(complete.status, 0, complete.stderr);
@@ -226,6 +231,20 @@ describe("exact local-layout contract", () => {
     writeFileSync(join(second, "state.json"), '{"bootstrap":{"cursor":"next"}}');
     const incomplete = spawnSync("/bin/sh", ["-c", guard], { encoding: "utf8" });
     assert.equal(incomplete.status, RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE);
+
+    writeFileSync(
+      join(second, "state.json"),
+      '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"',
+    );
+    const malformed = spawnSync("/bin/sh", ["-c", guard], { encoding: "utf8" });
+    assert.equal(malformed.status, RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE);
+
+    const missingNode = spawnSync("/bin/sh", ["-c", guard], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: "/nonexistent" },
+    });
+    assert.equal(missingNode.status, 69);
+    assert.match(missingNode.stderr, /requires node/u);
   });
 
   it("pins the single-path on-disk mirror root explicitly", (t) => {
