@@ -18,6 +18,7 @@ import {
   buildRelayfileMountStartShell,
   buildRelayfileMountFlushShell,
   buildRelayfileMountInitialSyncShell,
+  buildRelayfileMountInitialSyncCompletionGuardShell,
   buildRelayfileMountInitialSyncBackgroundShell,
   buildRelayfileMountInitialSyncStatusShell,
   buildRelayfileMountPathArgsShell,
@@ -25,6 +26,7 @@ import {
   parseRelayfileMountInitialSyncStatus,
   type RelayfileMountInitialSyncStatus,
   RELAYFILE_INITIAL_SYNC_EXIT_PATH,
+  RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE,
   RELAYFILE_INITIAL_SYNC_LOG_PATH,
   RELAYFILE_INITIAL_SYNC_PID_PATH,
   RELAYFILE_INITIAL_SYNC_REAPED_PATH,
@@ -82,6 +84,12 @@ if [ -n "\${FAKE_MOUNT_FAIL_LATER_LOCAL_DIR:-}" ] && [ "$local_dir" = "$FAKE_MOU
 fi
 mkdir -p "$local_dir"
 printf mounted > "$local_dir/.mounted"
+mkdir -p "$local_dir/.relay"
+if [ "\${FAKE_MOUNT_INCOMPLETE:-}" = 1 ]; then
+  printf '%s' '{"bootstrap":{"cursor":"resume-here"}}' > "$local_dir/.relay/state.json"
+else
+  printf '%s' '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"}' > "$local_dir/.relay/state.json"
+fi
 `,
   );
   chmodSync(fakeMount, 0o755);
@@ -168,6 +176,77 @@ describe("mount-script token ingress", () => {
 });
 
 describe("exact local-layout contract", () => {
+  it("fails the initial readiness barrier when persisted bootstrap is incomplete", (t) => {
+    const { binDir, localRoot } = fakeExactMount(t);
+    for (const timing of [
+      {},
+      { timeoutSeconds: 30 },
+      { idleTimeoutSeconds: 30 },
+    ]) {
+      const shell = buildRelayfileMountInitialSyncShell({
+        ...BASE,
+        ...timing,
+        localDir: localRoot,
+      });
+      const result = spawnSync("/bin/sh", ["-c", shell], {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          FAKE_MOUNT_INCOMPLETE: "1",
+        },
+        encoding: "utf8",
+      });
+
+      assert.equal(result.status, RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE);
+      assert.match(result.stderr, /paused before complete readiness/u);
+    }
+  });
+
+  it("requires every exact-layout root to have a completed public state", (t) => {
+    const root = mkdtempSync(join(tmpdir(), "sandbox-mount-ready-state-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const first = join(root, "github/repos/acme/cloud/.relay");
+    const second = join(root, "slack/channels/C123/.relay");
+    for (const stateDir of [first, second]) {
+      const mkdir = spawnSync("mkdir", ["-p", stateDir]);
+      assert.equal(mkdir.status, 0, mkdir.stderr?.toString());
+      writeFileSync(
+        join(stateDir, "state.json"),
+        '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"}',
+      );
+    }
+    const guard = buildRelayfileMountInitialSyncCompletionGuardShell({
+      localDir: root,
+      paths: ["/github/repos/acme/cloud/**", "/slack/channels/C123/**"],
+    });
+    assert.match(
+      guard,
+      /command -v node[^]*node -e/u,
+      "guard must validate its declared guest Node prerequisite before use",
+    );
+
+    const complete = spawnSync("/bin/sh", ["-c", guard], { encoding: "utf8" });
+    assert.equal(complete.status, 0, complete.stderr);
+
+    writeFileSync(join(second, "state.json"), '{"bootstrap":{"cursor":"next"}}');
+    const incomplete = spawnSync("/bin/sh", ["-c", guard], { encoding: "utf8" });
+    assert.equal(incomplete.status, RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE);
+
+    writeFileSync(
+      join(second, "state.json"),
+      '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"',
+    );
+    const malformed = spawnSync("/bin/sh", ["-c", guard], { encoding: "utf8" });
+    assert.equal(malformed.status, RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE);
+
+    const missingNode = spawnSync("/bin/sh", ["-c", guard], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: "/nonexistent" },
+    });
+    assert.equal(missingNode.status, 69);
+    assert.match(missingNode.stderr, /requires node/u);
+  });
+
   it("pins the single-path on-disk mirror root explicitly", (t) => {
     const { binDir, localRoot } = fakeExactMount(t);
 
@@ -851,11 +930,20 @@ describe("detached initial-sync script credential hygiene (sandbox#30)", () => {
     writeFileSync(
       fakeMount,
       `#!/bin/sh
+local_dir=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --local-dir) local_dir="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 attempts=0
 while [ ! -f '${releasePath}' ] && [ "$attempts" -lt 400 ]; do
   attempts=$((attempts + 1))
   sleep 0.05
 done
+mkdir -p "$local_dir/.relay"
+printf '%s' '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"}' > "$local_dir/.relay/state.json"
 exit 0
 `,
     );
@@ -1119,7 +1207,20 @@ exit 0
     const mkdir = spawnSync("mkdir", ["-p", binDir]);
     assert.equal(mkdir.status, 0, mkdir.stderr?.toString());
     const fakeMount = join(binDir, "relayfile-mount");
-    writeFileSync(fakeMount, `#!/bin/sh\nexit ${exitCode}\n`);
+    writeFileSync(fakeMount, `#!/bin/sh
+local_dir=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --local-dir) local_dir="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ ${exitCode} -eq 0 ]; then
+  mkdir -p "$local_dir/.relay"
+  printf '%s' '{"lastSuccessfulReconcileAt":"2026-08-30T00:00:00Z"}' > "$local_dir/.relay/state.json"
+fi
+exit ${exitCode}
+`);
     chmodSync(fakeMount, 0o755);
     return { binDir, root };
   }

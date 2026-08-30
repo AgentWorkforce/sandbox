@@ -263,7 +263,8 @@ export function buildRelayfileMountInitialSyncShell(
   opts: RelayfileMountInitialSyncOptions,
 ): string {
   const commands = buildInitialSyncCommands(opts);
-  const command = composeIndependentMountCommands(commands);
+  const completionGuard = buildRelayfileMountInitialSyncCompletionGuardShell(opts);
+  const command = `${composeIndependentMountCommands(commands)} && ${completionGuard}`;
   if (opts.idleTimeoutSeconds && opts.idleTimeoutSeconds > 0) {
     return buildIdleWatchedCommand(
       command,
@@ -286,7 +287,46 @@ export function buildRelayfileMountInitialSyncShell(
     "echo 'timeout command unavailable for relayfile initial sync' >&2;",
     "false;",
     "fi;",
+    `} && ${completionGuard}`,
+  ].join(" ");
+}
+
+/**
+ * Relayfile can checkpoint a transient bootstrap failure and return success
+ * from `--once`. Require every exact-layout root to have completed one public
+ * reconcile before the readiness barrier opens.
+ */
+export function buildRelayfileMountInitialSyncCompletionGuardShell(
+  opts: Pick<RelayfileMountShellOptions, "localDir" | "paths">,
+): string {
+  const roots = scopedRemoteRoots(opts.paths ?? [], { allowProviderRoot: true });
+  const stateFiles = exactMounts(opts.localDir, roots).map((mount) =>
+    `${mount.localDir.replace(/\/+$/u, "")}/.relay/state.json`
+  );
+  const program = [
+    'const fs = require("node:fs");',
+    "let complete = true;",
+    "for (const stateFile of process.argv.slice(1)) {",
+    "  try {",
+    '    const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));',
+    "    if (state.bootstrap != null ||",
+    '        typeof state.lastSuccessfulReconcileAt !== "string" ||',
+    "        state.lastSuccessfulReconcileAt.trim().length === 0) complete = false;",
+    "  } catch { complete = false; }",
     "}",
+    "if (!complete) {",
+    '  console.error("relayfile initial sync paused before complete readiness");',
+    `  process.exit(${RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE});`,
+    "}",
+  ].join(" ");
+  return [
+    "(",
+    "if ! command -v node >/dev/null 2>&1; then",
+    "  echo 'relayfile initial sync readiness validation requires node' >&2;",
+    "  exit 69;",
+    "fi;",
+    `node -e ${shellQuote(program)} ${stateFiles.map(shellQuote).join(" ")};`,
+    ")",
   ].join(" ");
 }
 
@@ -308,6 +348,9 @@ export const RELAYFILE_INITIAL_SYNC_REAPED_PATH =
 export type RelayfileMountInitialSyncRunOptions = {
   runId?: string;
 };
+
+/** `sysexits.h` TEMPFAIL: the checkpoint is resumable on the same sandbox. */
+export const RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE = 75;
 
 function relayfileInitialSyncPath(path: string, runId: string | undefined): string {
   if (!runId) {
