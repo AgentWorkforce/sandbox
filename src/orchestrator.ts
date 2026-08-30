@@ -270,10 +270,19 @@ export class SandboxOrchestrator<Handle> {
     // of confirmations instead of polling garbage until the deadline.
     let unknownStatusCount = 0;
     for (;;) {
-      const status = await this.runtime.runScript(handle, {
-        command: buildRelayfileMountInitialSyncStatusShell(initialSyncRun),
-        cwd,
-      });
+      let status: SandboxCommandResult;
+      try {
+        status = await this.runtime.runScript(handle, {
+          command: buildRelayfileMountInitialSyncStatusShell(initialSyncRun),
+          cwd,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to check relayfile initial sync status: ${detail}`,
+          { cause: error },
+        );
+      }
       if (status.exitCode !== 0) {
         throw new Error(`Failed to check relayfile initial sync status: ${status.output}`);
       }

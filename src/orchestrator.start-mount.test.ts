@@ -89,6 +89,26 @@ describe("startMount initial-sync idle budget", () => {
     );
   });
 
+  it("classifies a rejected readiness status transport as a probe failure", async () => {
+    let calls = 0;
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async () => {
+        calls += 1;
+        if (calls === 3) throw new Error("status transport unavailable");
+        return { output: "ok", exitCode: 0 };
+      },
+      teardown: async () => {},
+    });
+
+    await assert.rejects(
+      orchestrator.startMount({ id: "sbx" }, MOUNT),
+      /Failed to check relayfile initial sync status: status transport unavailable/u,
+    );
+    assert.equal(calls, 3);
+  });
+
   it("requests a complete readiness traversal with bounded foreground concurrency", async () => {
     const { orchestrator, commands } = recordingRuntime();
     await orchestrator.startMount({ id: "sbx" }, MOUNT);
