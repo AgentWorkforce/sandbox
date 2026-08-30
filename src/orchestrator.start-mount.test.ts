@@ -109,6 +109,31 @@ describe("startMount initial-sync idle budget", () => {
     assert.equal(calls, 3);
   });
 
+  it("classifies a rejected mount-path transport before replacement starts", async () => {
+    const cause = new Error("mkdir transport unavailable");
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async () => {
+        throw cause;
+      },
+      teardown: async () => {},
+    });
+
+    await assert.rejects(
+      orchestrator.startMount({ id: "sbx" }, MOUNT, { killExisting: true }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /Failed to create relayfile mount path: mkdir transport unavailable/u,
+        );
+        assert.equal(error.cause, cause);
+        return true;
+      },
+    );
+  });
+
   it("requests a complete readiness traversal with bounded foreground concurrency", async () => {
     const { orchestrator, commands } = recordingRuntime();
     await orchestrator.startMount({ id: "sbx" }, MOUNT);

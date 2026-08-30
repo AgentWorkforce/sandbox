@@ -191,10 +191,19 @@ export class SandboxOrchestrator<Handle> {
     const initialSyncReadConcurrency = relayfileInitialSyncReadConcurrency(
       options.initialSyncReadConcurrency ?? 64,
     );
-    const mkdir = await this.runtime.runScript(handle, {
-      command: `mkdir -p ${shellQuote(config.localDir)}`,
-      cwd,
-    });
+    let mkdir: SandboxCommandResult;
+    try {
+      mkdir = await this.runtime.runScript(handle, {
+        command: `mkdir -p ${shellQuote(config.localDir)}`,
+        cwd,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to create relayfile mount path: ${detail}`,
+        { cause: error },
+      );
+    }
     if (mkdir.exitCode !== 0) {
       throw new Error(`Failed to create relayfile mount path: ${mkdir.output}`);
     }
