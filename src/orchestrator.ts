@@ -8,6 +8,7 @@ import {
   buildRelayfileMountInitialSyncStatusShell,
   buildRelayfileMountStartShell,
   parseRelayfileMountInitialSyncStatus,
+  RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE,
   resolveRelayfileMountExactLayout,
   type RelayfileMountDaemonOptions,
   type RelayfileMountShellOptions,
@@ -316,6 +317,11 @@ export class SandboxOrchestrator<Handle> {
           })
           .catch(() => null);
         const detail = logTail?.output?.trim();
+        if (parsed.exitCode === RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE) {
+          throw new Error(
+            `Relayfile initial sync paused before complete readiness${detail ? `: ${detail}` : ""}`,
+          );
+        }
         throw new Error(
           `Failed initial relayfile sync: exit ${parsed.exitCode}${detail ? `: ${detail}` : ""}`,
         );

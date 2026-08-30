@@ -109,6 +109,37 @@ describe("startMount initial-sync idle budget", () => {
     assert.equal(calls, 3);
   });
 
+  it("does not start the daemon when persisted readiness is incomplete", async () => {
+    const commands: string[] = [];
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async (_handle, options) => {
+        commands.push(options.command);
+        if (options.command.includes("relayfile-initial-sync-exit:")) {
+          return { output: "relayfile-initial-sync-exit:75", exitCode: 0 };
+        }
+        if (options.command.startsWith("tail -n ")) {
+          return {
+            output: "relayfile initial sync paused before complete readiness",
+            exitCode: 0,
+          };
+        }
+        return { output: "ok", exitCode: 0 };
+      },
+      teardown: async () => {},
+    });
+
+    await assert.rejects(
+      orchestrator.startMount({ id: "sbx" }, MOUNT),
+      /Relayfile initial sync paused before complete readiness/u,
+    );
+    assert.equal(
+      commands.some((command) => command.includes("nohup relayfile-mount")),
+      false,
+    );
+  });
+
   it("classifies a rejected mount-path transport before replacement starts", async () => {
     const cause = new Error("mkdir transport unavailable");
     const orchestrator = new SandboxOrchestrator<{ id: string }>({
