@@ -147,6 +147,11 @@ describe("startMount initial-sync idle budget", () => {
       2,
     );
     assert.equal(
+      commands.some((command) => command.startsWith("tail -n ")),
+      false,
+      "resumable exits must not spend readiness time on discarded log tails",
+    );
+    assert.equal(
       commands.some((command) => command.includes("nohup relayfile-mount")),
       true,
     );

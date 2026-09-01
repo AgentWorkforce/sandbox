@@ -322,13 +322,6 @@ export class SandboxOrchestrator<Handle> {
       unknownStatusCount = 0;
       if (parsed.state === "exited") {
         if (parsed.exitCode === 0) break;
-        const logTail = await this.runtime
-          .runScript(handle, {
-            command: buildRelayfileMountInitialSyncLogTailShell(40, initialSyncRun),
-            cwd,
-          })
-          .catch(() => null);
-        const detail = logTail?.output?.trim();
         if (parsed.exitCode === RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE) {
           // Exit 75 is TEMPFAIL, not corruption. relayfile-mount persisted a
           // resumable traversal checkpoint in this same sandbox, so launch a
@@ -350,6 +343,13 @@ export class SandboxOrchestrator<Handle> {
           await launchInitialSync();
           continue;
         }
+        const logTail = await this.runtime
+          .runScript(handle, {
+            command: buildRelayfileMountInitialSyncLogTailShell(40, initialSyncRun),
+            cwd,
+          })
+          .catch(() => null);
+        const detail = logTail?.output?.trim();
         throw new Error(
           `Failed initial relayfile sync: exit ${parsed.exitCode}${detail ? `: ${detail}` : ""}`,
         );
