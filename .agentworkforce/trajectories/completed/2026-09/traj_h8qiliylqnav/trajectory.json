@@ -1,0 +1,57 @@
+{
+  "id": "traj_h8qiliylqnav",
+  "version": 1,
+  "task": {
+    "title": "Finalize and publish E2B home contract",
+    "source": {
+      "system": "plain",
+      "id": "sandbox#44"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-09-01T09:16:35.911Z",
+  "completedAt": "2026-09-01T09:18:23.343Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-09-01T09:18:22.563Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_2r53v77klt5l",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-09-01T09:18:22.563Z",
+      "endedAt": "2026-09-01T09:18:23.343Z",
+      "events": [
+        {
+          "ts": 1788254302564,
+          "type": "decision",
+          "content": "Keep package and lockfile release versions identical: Keep package and lockfile release versions identical",
+          "raw": {
+            "question": "Keep package and lockfile release versions identical",
+            "chosen": "Keep package and lockfile release versions identical",
+            "alternatives": [],
+            "reasoning": "The manual publish workflow consumes the checked-out lockfile and package metadata, so the 0.1.12 release candidate must be internally consistent."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Reconciled sandbox 0.1.12 lock metadata, strengthened E2B preflight validation coverage, and passed 817 tests, typecheck, package smoke, and npm ci.",
+    "approach": "Standard approach",
+    "confidence": 0.97
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/sandbox",
+  "tags": [],
+  "_trace": {
+    "startRef": "1455ce7494fbb762bde4595026735e8b366dd0a5",
+    "endRef": "1455ce7494fbb762bde4595026735e8b366dd0a5"
+  }
+}

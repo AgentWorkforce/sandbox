@@ -82,7 +82,7 @@ describe("E2BSandboxRuntime public contract", () => {
   });
 
   it("must-not-fire: rejects an explicitly empty default home directory", () => {
-    const { statics } = fakeStatics();
+    const { statics, calls } = fakeStatics();
 
     assert.throws(
       () => new E2BSandboxRuntime({
@@ -93,6 +93,7 @@ describe("E2BSandboxRuntime public contract", () => {
       }),
       /default home directory must not be empty/u,
     );
+    assert.equal(calls.create.length, 0);
   });
 });
 
