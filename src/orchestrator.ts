@@ -252,21 +252,30 @@ export class SandboxOrchestrator<Handle> {
     // mount lease, and the exit sentinel is written only after the one-shot
     // supervisor has exited and released that lease.
     const initialSyncRun = { runId: relayfileInitialSyncRunId() };
-    const launch = await this.runtime.runScript(handle, {
-      command: withRelayfileInitialSyncEnvironment(
-        buildRelayfileMountInitialSyncBackgroundShell(
-          {
-            ...config,
-            idleTimeoutSeconds: initialSyncIdleTimeoutSeconds,
-          },
-          initialSyncRun,
+    let launch: SandboxCommandResult;
+    try {
+      launch = await this.runtime.runScript(handle, {
+        command: withRelayfileInitialSyncEnvironment(
+          buildRelayfileMountInitialSyncBackgroundShell(
+            {
+              ...config,
+              idleTimeoutSeconds: initialSyncIdleTimeoutSeconds,
+            },
+            initialSyncRun,
+          ),
+          initialSyncIdleTimeoutSeconds,
+          initialSyncReadConcurrency,
+          initialSyncMaxFilesPerCycle,
         ),
-        initialSyncIdleTimeoutSeconds,
-        initialSyncReadConcurrency,
-        initialSyncMaxFilesPerCycle,
-      ),
-      cwd,
-    });
+        cwd,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to launch relayfile initial sync: ${detail}`,
+        { cause: error },
+      );
+    }
     if (launch.exitCode !== 0) {
       throw new Error(`Failed to launch relayfile initial sync: ${launch.output}`);
     }
@@ -338,13 +347,22 @@ export class SandboxOrchestrator<Handle> {
       await sleepMs(pollIntervalMs);
     }
 
-    const start = await this.runtime.runScript(handle, {
-      command: withRelayfileBootstrapIdleTimeout(
-        buildRelayfileMountStartShell(config),
-        initialSyncIdleTimeoutSeconds,
-      ),
-      cwd,
-    });
+    let start: SandboxCommandResult;
+    try {
+      start = await this.runtime.runScript(handle, {
+        command: withRelayfileBootstrapIdleTimeout(
+          buildRelayfileMountStartShell(config),
+          initialSyncIdleTimeoutSeconds,
+        ),
+        cwd,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to start relayfile mount: ${detail}`,
+        { cause: error },
+      );
+    }
     if (start.exitCode !== 0) {
       throw new Error(`Failed to start relayfile mount: ${start.output}`);
     }

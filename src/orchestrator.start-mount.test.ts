@@ -165,6 +165,72 @@ describe("startMount initial-sync idle budget", () => {
     );
   });
 
+  it("classifies a rejected initial-sync launch transport", async () => {
+    // The launch exec is the first long-lived call in startMount. Daytona's
+    // proxy read timeout is ~120s, so a rejection here is exactly what a
+    // wedged mount looks like from the outside — and while this call was
+    // unwrapped, the raw transport error matched none of the message prefixes
+    // callers classify on, so it fell through to their "unknown" bucket and
+    // the real cause was discarded. See AgentWorkforce/sandbox#45.
+    const cause = new Error("read ETIMEDOUT after 120000ms");
+    let calls = 0;
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async () => {
+        calls += 1;
+        if (calls === 2) throw cause;
+        return { output: "ok", exitCode: 0 };
+      },
+      teardown: async () => {},
+    });
+
+    await assert.rejects(
+      orchestrator.startMount({ id: "sbx" }, MOUNT),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /Failed to launch relayfile initial sync: read ETIMEDOUT after 120000ms/u,
+        );
+        assert.equal(error.cause, cause);
+        return true;
+      },
+    );
+    assert.equal(calls, 2);
+  });
+
+  it("classifies a rejected daemon-start transport", async () => {
+    // The other formerly-unwrapped exec. Reached only after the initial sync
+    // reports a clean exit, so it needs the full happy path in front of it.
+    const cause = new Error("read ETIMEDOUT after 120000ms");
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async (_handle, options) => {
+        if (options.command.includes("nohup relayfile-mount")) throw cause;
+        if (options.command.includes("relayfile-initial-sync-exit:")) {
+          return { output: "relayfile-initial-sync-exit:0", exitCode: 0 };
+        }
+        return { output: "ok", exitCode: 0 };
+      },
+      teardown: async () => {},
+    });
+
+    await assert.rejects(
+      orchestrator.startMount({ id: "sbx" }, MOUNT),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /Failed to start relayfile mount: read ETIMEDOUT after 120000ms/u,
+        );
+        assert.equal(error.cause, cause);
+        return true;
+      },
+    );
+  });
+
   it("requests a complete readiness traversal with bounded foreground concurrency", async () => {
     const { orchestrator, commands } = recordingRuntime();
     await orchestrator.startMount({ id: "sbx" }, MOUNT);
