@@ -111,12 +111,19 @@ describe("startMount initial-sync idle budget", () => {
 
   it("resumes an incomplete initial sync before starting the daemon", async () => {
     const commands: string[] = [];
+    const readinessTimeouts: number[] = [];
     let statusChecks = 0;
     const orchestrator = new SandboxOrchestrator<{ id: string }>({
       provision: async () => ({ id: "sbx" }),
       uploadBundle: async () => {},
       runScript: async (_handle, options) => {
         commands.push(options.command);
+        if (
+          options.command.includes("nohup sh -c") ||
+          options.command.includes("relayfile-initial-sync-exit:")
+        ) {
+          readinessTimeouts.push(options.timeoutMs ?? -1);
+        }
         if (
           options.command.includes("relayfile-initial-sync-exit:") &&
           !options.command.includes("nohup sh -c")
@@ -142,6 +149,11 @@ describe("startMount initial-sync idle budget", () => {
       initialSyncPollIntervalMs: 0,
     });
     assert.equal(statusChecks, 2);
+    assert.equal(readinessTimeouts.length, 4);
+    assert.ok(
+      readinessTimeouts.every((timeoutMs) => timeoutMs > 0 && timeoutMs <= 240_000),
+      "every launch and status probe must inherit the remaining overall deadline",
+    );
     assert.equal(
       commands.filter((command) => command.includes("nohup sh -c")).length,
       2,
@@ -168,6 +180,7 @@ describe("startMount initial-sync idle budget", () => {
           options.command.includes("relayfile-initial-sync-exit:") &&
           !options.command.includes("nohup sh -c")
         ) {
+          await new Promise((resolve) => setTimeout(resolve, 75));
           return { output: "relayfile-initial-sync-exit:75", exitCode: 0 };
         }
         return { output: "ok", exitCode: 0 };
@@ -177,14 +190,46 @@ describe("startMount initial-sync idle budget", () => {
 
     await assert.rejects(
       orchestrator.startMount({ id: "sbx" }, MOUNT, {
-        initialSyncDeadlineMs: 0,
+        initialSyncDeadlineMs: 50,
         initialSyncPollIntervalMs: 0,
       }),
-      /Relayfile initial sync did not finish within 0s after resumable incomplete readiness/u,
+      /Relayfile initial sync did not finish within 1s after resumable incomplete readiness/u,
     );
     assert.equal(
       commands.filter((command) => command.includes("nohup sh -c")).length,
       1,
+    );
+    assert.equal(
+      commands.some((command) => command.includes("nohup relayfile-mount")),
+      false,
+    );
+  });
+
+  it("rejects an exit-0 status that arrives after the overall deadline", async () => {
+    const commands: string[] = [];
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async (_handle, options) => {
+        commands.push(options.command);
+        if (
+          options.command.includes("relayfile-initial-sync-exit:") &&
+          !options.command.includes("nohup sh -c")
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 75));
+          return { output: "relayfile-initial-sync-exit:0", exitCode: 0 };
+        }
+        return { output: "ok", exitCode: 0 };
+      },
+      teardown: async () => {},
+    });
+
+    await assert.rejects(
+      orchestrator.startMount({ id: "sbx" }, MOUNT, {
+        initialSyncDeadlineMs: 50,
+        initialSyncPollIntervalMs: 0,
+      }),
+      /Relayfile initial sync did not finish within 1s/u,
     );
     assert.equal(
       commands.some((command) => command.includes("nohup relayfile-mount")),

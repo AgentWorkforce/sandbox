@@ -254,8 +254,17 @@ export class SandboxOrchestrator<Handle> {
     const deadlineMs = options.initialSyncDeadlineMs ?? 240_000;
     const pollIntervalMs = options.initialSyncPollIntervalMs ?? 2_000;
     const deadline = Date.now() + deadlineMs;
+    let sawIncompleteReadiness = false;
+    const initialSyncDeadlineError = (): Error =>
+      new Error(
+        `Relayfile initial sync did not finish within ${Math.ceil(deadlineMs / 1000)}s${sawIncompleteReadiness ? " after resumable incomplete readiness" : ""}`,
+      );
     let initialSyncRun = { runId: relayfileInitialSyncRunId() };
     const launchInitialSync = async (): Promise<void> => {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw initialSyncDeadlineError();
+      }
       let launch: SandboxCommandResult;
       try {
         launch = await this.runtime.runScript(handle, {
@@ -272,8 +281,12 @@ export class SandboxOrchestrator<Handle> {
             initialSyncMaxFilesPerCycle,
           ),
           cwd,
+          timeoutMs: remainingMs,
         });
       } catch (error) {
+        if (Date.now() >= deadline) {
+          throw initialSyncDeadlineError();
+        }
         const detail = error instanceof Error ? error.message : String(error);
         throw new Error(
           `Failed to launch relayfile initial sync: ${detail}`,
@@ -292,13 +305,33 @@ export class SandboxOrchestrator<Handle> {
     // of confirmations instead of polling garbage until the deadline.
     let unknownStatusCount = 0;
     for (;;) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        await this.runtime
+          .runScript(handle, {
+            command: buildRelayfileMountInitialSyncKillShell(initialSyncRun),
+            cwd,
+          })
+          .catch(() => undefined);
+        throw initialSyncDeadlineError();
+      }
       let status: SandboxCommandResult;
       try {
         status = await this.runtime.runScript(handle, {
           command: buildRelayfileMountInitialSyncStatusShell(initialSyncRun),
           cwd,
+          timeoutMs: remainingMs,
         });
       } catch (error) {
+        if (Date.now() >= deadline) {
+          await this.runtime
+            .runScript(handle, {
+              command: buildRelayfileMountInitialSyncKillShell(initialSyncRun),
+              cwd,
+            })
+            .catch(() => undefined);
+          throw initialSyncDeadlineError();
+        }
         const detail = error instanceof Error ? error.message : String(error);
         throw new Error(
           `Failed to check relayfile initial sync status: ${detail}`,
@@ -309,6 +342,21 @@ export class SandboxOrchestrator<Handle> {
         throw new Error(`Failed to check relayfile initial sync status: ${status.output}`);
       }
       const parsed = parseRelayfileMountInitialSyncStatus(status.output);
+      if (
+        parsed.state === "exited" &&
+        parsed.exitCode === RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE
+      ) {
+        sawIncompleteReadiness = true;
+      }
+      if (Date.now() >= deadline) {
+        await this.runtime
+          .runScript(handle, {
+            command: buildRelayfileMountInitialSyncKillShell(initialSyncRun),
+            cwd,
+          })
+          .catch(() => undefined);
+        throw initialSyncDeadlineError();
+      }
       if (parsed.state === "unknown") {
         unknownStatusCount += 1;
         if (unknownStatusCount >= 3) {
@@ -329,15 +377,11 @@ export class SandboxOrchestrator<Handle> {
           // sandbox down. Keep one wall-clock deadline across every resume so
           // a permanently incomplete mount remains bounded.
           if (Date.now() >= deadline) {
-            throw new Error(
-              `Relayfile initial sync did not finish within ${Math.ceil(deadlineMs / 1000)}s after resumable incomplete readiness`,
-            );
+            throw initialSyncDeadlineError();
           }
           await sleepMs(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
           if (Date.now() >= deadline) {
-            throw new Error(
-              `Relayfile initial sync did not finish within ${Math.ceil(deadlineMs / 1000)}s after resumable incomplete readiness`,
-            );
+            throw initialSyncDeadlineError();
           }
           initialSyncRun = { runId: relayfileInitialSyncRunId() };
           await launchInitialSync();
@@ -361,9 +405,7 @@ export class SandboxOrchestrator<Handle> {
             cwd,
           })
           .catch(() => undefined);
-        throw new Error(
-          `Relayfile initial sync did not finish within ${Math.ceil(deadlineMs / 1000)}s`,
-        );
+        throw initialSyncDeadlineError();
       }
       await sleepMs(pollIntervalMs);
     }
