@@ -122,6 +122,7 @@ export interface E2BSandboxStatics {
 }
 
 export interface E2BAttachedSandboxOptions {
+  /** Optional handle home; blank values fall back to the runtime default. */
   homeDir?: string;
   workdir?: string;
   owned?: boolean;
@@ -167,6 +168,8 @@ export type E2BSandboxRuntimeOptions = {
   apiKey: string;
   /** Account-specific template or snapshot identifier used for every launch. */
   template: string;
+  /** Stable home directory supplied by the selected E2B template. */
+  defaultHomeDir?: string;
   /** Maximum lifetime granted to an asynchronous command and its sandbox. */
   runBudgetMs?: number;
   /**
@@ -217,6 +220,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
 
   private readonly apiKey: string;
   private readonly template: string;
+  private readonly defaultHomeDir?: string;
   private readonly runBudgetMs: number;
   private readonly syncRunBudgetMs: number;
   private readonly sandboxLifetimeMs: number;
@@ -235,8 +239,13 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     if (!template) {
       throw new Error("E2B sandbox template is required");
     }
+    const defaultHomeDir = options.defaultHomeDir?.trim();
+    if (options.defaultHomeDir !== undefined && !defaultHomeDir) {
+      throw new Error("E2B default home directory must not be empty");
+    }
     this.apiKey = apiKey;
     this.template = template;
+    this.defaultHomeDir = defaultHomeDir;
     this.runBudgetMs = positiveDuration(options.runBudgetMs, DEFAULT_RUN_BUDGET_MS);
     this.syncRunBudgetMs = positiveDuration(options.syncRunBudgetMs, this.runBudgetMs);
     this.sandboxLifetimeMs = positiveDuration(
@@ -362,6 +371,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     });
     return this.registerSandbox(sandbox, {
       owned: true,
+      homeDir: this.defaultHomeDir,
       workdir: options.workdir,
     });
   }
@@ -393,7 +403,7 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
   ): RuntimeHandle {
     return this.registerSandbox(sandbox, {
       owned: options.owned ?? false,
-      homeDir: options.homeDir,
+      homeDir: this.resolveHomeDir(options.homeDir),
       workdir: options.workdir,
     });
   }
@@ -779,7 +789,9 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     });
     return {
       ...handleFromE2BInfo(info),
-      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ...(this.resolveHomeDir(options.homeDir)
+        ? { homeDir: this.resolveHomeDir(options.homeDir) }
+        : {}),
       ...(options.workdir ? { workdir: options.workdir } : {}),
     };
   }
@@ -796,9 +808,16 @@ export class E2BSandboxRuntime implements SandboxRuntime, WorkflowRuntime {
     return {
       id: sandbox.sandboxId,
       state: "STARTED",
-      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ...(this.resolveHomeDir(options.homeDir)
+        ? { homeDir: this.resolveHomeDir(options.homeDir) }
+        : {}),
       ...(options.workdir ? { workdir: options.workdir } : {}),
     };
+  }
+
+  private resolveHomeDir(homeDir?: string): string | undefined {
+    const normalized = homeDir?.trim();
+    return normalized || this.defaultHomeDir;
   }
 
   private async requireSandbox(handle: RuntimeHandle): Promise<E2BSandbox> {
