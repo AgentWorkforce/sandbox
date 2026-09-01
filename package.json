@@ -1,6 +1,6 @@
 {
   "name": "@agent-relay/sandbox",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Provider-agnostic sandbox runtimes and orchestration for agent workloads.",
   "license": "Apache-2.0",
   "type": "module",
