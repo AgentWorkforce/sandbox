@@ -80,9 +80,51 @@ describe("E2BSandboxRuntime public contract", () => {
     );
     assert.equal(calls.create.length, 0);
   });
+
+  it("must-not-fire: rejects an explicitly empty default home directory", () => {
+    const { statics, calls } = fakeStatics();
+
+    assert.throws(
+      () => new E2BSandboxRuntime({
+        apiKey: API_KEY,
+        template: TEMPLATE,
+        defaultHomeDir: "  ",
+        sandbox: statics,
+      }),
+      /default home directory must not be empty/u,
+    );
+    assert.equal(calls.create.length, 0);
+  });
 });
 
 describe("E2BSandboxRuntime launch and lookup", () => {
+  it("must-fire: carries the template home directory onto launch and lookup handles", async () => {
+    const { statics } = fakeStatics({
+      pages: [[sandboxInfo("sbx-existing", "running")]],
+    });
+    const runtime = createRuntime(statics, { defaultHomeDir: "/home/user" });
+
+    const launched = await runtime.launch();
+    const [lookedUp] = await runtime.findAllByLabels({ purpose: "worker" });
+
+    assert.equal(launched.homeDir, "/home/user");
+    assert.equal(lookedUp?.homeDir, "/home/user");
+  });
+
+  it("must-not-fire: blank attach and lookup home overrides cannot erase the default home", async () => {
+    const connected = fakeSandbox({ id: "sbx-attached" });
+    const { statics } = fakeStatics({
+      connected: new Map([["sbx-lookup", connected]]),
+    });
+    const runtime = createRuntime(statics, { defaultHomeDir: "/home/user" });
+
+    const lookedUp = await runtime.getById("sbx-lookup", { homeDir: "   " });
+    const attached = runtime.attachSandbox(connected, { homeDir: "   " });
+
+    assert.equal(lookedUp?.homeDir, "/home/user");
+    assert.equal(attached.homeDir, "/home/user");
+  });
+
   it("review guard: applies an explicit sandbox lifetime to create, reattach, and sync execution", async () => {
     const created = fakeSandbox({ id: "sbx-lifetime-created" });
     const reattached = fakeSandbox({ id: "sbx-lifetime-reattached" });
@@ -1267,6 +1309,7 @@ function createRuntime(
     syncRunBudgetMs?: number;
     createTimeoutMs?: number;
     sandboxLifetimeMs?: number;
+    defaultHomeDir?: string;
   } = {},
 ) {
   return new E2BSandboxRuntime({
