@@ -251,38 +251,41 @@ export class SandboxOrchestrator<Handle> {
     // it before starting the daemon: both commands acquire the same per-root
     // mount lease, and the exit sentinel is written only after the one-shot
     // supervisor has exited and released that lease.
-    const initialSyncRun = { runId: relayfileInitialSyncRunId() };
-    let launch: SandboxCommandResult;
-    try {
-      launch = await this.runtime.runScript(handle, {
-        command: withRelayfileInitialSyncEnvironment(
-          buildRelayfileMountInitialSyncBackgroundShell(
-            {
-              ...config,
-              idleTimeoutSeconds: initialSyncIdleTimeoutSeconds,
-            },
-            initialSyncRun,
-          ),
-          initialSyncIdleTimeoutSeconds,
-          initialSyncReadConcurrency,
-          initialSyncMaxFilesPerCycle,
-        ),
-        cwd,
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Failed to launch relayfile initial sync: ${detail}`,
-        { cause: error },
-      );
-    }
-    if (launch.exitCode !== 0) {
-      throw new Error(`Failed to launch relayfile initial sync: ${launch.output}`);
-    }
-
     const deadlineMs = options.initialSyncDeadlineMs ?? 240_000;
     const pollIntervalMs = options.initialSyncPollIntervalMs ?? 2_000;
     const deadline = Date.now() + deadlineMs;
+    let initialSyncRun = { runId: relayfileInitialSyncRunId() };
+    const launchInitialSync = async (): Promise<void> => {
+      let launch: SandboxCommandResult;
+      try {
+        launch = await this.runtime.runScript(handle, {
+          command: withRelayfileInitialSyncEnvironment(
+            buildRelayfileMountInitialSyncBackgroundShell(
+              {
+                ...config,
+                idleTimeoutSeconds: initialSyncIdleTimeoutSeconds,
+              },
+              initialSyncRun,
+            ),
+            initialSyncIdleTimeoutSeconds,
+            initialSyncReadConcurrency,
+            initialSyncMaxFilesPerCycle,
+          ),
+          cwd,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to launch relayfile initial sync: ${detail}`,
+          { cause: error },
+        );
+      }
+      if (launch.exitCode !== 0) {
+        throw new Error(`Failed to launch relayfile initial sync: ${launch.output}`);
+      }
+    };
+    await launchInitialSync();
+
     // The probe prints exactly one of two markers. Output with neither means
     // the exec channel is not actually reaching our probe (a broken runtime
     // adapter, a proxy interposing its own body) — fail fast after a couple
@@ -327,7 +330,25 @@ export class SandboxOrchestrator<Handle> {
           .catch(() => null);
         const detail = logTail?.output?.trim();
         if (parsed.exitCode === RELAYFILE_INITIAL_SYNC_INCOMPLETE_EXIT_CODE) {
-          throw new Error("Relayfile initial sync paused before complete readiness");
+          // Exit 75 is TEMPFAIL, not corruption. relayfile-mount persisted a
+          // resumable traversal checkpoint in this same sandbox, so launch a
+          // fresh detached run against that checkpoint instead of tearing the
+          // sandbox down. Keep one wall-clock deadline across every resume so
+          // a permanently incomplete mount remains bounded.
+          if (Date.now() >= deadline) {
+            throw new Error(
+              `Relayfile initial sync did not finish within ${Math.ceil(deadlineMs / 1000)}s after resumable incomplete readiness`,
+            );
+          }
+          await sleepMs(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
+          if (Date.now() >= deadline) {
+            throw new Error(
+              `Relayfile initial sync did not finish within ${Math.ceil(deadlineMs / 1000)}s after resumable incomplete readiness`,
+            );
+          }
+          initialSyncRun = { runId: relayfileInitialSyncRunId() };
+          await launchInitialSync();
+          continue;
         }
         throw new Error(
           `Failed initial relayfile sync: exit ${parsed.exitCode}${detail ? `: ${detail}` : ""}`,

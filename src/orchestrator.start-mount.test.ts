@@ -109,15 +109,23 @@ describe("startMount initial-sync idle budget", () => {
     assert.equal(calls, 3);
   });
 
-  it("does not start the daemon when persisted readiness is incomplete", async () => {
+  it("resumes an incomplete initial sync before starting the daemon", async () => {
     const commands: string[] = [];
+    let statusChecks = 0;
     const orchestrator = new SandboxOrchestrator<{ id: string }>({
       provision: async () => ({ id: "sbx" }),
       uploadBundle: async () => {},
       runScript: async (_handle, options) => {
         commands.push(options.command);
-        if (options.command.includes("relayfile-initial-sync-exit:")) {
-          return { output: "relayfile-initial-sync-exit:75", exitCode: 0 };
+        if (
+          options.command.includes("relayfile-initial-sync-exit:") &&
+          !options.command.includes("nohup sh -c")
+        ) {
+          statusChecks += 1;
+          return {
+            output: `relayfile-initial-sync-exit:${statusChecks === 1 ? 75 : 0}`,
+            exitCode: 0,
+          };
         }
         if (options.command.startsWith("tail -n ")) {
           return {
@@ -130,9 +138,48 @@ describe("startMount initial-sync idle budget", () => {
       teardown: async () => {},
     });
 
+    await orchestrator.startMount({ id: "sbx" }, MOUNT, {
+      initialSyncPollIntervalMs: 0,
+    });
+    assert.equal(statusChecks, 2);
+    assert.equal(
+      commands.filter((command) => command.includes("nohup sh -c")).length,
+      2,
+    );
+    assert.equal(
+      commands.some((command) => command.includes("nohup relayfile-mount")),
+      true,
+    );
+  });
+
+  it("does not resume incomplete readiness beyond the overall deadline", async () => {
+    const commands: string[] = [];
+    const orchestrator = new SandboxOrchestrator<{ id: string }>({
+      provision: async () => ({ id: "sbx" }),
+      uploadBundle: async () => {},
+      runScript: async (_handle, options) => {
+        commands.push(options.command);
+        if (
+          options.command.includes("relayfile-initial-sync-exit:") &&
+          !options.command.includes("nohup sh -c")
+        ) {
+          return { output: "relayfile-initial-sync-exit:75", exitCode: 0 };
+        }
+        return { output: "ok", exitCode: 0 };
+      },
+      teardown: async () => {},
+    });
+
     await assert.rejects(
-      orchestrator.startMount({ id: "sbx" }, MOUNT),
-      /Relayfile initial sync paused before complete readiness/u,
+      orchestrator.startMount({ id: "sbx" }, MOUNT, {
+        initialSyncDeadlineMs: 0,
+        initialSyncPollIntervalMs: 0,
+      }),
+      /Relayfile initial sync did not finish within 0s after resumable incomplete readiness/u,
+    );
+    assert.equal(
+      commands.filter((command) => command.includes("nohup sh -c")).length,
+      1,
     );
     assert.equal(
       commands.some((command) => command.includes("nohup relayfile-mount")),
