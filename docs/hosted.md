@@ -24,6 +24,18 @@ retryable after a failed request, while commands remain disabled after the
 first destroy attempt. A workload failure and cleanup failure are returned as
 an `AggregateError`.
 
+`appKey` and `environment` use lowercase dashboard identifiers: they must start
+with `a-z`, then contain only lowercase letters, digits, `.`, `_`, `:`, or `-`.
+Their byte limits are 128 and 64 respectively.
+
+Command limits are byte limits: commands are at most 64 KiB, absolute `cwd` is
+at most 1024 bytes, and each environment value is at most 8 KiB. The default
+transport deadline allows 60 seconds for create/destroy and gives a run's
+provider timeout an additional five seconds to return its result. An explicit
+`requestTimeoutMs` bounds every operation, including the response body read.
+Run results may include `truncated: true` when the backend clipped captured
+output.
+
 The deployment must provide `POST /api/v1/workspaces/{workspaceId}/sandbox-sessions`,
 `POST /api/v1/workspaces/{workspaceId}/sandbox-sessions/{id}/run`, and
 `DELETE /api/v1/workspaces/{workspaceId}/sandbox-sessions/{id}`. The SDK never

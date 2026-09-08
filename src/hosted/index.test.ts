@@ -44,12 +44,12 @@ test("flow sends scoped headers and bodies, applies defaults, and drops response
   const fixture = await server(async (request, response) => {
     requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body: await body(request) });
     if (request.url?.endsWith("sandbox-sessions")) json(response, 201, { id: sessionId, secret: "drop-me" });
-    else if (request.url?.endsWith("/run")) json(response, 200, { output: "all", stdout: "out", stderr: "", exitCode: 3, private: "drop-me" });
+    else if (request.url?.endsWith("/run")) json(response, 200, { output: "all", stdout: "out", stderr: "", exitCode: 3, truncated: true, private: "drop-me" });
     else { response.writeHead(204); response.end(); }
   });
   try {
     const session = await createHostedSandbox(options(fixture.baseUrl));
-    assert.deepEqual(await session.run("printf hi", { cwd: "/tmp", env: { A: "b" } }), { output: "all", stdout: "out", stderr: "", exitCode: 3 });
+    assert.deepEqual(await session.run("printf hi", { cwd: "/tmp", env: { A: "b" } }), { output: "all", stdout: "out", stderr: "", exitCode: 3, truncated: true });
     await session.destroy();
     assert.deepEqual(requests.map((request) => [request.method, request.url]), [
       ["POST", "/cloud/api/v1/workspaces/00000000-0000-4000-8000-000000000000/sandbox-sessions"],
@@ -70,6 +70,11 @@ test("invalid input is rejected before any request and setup errors expose only 
   const fixture = await server((_request, response) => { requests += 1; response.end(); });
   try {
     await assert.rejects(createHostedSandbox({ ...options(fixture.baseUrl), environment: "Development" }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_INVALID_INPUT");
+    await assert.rejects(createHostedSandbox({ ...options(fixture.baseUrl), appKey: "1sandbox" }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_INVALID_INPUT");
+    await assert.rejects(createHostedSandbox({ ...options(fixture.baseUrl), environment: "1development" }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_INVALID_INPUT");
+    await assert.rejects(createHostedSandbox(null as never), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_INVALID_INPUT");
+    await assert.rejects(createHostedSandbox([] as never), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_INVALID_INPUT");
+    assert.throws(() => getHostedSandboxSetupUrl(null as never), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_INVALID_INPUT");
     const setupFixture = await server(async (_request, response) => json(response, 409, { code: "SANDBOX_PROVIDER_NOT_READY", providerCredential: "secret" }));
     try {
       await assert.rejects(createHostedSandbox({ ...options(setupFixture.baseUrl), token: "private-token" }), (error: unknown) => {
@@ -88,9 +93,13 @@ test("invalid input is rejected before any request and setup errors expose only 
   }
 });
 
-test("response cap and deadline produce safe unknown outcomes", async () => {
+test("streamed response cap and body deadline produce safe unknown outcomes", async () => {
   const large = "x".repeat(1024 * 1024 + 1);
-  const largeFixture = await server((_request, response) => { response.writeHead(201, { "content-type": "application/json" }); response.end(JSON.stringify({ id: sessionId, large })); });
+  const largeFixture = await server((_request, response) => {
+    response.writeHead(201, { "content-type": "application/json" });
+    response.write(JSON.stringify({ id: sessionId, large: large.slice(0, 500_000) }));
+    response.end(JSON.stringify({ large: large.slice(500_000) }));
+  });
   try {
     await assert.rejects(createHostedSandbox({ ...options(largeFixture.baseUrl), requestTimeoutMs: 500 }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_CREATE_UNKNOWN");
   } finally {
@@ -101,6 +110,100 @@ test("response cap and deadline produce safe unknown outcomes", async () => {
     await assert.rejects(createHostedSandbox({ ...options(slowFixture.baseUrl), requestTimeoutMs: 10 }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_CREATE_UNKNOWN");
   } finally {
     await slowFixture.close();
+  }
+});
+
+test("a response body that stalls after headers is bounded by the whole-request deadline", async () => {
+  const fixture = await server((_request, response) => {
+    response.writeHead(201, { "content-type": "application/json" });
+    response.write(`{"id":"${sessionId.slice(0, 20)}`);
+    setTimeout(() => response.end(`${sessionId.slice(20)}"}`), 100);
+  });
+  const started = Date.now();
+  try {
+    await assert.rejects(createHostedSandbox({ ...options(fixture.baseUrl), requestTimeoutMs: 20 }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_CREATE_UNKNOWN");
+    assert.ok(Date.now() - started < 500, "body stall exceeded bounded deadline");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("redirects are refused without forwarding the bearer token", async () => {
+  let targetRequests = 0;
+  const target = await server((request, response) => { targetRequests += 1; assert.equal(request.headers.authorization, undefined); response.end(); });
+  const source = await server((_request, response) => {
+    response.writeHead(302, { location: `${target.baseUrl}/redirect-target` });
+    response.end();
+  });
+  try {
+    await assert.rejects(createHostedSandbox({ ...options(source.baseUrl), token: "do-not-forward" }), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_CREATE_UNKNOWN");
+    assert.equal(targetRequests, 0);
+  } finally {
+    await source.close();
+    await target.close();
+  }
+});
+
+test("command, cwd, and environment limits use UTF-8 bytes", async () => {
+  let runs = 0;
+  const fixture = await server(async (request, response) => {
+    if (request.method === "POST") {
+      if (request.url?.endsWith("/run")) runs += 1;
+      json(response, request.url?.endsWith("/run") ? 200 : 201, request.url?.endsWith("/run") ? { output: "ok", exitCode: 0 } : { id: sessionId });
+    } else { response.writeHead(204); response.end(); }
+  });
+  try {
+    const session = await createHostedSandbox(options(fixture.baseUrl));
+    await assert.rejects(session.run("😀".repeat(16_385)), /command is invalid/);
+    await assert.rejects(session.run("true", { cwd: `/${"😀".repeat(256)}` }), /cwd is invalid/);
+    await assert.rejects(session.run("true", { env: { VALUE: "😀".repeat(2_049) } }), /env is invalid/);
+    assert.equal(runs, 0);
+    await session.destroy();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("known provider readiness errors are safe for run as well as create", async () => {
+  let run = true;
+  const fixture = await server(async (request, response) => {
+    if (request.method === "POST" && request.url?.endsWith("/run") && run) {
+      run = false;
+      json(response, 409, { code: "SANDBOX_PROVIDER_NOT_READY", providerId: "private-provider-detail" });
+    } else if (request.method === "POST") json(response, 201, { id: sessionId });
+    else { response.writeHead(204); response.end(); }
+  });
+  try {
+    const session = await createHostedSandbox(options(fixture.baseUrl));
+    await assert.rejects(session.run("true"), (error: unknown) => {
+      assert.ok(error instanceof HostedSandboxError);
+      assert.equal(error.code, "SANDBOX_PROVIDER_NOT_READY");
+      assert.match(error.setupUrl ?? "", /sandbox-providers/);
+      assert.doesNotMatch(`${error.message} ${error.stack} ${JSON.stringify(error)}`, /private-provider-detail/);
+      return true;
+    });
+    await session.destroy();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("malformed truncation is rejected while valid false is preserved", async () => {
+  let malformed = true;
+  const fixture = await server(async (request, response) => {
+    if (request.method === "POST" && request.url?.endsWith("/run")) {
+      json(response, 200, malformed ? { output: "x", exitCode: 0, truncated: "yes" } : { output: "x", exitCode: 0, truncated: false });
+      malformed = false;
+    } else if (request.method === "POST") json(response, 201, { id: sessionId });
+    else { response.writeHead(204); response.end(); }
+  });
+  try {
+    const session = await createHostedSandbox(options(fixture.baseUrl));
+    await assert.rejects(session.run("true"), (error: unknown) => error instanceof HostedSandboxError && error.code === "SANDBOX_RUN_UNKNOWN");
+    assert.deepEqual(await session.run("true"), { output: "x", exitCode: 0, truncated: false });
+    await session.destroy();
+  } finally {
+    await fixture.close();
   }
 });
 

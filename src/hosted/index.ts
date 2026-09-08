@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
+const RUN_DEADLINE_OVERHEAD_MS = 5_000;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-const LOWER_IDENTIFIER = /^[a-z0-9][a-z0-9._:-]{0,127}$/u;
+const LOWER_IDENTIFIER = /^[a-z][a-z0-9._:-]*$/u;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 export type HostedSandboxProvider = "e2b" | "daytona";
@@ -53,6 +55,7 @@ export interface HostedSandboxRunResult {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly exitCode: number | null;
+  readonly truncated?: boolean;
 }
 
 export interface HostedSandboxSession {
@@ -69,7 +72,7 @@ type HostedConfig = {
   readonly appKey: string;
   readonly environment: string;
   readonly intentKey: string;
-  readonly requestTimeoutMs: number;
+  readonly requestTimeoutMs?: number;
   readonly setupUrl: string;
 };
 
@@ -112,11 +115,11 @@ function validateConfig(options: HostedSandboxOptions): HostedConfig {
   const appKey = options.appKey ?? "sandbox";
   const environment = options.environment ?? "development";
   const intentKey = options.intentKey ?? randomUUID();
-  if (typeof appKey !== "string" || !LOWER_IDENTIFIER.test(appKey) || appKey.length > 128) invalid("Hosted sandbox appKey is invalid");
-  if (typeof environment !== "string" || !LOWER_IDENTIFIER.test(environment) || environment.length > 64) invalid("Hosted sandbox environment is invalid");
+  if (typeof appKey !== "string" || !LOWER_IDENTIFIER.test(appKey) || Buffer.byteLength(appKey) > 128) invalid("Hosted sandbox appKey is invalid");
+  if (typeof environment !== "string" || !LOWER_IDENTIFIER.test(environment) || Buffer.byteLength(environment) > 64) invalid("Hosted sandbox environment is invalid");
   if (typeof intentKey !== "string" || !IDENTIFIER.test(intentKey) || intentKey.length > 128) invalid("Hosted sandbox intentKey is invalid");
   const requestTimeoutMs = options.requestTimeoutMs === undefined
-    ? DEFAULT_TIMEOUT_MS
+    ? undefined
     : validateBoundedInteger(options.requestTimeoutMs, 1, MAX_REQUEST_TIMEOUT_MS, "Hosted sandbox requestTimeoutMs is invalid");
   return {
     baseUrl,
@@ -174,9 +177,12 @@ async function readBody(response: Response, controller: AbortController): Promis
   }
 }
 
-async function request(config: HostedConfig, method: "POST" | "DELETE", url: string, body: unknown, operation: "create" | "run" | "destroy"): Promise<{ status: number; body: unknown }> {
+async function request(config: HostedConfig, method: "POST" | "DELETE", url: string, body: unknown, operation: "create" | "run" | "destroy", runTimeoutMs?: number): Promise<{ status: number; body: unknown }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  const deadline = config.requestTimeoutMs ?? (operation === "run"
+    ? (runTimeoutMs ?? DEFAULT_TIMEOUT_MS) + RUN_DEADLINE_OVERHEAD_MS
+    : DEFAULT_OPERATION_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), deadline);
   try {
     let response: Response;
     try {
@@ -211,14 +217,14 @@ function setupError(code: "SANDBOX_PROVIDER_NOT_READY" | "SANDBOX_SETUP_UNAVAILA
 }
 
 function validateRun(command: string, options: HostedSandboxRunOptions | undefined): { command: string; cwd?: string; env?: Record<string, string>; timeoutMs: number } {
-  if (typeof command !== "string" || command.length > 64 * 1024 || command.includes("\0")) invalid("Hosted sandbox command is invalid");
+  if (typeof command !== "string" || Buffer.byteLength(command) > 64 * 1024 || command.includes("\0")) invalid("Hosted sandbox command is invalid");
   if (options !== undefined && (options === null || typeof options !== "object")) invalid("Hosted sandbox run options are invalid");
   const result: { command: string; cwd?: string; env?: Record<string, string>; timeoutMs: number } = {
     command,
     timeoutMs: options?.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : validateBoundedInteger(options.timeoutMs, 1, 60_000, "Hosted sandbox timeoutMs is invalid"),
   };
   if (options?.cwd !== undefined) {
-    if (typeof options.cwd !== "string" || options.cwd.length > 1024 || !options.cwd.startsWith("/") || options.cwd.includes("\0")) invalid("Hosted sandbox cwd is invalid");
+    if (typeof options.cwd !== "string" || Buffer.byteLength(options.cwd) > 1024 || !options.cwd.startsWith("/") || options.cwd.includes("\0")) invalid("Hosted sandbox cwd is invalid");
     result.cwd = options.cwd;
   }
   if (options?.env !== undefined) {
@@ -227,7 +233,7 @@ function validateRun(command: string, options: HostedSandboxRunOptions | undefin
     if (entries.length > 64) invalid("Hosted sandbox env is invalid");
     const env: Record<string, string> = {};
     for (const [name, value] of entries) {
-      if (!ENV_NAME.test(name) || typeof value !== "string" || value.length > 8192 || value.includes("\0")) invalid("Hosted sandbox env is invalid");
+      if (!ENV_NAME.test(name) || typeof value !== "string" || Buffer.byteLength(value) > 8192 || value.includes("\0")) invalid("Hosted sandbox env is invalid");
       env[name] = value;
     }
     result.env = env;
@@ -242,12 +248,21 @@ function parseRunResult(value: unknown): HostedSandboxRunResult {
   }
   if (record.stdout !== undefined && typeof record.stdout !== "string") throw new HostedSandboxError("SANDBOX_RUN_UNKNOWN", "Hosted sandbox returned an invalid run result");
   if (record.stderr !== undefined && typeof record.stderr !== "string") throw new HostedSandboxError("SANDBOX_RUN_UNKNOWN", "Hosted sandbox returned an invalid run result");
+  if (record.truncated !== undefined && typeof record.truncated !== "boolean") throw new HostedSandboxError("SANDBOX_RUN_UNKNOWN", "Hosted sandbox returned an invalid run result");
   return {
     output: record.output,
     exitCode: record.exitCode as number | null,
     ...(record.stdout === undefined ? {} : { stdout: record.stdout }),
     ...(record.stderr === undefined ? {} : { stderr: record.stderr }),
+    ...(record.truncated === undefined ? {} : { truncated: record.truncated }),
   };
+}
+
+function knownSetupError(status: number, body: unknown, setupUrl: string): HostedSandboxError | undefined {
+  const record = safeObject(body);
+  if (status === 409 && record?.code === "SANDBOX_PROVIDER_NOT_READY") return setupError("SANDBOX_PROVIDER_NOT_READY", setupUrl);
+  if (status === 503 && record?.code === "SANDBOX_SETUP_UNAVAILABLE") return setupError("SANDBOX_SETUP_UNAVAILABLE", setupUrl);
+  return undefined;
 }
 
 export async function createHostedSandbox(options: HostedSandboxOptions): Promise<HostedSandboxSession> {
@@ -260,8 +275,8 @@ export async function createHostedSandbox(options: HostedSandboxOptions): Promis
   }, "create");
   if (response.status === 401 || response.status === 403) throw accessError();
   const body = safeObject(response.body);
-  if (response.status === 409 && body?.code === "SANDBOX_PROVIDER_NOT_READY") throw setupError("SANDBOX_PROVIDER_NOT_READY", config.setupUrl);
-  if (response.status === 503 && body?.code === "SANDBOX_SETUP_UNAVAILABLE") throw setupError("SANDBOX_SETUP_UNAVAILABLE", config.setupUrl);
+  const setupResponseError = knownSetupError(response.status, body, config.setupUrl);
+  if (setupResponseError) throw setupResponseError;
   if ((response.status !== 200 && response.status !== 201) || typeof body?.id !== "string" || !UUID.test(body.id)) {
     throw new HostedSandboxError("SANDBOX_CREATE_UNKNOWN", "Hosted sandbox creation outcome is unknown");
   }
@@ -273,8 +288,10 @@ export async function createHostedSandbox(options: HostedSandboxOptions): Promis
     async run(command, runOptions) {
       if (closing) throw new Error("Hosted sandbox session is closing or destroyed");
       const run = validateRun(command, runOptions);
-      const result = await request(config, "POST", sessionEndpoint(config, id, "/run"), run, "run");
+      const result = await request(config, "POST", sessionEndpoint(config, id, "/run"), run, "run", run.timeoutMs);
       if (result.status === 401 || result.status === 403) throw accessError();
+      const setupResponseError = knownSetupError(result.status, result.body, config.setupUrl);
+      if (setupResponseError) throw setupResponseError;
       if (result.status !== 200) throw new HostedSandboxError("SANDBOX_RUN_UNKNOWN", "Hosted sandbox run outcome is unknown");
       return parseRunResult(result.body);
     },
@@ -322,8 +339,8 @@ export function getHostedSandboxSetupUrl(options: { readonly baseUrl: string; re
   if (!UUID.test(options.workspaceId)) invalid("Hosted sandbox workspaceId must be a UUID");
   const appKey = options.appKey ?? "sandbox";
   const environment = options.environment ?? "development";
-  if (typeof appKey !== "string" || !LOWER_IDENTIFIER.test(appKey) || appKey.length > 128) invalid("Hosted sandbox appKey is invalid");
-  if (typeof environment !== "string" || !LOWER_IDENTIFIER.test(environment) || environment.length > 64) invalid("Hosted sandbox environment is invalid");
+  if (typeof appKey !== "string" || !LOWER_IDENTIFIER.test(appKey) || Buffer.byteLength(appKey) > 128) invalid("Hosted sandbox appKey is invalid");
+  if (typeof environment !== "string" || !LOWER_IDENTIFIER.test(environment) || Buffer.byteLength(environment) > 64) invalid("Hosted sandbox environment is invalid");
   const root = baseUrl.pathname.replace(/\/+$/u, "");
   const url = new URL(baseUrl.toString());
   url.pathname = `${root}/dashboard/integrations`;
