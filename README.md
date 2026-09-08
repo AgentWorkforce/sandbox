@@ -71,6 +71,13 @@ return account credentials or automatically create provider accounts during a
 sandbox launch. The backend implementation and its onboarding UI are supplied
 by the application; this package does not claim a live hosted connection.
 
+### Hosted AgentWorkforce sandbox (private preview)
+
+The `@agent-relay/sandbox/hosted` entrypoint is a provider-neutral facade for
+the companion cloud session endpoints. It is private-preview only and is not
+deployed or generally available yet. See the [hosted guide](docs/hosted.md)
+for the eventual five-line usage and its explicit deployment requirements.
+
 ## Provider adapters
 
 Provider SDKs are peer dependencies: install the one you intend to use. A

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const entrypoints = [
   "core",
+  "hosted",
   "setup",
   "agent37",
   "agentcore",
@@ -49,6 +50,7 @@ try {
   assert.ok(packResult, "npm pack did not return package metadata");
   const packedFiles = new Set(packResult.files.map(({ path: file }) => file));
   assert.ok(packedFiles.has("docs/setup.md"));
+  assert.ok(packedFiles.has("docs/hosted.md"));
   for (const entrypoint of entrypoints) {
     assert.ok(packedFiles.has(`dist/${entrypoint}/index.js`));
     assert.ok(packedFiles.has(`dist/${entrypoint}/index.d.ts`));

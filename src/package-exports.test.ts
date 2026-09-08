@@ -7,6 +7,7 @@ import { test } from "node:test";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const sourceRoot = path.join(repositoryRoot, "src");
 const providerEntrypoints = [
+  "hosted",
   "agent37",
   "agentcore",
   "daytona",
