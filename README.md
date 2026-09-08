@@ -19,6 +19,60 @@ knowledge. Swapping providers is a change of adapter, not a change of caller.
 npm install @agent-relay/sandbox
 ```
 
+## Run your first workload
+
+For an E2B sandbox, also install `e2b`, set `E2B_API_KEY` in your application's
+environment, and save this as `hello.mjs`:
+
+```js
+import { withSandbox } from "@agent-relay/sandbox/core";
+import { E2BSandboxRuntime } from "@agent-relay/sandbox/e2b";
+
+const apiKey = process.env.E2B_API_KEY;
+if (!apiKey) throw new Error("Set E2B_API_KEY before running this example");
+
+const result = await withSandbox({
+  runtime: new E2BSandboxRuntime({ apiKey, template: "base" }),
+}, (sandbox) => sandbox.run("echo hello", { timeoutMs: 10_000 }));
+
+console.log(result.output);
+if (result.exitCode !== 0) process.exitCode = 1;
+```
+
+Run `node hello.mjs`. `withSandbox` creates a sandbox, runs your callback, and
+attempts cleanup whether the callback succeeds or throws. It preserves both
+errors if the workload and cleanup fail. Use `createSandbox` from the same
+entrypoint when you need explicit `run` / `destroy` control. Both accept the
+same provider runtimes; changing providers changes the adapter configuration.
+These helpers do not retry uncertain creates or provide recovery after process
+death. Provider charges and limits still apply.
+
+### From one sandbox to a software factory
+
+Use this package when you want to build the execution layer yourself. When you
+need issue discovery, multiple coding agents, reviews, PR publication and a
+merge gate, [Software Garden](https://github.com/AgentWorkforce/software-garden)
+provides that workflow. Its starting point is `npm install @agent-relay/factory`
+followed by `factory init` in the target repository; Garden checks its Relay and
+repository-access prerequisites during setup.
+
+Hosted AgentWorkforce integrations can own account onboarding and operation of
+that factory. The SDK remains usable with your own provider account and does
+not require an AgentWorkforce login. See the [setup integration contract](docs/setup.md)
+for the boundary a hosted "Connect with AgentWorkforce" experience can implement.
+
+### Provider account setup
+
+`@agent-relay/sandbox/setup` supplies `createProviderSetup(backend)` for trusted
+application backends. Setup is explicit (`prewarm`); `status` and
+`hasAvailableCredentials` only read readiness. Pass the latter to a router or
+to `createSandbox` / `withSandbox` as an optional readiness gate. It does not
+return account credentials or automatically create provider accounts during a
+sandbox launch. The backend implementation and its onboarding UI are supplied
+by the application; this package does not claim a live hosted connection.
+
+## Provider adapters
+
 Provider SDKs are peer dependencies: install the one you intend to use. A
 consumer that only runs local sandboxes does not need a remote provider SDK.
 Adapters for providers that publish no JavaScript SDK speak their HTTP API

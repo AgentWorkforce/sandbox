@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const entrypoints = [
   "core",
+  "setup",
   "agent37",
   "agentcore",
   "daytona",
@@ -47,6 +48,7 @@ try {
     : Object.values(packedJson)[0];
   assert.ok(packResult, "npm pack did not return package metadata");
   const packedFiles = new Set(packResult.files.map(({ path: file }) => file));
+  assert.ok(packedFiles.has("docs/setup.md"));
   for (const entrypoint of entrypoints) {
     assert.ok(packedFiles.has(`dist/${entrypoint}/index.js`));
     assert.ok(packedFiles.has(`dist/${entrypoint}/index.d.ts`));
@@ -78,6 +80,36 @@ try {
     cwd: consumerDirectory,
     stdio: "inherit",
   });
+
+  // Exercise the installed quickstart/setup composition with no optional SDKs.
+  execFileSync("node", ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { withSandbox, SandboxNotReadyError } from "@agent-relay/sandbox/core";
+    import { createProviderSetup } from "@agent-relay/sandbox/setup";
+    let ready = false;
+    const calls = [];
+    const port = createProviderSetup({
+      async prewarm() { ready = true; return { status: "ready" }; },
+      async status() { return { status: ready ? "ready" : "unavailable" }; },
+    });
+    const runtime = {
+      async launch() { calls.push("launch"); return { id: "installed-test" }; },
+      async runScript(handle, options) {
+        assert.equal(handle.id, "installed-test");
+        assert.equal(options.command, "echo hello");
+        calls.push("run");
+        return { output: "hello", exitCode: 0 };
+      },
+      async destroy(handle) { assert.equal(handle.id, "installed-test"); calls.push("destroy"); },
+    };
+    const options = { runtime, readiness: { providerId: "test", port } };
+    await assert.rejects(withSandbox(options, async () => {}), SandboxNotReadyError);
+    assert.deepEqual(calls, []);
+    await port.prewarm("test", { idempotencyKey: "installed-test" });
+    const result = await withSandbox(options, (sandbox) => sandbox.run("echo hello"));
+    assert.equal(result.output, "hello");
+    assert.deepEqual(calls, ["launch", "run", "destroy"]);
+  `], { cwd: consumerDirectory, stdio: "inherit" });
 
   const installedManifest = JSON.parse(await readFile(
     path.join(consumerDirectory, "node_modules", "@agent-relay", "sandbox", "package.json"),
