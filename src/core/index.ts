@@ -3,6 +3,9 @@
 /** Package name, exported so consumers can identify the module at runtime. */
 export const PACKAGE_NAME = "@agent-relay/sandbox";
 
+export { createSandbox, withSandbox, SandboxNotReadyError } from "../session.js";
+export type { SandboxSession, SandboxSessionOptions } from "../session.js";
+
 // --- runtime port (outer orchestration plane) ------------------------------
 export type {
   AsyncRunStartResult,

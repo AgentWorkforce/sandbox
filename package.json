@@ -20,6 +20,7 @@
     "dist",
     "docs/agent37.md",
     "docs/freestyle.md",
+    "docs/setup.md",
     "README.md",
     "LICENSE",
     "package.json"
