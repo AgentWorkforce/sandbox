@@ -22,6 +22,11 @@ test("setup is explicit, while status/readiness only read current scoped state",
   assert.equal(await setup.hasAvailableCredentials("e2b"), true);
   current = { status: "unavailable" };
   assert.equal(await setup.hasAvailableCredentials("e2b"), false);
+  for (const required of ["action-required", "review-required"] as const) {
+    current = { status: required };
+    assert.deepEqual(await setup.status("e2b"), current);
+    assert.equal(await setup.hasAvailableCredentials("e2b"), false);
+  }
   assert.equal(calls.filter((call) => (call as string[])[0] === "prewarm").length, 1);
 });
 

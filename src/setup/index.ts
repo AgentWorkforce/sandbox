@@ -11,6 +11,8 @@ export type ProviderSetupStatus =
   | { readonly status: "ready" }
   | { readonly status: "warming"; readonly retryAfterMs: number }
   | { readonly status: "approval-required" }
+  | { readonly status: "action-required" }
+  | { readonly status: "review-required" }
   | { readonly status: "unavailable" };
 
 export interface ProviderSetupBackend {
@@ -55,6 +57,8 @@ function safeStatus(value: unknown): ProviderSetupStatus {
   switch (status) {
     case "ready": return { status: "ready" };
     case "approval-required": return { status: "approval-required" };
+    case "action-required": return { status: "action-required" };
+    case "review-required": return { status: "review-required" };
     case "unavailable": return { status: "unavailable" };
     default: throw new ProviderSetupError();
   }

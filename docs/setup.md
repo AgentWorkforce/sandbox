@@ -43,6 +43,8 @@ The normalized result is one of:
 | `ready` | A usable credential binding exists in the scoped backend. Acquisition may proceed, subject to capacity and other constraints. |
 | `warming`, `retryAfterMs` | Schedule a later status read. Delay is an integer from 1 to 60,000 ms. |
 | `approval-required` | Return control to the authenticated onboarding UI; workload acquisition must not wait on or manufacture approval. |
+| `action-required` | The user must complete provider sign-in or supply information in the application's onboarding UI. |
+| `review-required` | The backend cannot safely determine the outcome of an operation. Reconcile its durable workflow before another account mutation; do not retry automatically. |
 | `unavailable` | Keep acquisition disabled and offer the application's supported setup alternatives. |
 
 Responses accept only these fields. Account identifiers, keys, vault references
