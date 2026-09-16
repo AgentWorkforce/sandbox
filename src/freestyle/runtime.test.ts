@@ -256,7 +256,27 @@ describe("FreestyleRuntime launch, lookup, and ownership", () => {
     assert.equal(await runtime.findByLabels({ owner: "unit" }), null);
     assert.deepEqual(await runtime.findAllByLabels({ owner: "unit" }), []);
     assert.equal(await runtime.countByLabels({ owner: "unit" }), 0);
+    // Not listing is the evidence. A label-filtered count derived from the
+    // name prefix would be the lease `warmLease: false` denies.
     assert.equal(calls.list, 0);
+  });
+
+  it("counts every account VM for an empty filter, so capacity cannot read 0 as headroom", async () => {
+    const { runtime, calls } = mockRuntime({
+      states: [[
+        { id: "ours", name: "cmpfree-test-run-a", state: "running" },
+        // Account-wide, not prefix-owned: a quota counts VMs this runtime did
+        // not name, and skipping them would under-report usage.
+        { id: "foreign", name: "somebody-else", state: "running" },
+        { id: "stopped", name: "cmpfree-test-idle", state: "stopped" },
+        // Deleted VMs hold no quota.
+        { id: "gone", name: "cmpfree-test-old", state: "stopped", deleted: true },
+      ]],
+    });
+
+    assert.equal(await runtime.countByLabels({}), 3);
+    assert.equal(await runtime.countByLabels({}, { states: ["STARTED"] }), 2);
+    assert.equal(calls.list, 2);
   });
 
   it("lists only prefix-owned live VMs and consumes runtime-only name/sizing fields", async () => {
