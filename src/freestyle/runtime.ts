@@ -276,11 +276,34 @@ export class FreestyleRuntime implements SandboxRuntime, WorkflowRuntime {
     return [];
   }
 
+  /**
+   * An empty label set is not a label query — it asks "how many VMs exist",
+   * which Freestyle can answer from the account-wide list. Capacity admission
+   * needs exactly that, and the previous unconditional `0` was indistinguishable
+   * from an empty account, so a caller could read it as headroom that does not
+   * exist.
+   *
+   * A non-empty label set stays `0` without listing. Freestyle's `vms.create`
+   * has no label field, so nothing server-side can match; deriving a count from
+   * the name prefix would turn ownership naming into the label lease that
+   * `warmLease: false` exists to deny.
+   *
+   * The count is account-wide rather than prefix-owned on purpose. Quotas apply
+   * to the account, so counting only our own names would under-report usage and
+   * manufacture headroom — the reason the router refuses Vercel's prefix-scoped
+   * count as capacity evidence.
+   */
   async countByLabels(
-    _labels: Record<string, string>,
-    _options: SandboxCountOptions = {},
+    labels: Record<string, string>,
+    options: SandboxCountOptions = {},
   ): Promise<number> {
-    return 0;
+    if (Object.keys(labels).length > 0) return 0;
+    const items = await this.listRemote(
+      options.timeoutMs ?? this.lookupTimeoutMs,
+      "account VM count",
+    );
+    const states = options.states === undefined ? null : options.states;
+    return items.filter((item) => matchesListedState(item, states, false)).length;
   }
 
   async listOwned(options: FreestyleListOwnedOptions = {}): Promise<FreestyleOwnedVm[]> {
