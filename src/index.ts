@@ -259,3 +259,33 @@ export {
   agentCoreWorkflowCapabilities,
 } from "./agentcore/capabilities.js";
 export type { AgentCoreObservedCapabilities } from "./agentcore/capabilities.js";
+
+export {
+  BoxdCapabilityMismatchError,
+  BoxdCommandTimeoutError,
+  BoxdCreateTimeoutError,
+  BoxdDestroyVerificationError,
+  BoxdLabelCollisionError,
+  BoxdLifecycleTimeoutError,
+  BoxdMachineStoppedError,
+  BoxdOperationTimeoutError,
+  BoxdRuntime,
+  BoxdUnknownExitCodeError,
+  BoxdWorkdirError,
+  buildBoxdCommand,
+  normalizeBoxdState,
+} from "./boxd/runtime.js";
+export type {
+  BoxdAttachedMachineOptions,
+  BoxdBundleFile,
+  BoxdLookupOptions,
+  BoxdUploadBundleOptions,
+} from "./boxd/runtime.js";
+export type { BoxdMachineSize, BoxdRuntimeOptions } from "./boxd/config.js";
+export {
+  boxdCapabilityModes,
+  boxdObservedCapabilities,
+  boxdSandboxCapabilities,
+  boxdWorkflowCapabilities,
+} from "./boxd/capabilities.js";
+export type { BoxdObservedCapabilities } from "./boxd/capabilities.js";
