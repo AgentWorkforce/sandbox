@@ -341,25 +341,39 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
     if (workdir) handle.workdir = workdir;
     try {
       await this.waitUntilRunnable(id, Math.max(1, deadline - Date.now()));
+      // Setup after readiness shares the create deadline: each call gets the
+      // time that is left, never a fresh request timeout on top of it.
+      const setupTimeoutMs = (): number => {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) throw new BoxdCreateTimeoutError(timeoutMs);
+        return Math.min(this.requestTimeoutMs, remainingMs);
+      };
+      const setupTimeoutError = (boundMs: number, operation: string) => () =>
+        boundMs < this.requestTimeoutMs
+          ? new BoxdCreateTimeoutError(timeoutMs)
+          : new BoxdOperationTimeoutError(boundMs, operation);
       if (this.autoHibernateTimeoutSeconds !== undefined) {
+        const boundMs = setupTimeoutMs();
         await withDeadline(
           client.machines.setAutoHibernateTimeout(id, this.autoHibernateTimeoutSeconds),
-          this.requestTimeoutMs,
-          () => new BoxdOperationTimeoutError(this.requestTimeoutMs, "auto-hibernate setting"),
+          boundMs,
+          setupTimeoutError(boundMs, "auto-hibernate setting"),
         );
       }
       if (workdir) {
-        const made = await client.machines.exec(id, {
-          command: ["mkdir", "-p", workdir],
-          timeout: this.requestTimeoutMs,
-        });
+        const boundMs = setupTimeoutMs();
+        const made = await withDeadline(
+          client.machines.exec(id, { command: ["mkdir", "-p", workdir], timeout: boundMs }),
+          boundMs,
+          setupTimeoutError(boundMs, "workdir setup"),
+        );
         if (made.exitCode !== 0) {
           throw new BoxdWorkdirError(id, workdir, made.stderr || made.stdout);
         }
       }
     } catch (error) {
       // The caller never receives this handle, so nothing else could clean it
-      // up. Delete it here and report the readiness failure.
+      // up. Delete it here and report the readiness or setup failure.
       try {
         await this.destroy(handle);
       } catch {
@@ -712,7 +726,9 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
   /**
    * Delete a machine whose create outlived its deadline or failed without a
    * clear answer. Uses the id if the create still returns one; otherwise, for
-   * a generated (unique) name only, finds the machine by name.
+   * a generated (unique) name only, finds the machine by name. The machine
+   * can show up after the failed request, so the lookup repeats for a bounded
+   * window. `close()` waits for it.
    */
   private async reconcileOrphanedCreate(
     pending: Promise<BoxdMachineLike>,
@@ -726,12 +742,7 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
       // No id came back. Fall through to the name lookup.
     }
     if (!id && generatedName) {
-      try {
-        const owned = await this.listMachines(this.ownedLabels({}), this.lookupTimeoutMs, "orphan lookup");
-        id = owned.find((machine) => machine.name === generatedName)?.id;
-      } catch {
-        return;
-      }
+      id = await this.findOrphanByName(generatedName);
     }
     if (!id) return;
     this.register(id, { owned: true, env: {}, state: "STARTING" });
@@ -740,6 +751,34 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
     } catch {
       // Best effort: launch() already rejected, so there is no caller to tell.
       // The machine carries the ownership label, so a label lookup finds it.
+    }
+  }
+
+  /**
+   * Look for an owned machine with this generated name until it is found or
+   * the cleanup window (`lifecycleSettleTimeoutMs`) ends. A failed lookup is
+   * retried inside the same window. Only a machine that carries this
+   * runtime's ownership label is returned.
+   */
+  private async findOrphanByName(generatedName: string): Promise<string | undefined> {
+    const deadline = Date.now() + this.lifecycleSettleTimeoutMs;
+    for (;;) {
+      const remainingMs = Math.max(1, deadline - Date.now());
+      try {
+        const owned = await this.listMachines(
+          this.ownedLabels({}),
+          Math.min(this.lookupTimeoutMs, remainingMs),
+          "orphan lookup",
+        );
+        const match = owned.find((machine) =>
+          machine.name === generatedName && this.carriesOwnerLabel(machine)
+        );
+        if (match) return match.id;
+      } catch {
+        // Try again until the window ends.
+      }
+      if (Date.now() >= deadline) return undefined;
+      await this.sleep(this.pollIntervalMs);
     }
   }
 
@@ -1027,7 +1066,9 @@ function assertBoxdCapabilityImplementation(runtime: BoxdRuntime): void {
 
 /**
  * The argv sent to the machine: the command runs in a login bash, and with a
- * timeout `timeout` ends it (then kills it after a short grace period).
+ * timeout `timeout` ends it (then kills it after a short grace period). The
+ * duration is passed in fractional seconds, so a limit under one second or
+ * between whole seconds is enforced as given.
  */
 export function buildBoxdCommand(command: string, timeoutMs?: number): string[] {
   if (typeof command !== "string" || !command.trim()) {
@@ -1035,7 +1076,8 @@ export function buildBoxdCommand(command: string, timeoutMs?: number): string[] 
   }
   const shell = ["bash", "-lc", command];
   if (timeoutMs === undefined) return shell;
-  const seconds = Math.max(1, Math.ceil(timeoutMs / 1_000));
+  // At least 1 ms: a duration of 0 would turn the limit off.
+  const seconds = Math.max(1, Math.ceil(timeoutMs)) / 1_000;
   return ["timeout", "-k", `${COMMAND_KILL_GRACE_SECONDS}s`, `${seconds}s`, ...shell];
 }
 
