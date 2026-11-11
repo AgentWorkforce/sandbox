@@ -63,6 +63,8 @@ class FakeBoxd {
   next = 1;
   createImpl?: (params: BoxdCreateParams) => Promise<BoxdMachineLike>;
   execImpl?: (call: ExecCall) => Promise<BoxdExecResultLike>;
+  hibernateImpl?: (id: string, seconds: number) => Promise<void>;
+  listImpl?: () => Promise<void>;
   deleteKeepsMachine = false;
 
   add(machine: Partial<BoxdMachineLike> & { id: string }): BoxdMachineLike {
@@ -95,6 +97,7 @@ class FakeBoxd {
         },
         async list(params) {
           fake.lists.push(params);
+          if (fake.listImpl) await fake.listImpl();
           return [...fake.machines.values()]
             .filter((machine) =>
               Object.entries(params.labels ?? {}).every(([k, v]) => machine.labels?.[k] === v)
@@ -116,6 +119,7 @@ class FakeBoxd {
         },
         async setAutoHibernateTimeout(id, seconds) {
           fake.hibernateTimeouts.push([id, seconds]);
+          if (fake.hibernateImpl) await fake.hibernateImpl(id, seconds);
         },
         async waitUntilReady(id) {
           return { ...fake.machines.get(id)! };
@@ -386,6 +390,117 @@ describe("BoxdRuntime.launch", () => {
     assert.deepEqual(fake.deletes, ["m-made"]);
   });
 
+  it("keeps looking for a generated-name machine that appears after the failed create", async () => {
+    const fake = new FakeBoxd();
+    let made: BoxdCreateParams | undefined;
+    fake.createImpl = async (params) => {
+      made = params;
+      throw new NamedError("APIStatusError", "upstream reset");
+    };
+    // The machine is not listed until the third lookup.
+    fake.listImpl = async () => {
+      if (fake.lists.length === 3) {
+        fake.add({ id: "m-appears-late", name: made!.name, labels: made!.labels });
+      }
+    };
+    const runtime = runtimeWith(fake, { lifecycleSettleTimeoutMs: 2_000 });
+    await assert.rejects(runtime.launch(), { name: "APIStatusError" });
+    await runtime.close();
+    assert.equal(fake.lists.length, 3);
+    assert.deepEqual(fake.deletes, ["m-appears-late"]);
+    assert.equal(fake.machines.has("m-appears-late"), false);
+  });
+
+  it("retries a failed orphan lookup instead of giving up on the machine", async () => {
+    const fake = new FakeBoxd();
+    fake.createImpl = async (params) => {
+      fake.add({ id: "m-made", name: params.name, labels: params.labels });
+      throw new NamedError("APIConnectionError", "socket hang up");
+    };
+    fake.listImpl = async () => {
+      if (fake.lists.length === 1) throw new NamedError("APIConnectionError", "socket hang up");
+    };
+    const runtime = runtimeWith(fake, { lifecycleSettleTimeoutMs: 2_000 });
+    await assert.rejects(runtime.launch(), { name: "APIConnectionError" });
+    await runtime.close();
+    assert.equal(fake.lists.length, 2);
+    assert.deepEqual(fake.deletes, ["m-made"]);
+  });
+
+  it("stops looking for an orphan when the cleanup window ends, and only takes its own", async () => {
+    const fake = new FakeBoxd();
+    fake.createImpl = async (params) => {
+      // Same name, but not this runtime's ownership label: never ours to delete.
+      fake.add({ id: "m-foreign", name: params.name, labels: { "agent-relay-sandbox": "other" } });
+      throw new NamedError("APIStatusError", "upstream reset");
+    };
+    const runtime = runtimeWith(fake, { lifecycleSettleTimeoutMs: 40 });
+    await assert.rejects(runtime.launch(), { name: "APIStatusError" });
+    const started = Date.now();
+    await runtime.close();
+    assert.ok(Date.now() - started < 1_000, "close() returns once the window ends");
+    assert.ok(fake.lists.length > 1, "the lookup ran more than once");
+    assert.deepEqual(fake.deletes, []);
+    assert.equal(fake.closed, 1);
+  });
+
+  it("bounds the auto-hibernate setting by the create deadline and deletes the machine", async () => {
+    const fake = new FakeBoxd();
+    // Never answers within the test; the timer only keeps the promise settled later.
+    fake.hibernateImpl = () => new Promise((resolve) => setTimeout(resolve, 3_000).unref());
+    const runtime = runtimeWith(fake, {
+      autoHibernateTimeoutSeconds: 0,
+      createTimeoutMs: 60,
+      requestTimeoutMs: 2_000,
+    });
+    const started = Date.now();
+    await assert.rejects(runtime.launch(), (error: Error & { sandboxId?: string }) => {
+      assert.ok(error instanceof BoxdCreateTimeoutError, error.name);
+      assert.equal(error.timeoutMs, 60);
+      assert.equal(error.sandboxId, "m-1");
+      return true;
+    });
+    assert.ok(Date.now() - started < 1_000, `launch took ${Date.now() - started}ms`);
+    assert.deepEqual(fake.deletes, ["m-1"]);
+    assert.equal(fake.machines.has("m-1"), false);
+  });
+
+  it("bounds the workdir setup by the create deadline and deletes the machine", async () => {
+    const fake = new FakeBoxd();
+    fake.execImpl = (call) => call.command[0] === "mkdir"
+      ? new Promise((resolve) => setTimeout(
+          () => resolve({ stdout: "", stderr: "", exitCode: 0 }),
+          3_000,
+        ).unref())
+      : Promise.resolve({ stdout: "", stderr: "", exitCode: 0 });
+    const runtime = runtimeWith(fake, { createTimeoutMs: 60, requestTimeoutMs: 2_000 });
+    const started = Date.now();
+    await assert.rejects(
+      runtime.launch({ createTimeoutSeconds: 0.06, workdir: "proj" }),
+      (error: Error & { sandboxId?: string }) => {
+        assert.ok(error instanceof BoxdCreateTimeoutError, error.name);
+        assert.equal(error.sandboxId, "m-1");
+        return true;
+      },
+    );
+    assert.ok(Date.now() - started < 1_000, `launch took ${Date.now() - started}ms`);
+    const mkdir = fake.execs.find((call) => call.command[0] === "mkdir")!;
+    assert.ok(mkdir.timeout! <= 60, `mkdir request timeout ${mkdir.timeout}ms`);
+    assert.deepEqual(fake.deletes, ["m-1"]);
+  });
+
+  it("keeps the request timeout for setup when the create deadline is further away", async () => {
+    const fake = new FakeBoxd();
+    fake.hibernateImpl = () => new Promise((resolve) => setTimeout(resolve, 3_000).unref());
+    const runtime = runtimeWith(fake, {
+      autoHibernateTimeoutSeconds: 0,
+      createTimeoutMs: 5_000,
+      requestTimeoutMs: 30,
+    });
+    await assert.rejects(runtime.launch(), { name: "BoxdOperationTimeoutError" });
+    assert.deepEqual(fake.deletes, ["m-1"]);
+  });
+
   it("never deletes by name after a conflict or for a caller-chosen name", async () => {
     const fake = new FakeBoxd();
     fake.add({ id: "existing", name: "relay-test-taken", labels: { "agent-relay-sandbox": "relay-test" } });
@@ -453,7 +568,7 @@ describe("BoxdRuntime commands", () => {
       },
     );
     const call = userExecs(fake)[0]!;
-    assert.deepEqual(call.command, ["timeout", "-k", "5s", "1s", "bash", "-lc", "sleep 100"]);
+    assert.deepEqual(call.command, ["timeout", "-k", "5s", "0.01s", "bash", "-lc", "sleep 100"]);
     assert.ok(call.timeout! > 10);
   });
 
@@ -513,8 +628,19 @@ describe("BoxdRuntime commands", () => {
 
   it("builds argv without interpolating the command", () => {
     assert.deepEqual(buildBoxdCommand("echo '$HOME'"), ["bash", "-lc", "echo '$HOME'"]);
-    assert.deepEqual(buildBoxdCommand("x", 1_500), ["timeout", "-k", "5s", "2s", "bash", "-lc", "x"]);
     assert.throws(() => buildBoxdCommand("  "), /non-empty/);
+  });
+
+  it("passes the command timeout to `timeout` exactly, in fractional seconds", () => {
+    const duration = (timeoutMs: number) => buildBoxdCommand("x", timeoutMs)[3];
+    assert.deepEqual(buildBoxdCommand("x", 1_500), ["timeout", "-k", "5s", "1.5s", "bash", "-lc", "x"]);
+    assert.equal(duration(100), "0.1s");
+    assert.equal(duration(1), "0.001s");
+    assert.equal(duration(2_000), "2s");
+    assert.equal(duration(60_001), "60.001s");
+    // `timeout 0` would run the command with no limit at all.
+    assert.equal(duration(0), "0.001s");
+    assert.equal(duration(0.2), "0.001s");
   });
 });
 
