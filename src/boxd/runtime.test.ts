@@ -444,6 +444,32 @@ describe("BoxdRuntime.launch", () => {
     assert.equal(fake.closed, 1);
   });
 
+  it("never sleeps past the end of the orphan cleanup window", async () => {
+    const fake = new FakeBoxd();
+    fake.createImpl = async () => {
+      throw new NamedError("APIStatusError", "upstream reset");
+    };
+    const sleeps: number[] = [];
+    const runtime = new BoxdRuntime(
+      { ...BASE_OPTIONS, pollIntervalMs: 5_000, lifecycleSettleTimeoutMs: 40 },
+      {
+        clientFactory: () => fake.client(),
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return new Promise((resolve) => setTimeout(resolve, ms));
+        },
+      },
+    );
+    await assert.rejects(runtime.launch(), { name: "APIStatusError" });
+    const started = Date.now();
+    await runtime.close();
+    assert.ok(Date.now() - started < 1_000, `close() took ${Date.now() - started}ms`);
+    assert.ok(sleeps.length > 0, "the lookup paused before trying again");
+    assert.ok(sleeps.every((ms) => ms > 0 && ms <= 40), `slept ${sleeps.join(", ")}ms`);
+    assert.ok(fake.lists.length > 1, "the lookup ran again when the window ended");
+    assert.deepEqual(fake.deletes, []);
+  });
+
   it("bounds the auto-hibernate setting by the create deadline and deletes the machine", async () => {
     const fake = new FakeBoxd();
     // Never answers within the test; the timer only keeps the promise settled later.
@@ -829,6 +855,29 @@ describe("BoxdRuntime lifecycle", () => {
     fake.deleteKeepsMachine = false;
     await runtime.destroy(handle);
     assert.deepEqual(fake.deletes, [handle.id, handle.id]);
+  });
+
+  it("never sleeps past the end of the destroy verification window", async () => {
+    const fake = new FakeBoxd();
+    const sleeps: number[] = [];
+    const runtime = new BoxdRuntime(
+      { ...BASE_OPTIONS, pollIntervalMs: 5_000, lifecycleSettleTimeoutMs: 40 },
+      {
+        clientFactory: () => fake.client(),
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return new Promise((resolve) => setTimeout(resolve, ms));
+        },
+      },
+    );
+    const handle = await runtime.launch();
+    fake.deleteKeepsMachine = true;
+    sleeps.length = 0;
+    const started = Date.now();
+    await assert.rejects(runtime.destroy(handle), BoxdDestroyVerificationError);
+    assert.ok(Date.now() - started < 1_000, `destroy took ${Date.now() - started}ms`);
+    assert.ok(sleeps.length > 0, "verification paused before looking again");
+    assert.ok(sleeps.every((ms) => ms > 0 && ms <= 40), `slept ${sleeps.join(", ")}ms`);
   });
 
   it("close drains background cleanup and closes the client once", async () => {
