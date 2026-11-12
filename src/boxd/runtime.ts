@@ -778,8 +778,15 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
         // Try again until the window ends.
       }
       if (Date.now() >= deadline) return undefined;
-      await this.sleep(this.pollIntervalMs);
+      await this.pauseBeforePoll(deadline);
     }
+  }
+
+  /** Wait one poll interval, or only until `deadline` when that is sooner. */
+  private async pauseBeforePoll(deadline: number): Promise<void> {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return;
+    await this.sleep(Math.min(this.pollIntervalMs, remainingMs));
   }
 
   private trackReconciliation(work: Promise<void>): void {
@@ -877,7 +884,7 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
       } catch (error) {
         lastError = error;
       }
-      await this.sleep(this.pollIntervalMs);
+      await this.pauseBeforePoll(deadline);
     }
     throw lastError instanceof Error
       ? lastError
@@ -960,7 +967,7 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
       if (Date.now() >= deadline) {
         throw new BoxdLifecycleTimeoutError(id, description, lastStatus, timeoutMs);
       }
-      await this.sleep(this.pollIntervalMs);
+      await this.pauseBeforePoll(deadline);
     }
   }
 
@@ -971,7 +978,7 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
       const machine = await this.remoteById(id, Math.min(this.lookupTimeoutMs, remainingMs));
       if (!machine) return true;
       if (Date.now() >= deadline) return false;
-      await this.sleep(this.pollIntervalMs);
+      await this.pauseBeforePoll(deadline);
     }
   }
 
