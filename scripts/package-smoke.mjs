@@ -19,6 +19,7 @@ const entrypoints = [
   "microsandbox",
   "modal",
   "vercel",
+  "boxd",
 ];
 const optionalPeers = [
   "@aws-sdk/client-bedrock-agentcore",
@@ -29,6 +30,7 @@ const optionalPeers = [
   "freestyle",
   "microsandbox",
   "modal",
+  "@boxd-sh/sdk",
 ];
 
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), "sandbox-package-smoke-"));

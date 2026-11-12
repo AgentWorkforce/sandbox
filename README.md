@@ -93,8 +93,8 @@ import { DaytonaRuntime } from "@agent-relay/sandbox/daytona";
 ```
 
 The provider entrypoints are `agent37`, `agentcore`, `daytona`, `e2b`,
-`freestyle`, `local`, `microsandbox`, `modal`, and `vercel`. Each points at its
-own barrel, so a bundler does not have to resolve the other optional provider SDKs.
+`freestyle`, `local`, `microsandbox`, `modal`, `vercel`, and `boxd`. Each points
+at its own barrel, so a bundler does not have to resolve the other optional provider SDKs.
 The root `@agent-relay/sandbox` barrel still exports the complete historical
 surface for compatibility, but new runtime imports should use `core` plus one
 provider subpath.
@@ -117,6 +117,7 @@ same as this package's:
 | `E2BSandboxRuntime` | `e2b` | — |
 | `MicrosandboxRuntime` | `microsandbox` | **Node.js 22+**, a platform-specific native addon (macOS arm64, Linux x64/arm64, Windows x64/arm64), and — for its `local` backend — hardware virtualization: KVM on Linux, Apple Silicon on macOS, or WHP on Windows 10+ |
 | `LocalSandboxRuntime` | — | A reachable local sandbox service |
+| `BoxdRuntime` | `@boxd-sh/sdk` 0.3 | none |
 
 The package itself keeps a Node 20 floor, because a consumer that never touches
 the microsandbox adapter never loads that SDK: it is imported lazily, at first
@@ -341,6 +342,21 @@ is a structural mirror that is checked at build time instead. All create,
 lookup, exec, upload, and deletion operations have explicit deadlines. See
 [the Modal adapter notes](./docs/modal.md) for dependency provenance, provider
 constraints, cost model, and capability evidence.
+
+### boxd runtime contract
+
+`BoxdRuntime` runs each sandbox as a [boxd](https://boxd.sh/?ref=relay) machine,
+a virtual machine with a persistent disk. It takes an explicit API key and name
+prefix and never reads ambient credentials. Machines are isolated by default
+and carry an ownership label, so label lookup and warm leasing use boxd's
+server-side label filter, and a second process can reattach by label or id.
+
+The adapter exposes buffered exec with in-machine timeouts, file transfer,
+reattachment, label lookup and count, stop and start with the disk kept, and
+verified deletion. PTY, snapshots, forks and streaming output exist in boxd but
+are not advertised, because this package's ports do not reach them. The SDK is
+isolated under `src/boxd/internal/`. See [the boxd adapter notes](./docs/boxd.md)
+for configuration and capability evidence.
 
 ## Development
 

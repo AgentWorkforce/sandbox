@@ -17,6 +17,7 @@ const providerEntrypoints = [
   "microsandbox",
   "modal",
   "vercel",
+  "boxd",
 ] as const;
 
 type PackageManifest = {
