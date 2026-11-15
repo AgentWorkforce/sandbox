@@ -37,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.ref }}
       - id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -58,6 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ needs.test.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
