@@ -7,6 +7,9 @@
 # bound to publish.yml, so this workflow cannot authenticate to the registry.
 # Instead it uploads the `npm pack` tarball as a workflow artifact named
 # sandbox-npm-<sha>. It never moves any npm dist-tag or git tag.
+#
+# Caches are restore-only: this builds unreviewed refs, so it never saves into
+# a cache that normal CI or release workflows restore.
 name: fast-path
 run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
 on:
@@ -22,7 +25,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fast-path-${{ inputs.ref }}
+  # run_id: a run waiting for approval must not let a later dispatch cancel it.
+  group: fast-path-${{ inputs.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   test:
@@ -39,7 +43,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
       - run: npm ci
       - name: Build
         run: npm run build
@@ -59,7 +62,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
       - run: npm ci
       - name: Build
         run: npm run build
