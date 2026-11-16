@@ -80,8 +80,10 @@ command.
 unless `cwd` is given. Launch env goes with every command this runtime runs,
 merged under per-command env. With `timeoutMs`, `timeout` inside the machine
 ends the command (and kills it 5 seconds later if it ignores the signal), and
-the call rejects with `BoxdCommandTimeoutError`, carrying the output so far. A response without an exit code is never treated as
-success.
+the call rejects with `BoxdCommandTimeoutError`, carrying the output so far. The
+runtime learns about the timeout from `timeout` itself, not from how long the
+request took, so a command that exits 124 or 137 by itself returns that exit
+code. A response without an exit code is never treated as success.
 
 `uploadFile` creates missing parent directories. Transfers are bounded by
 `transferTimeoutMs`. `uploadBundle` writes its manifest to

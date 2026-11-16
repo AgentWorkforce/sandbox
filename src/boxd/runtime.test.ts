@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 
 import { resolveSandboxRuntimeCapabilities } from "../port.js";
@@ -165,6 +166,15 @@ function runtimeWith(
 }
 
 /** Exec calls the caller made, without the readiness probes. */
+function timeoutMarkerOf(call: ExecCall): string {
+  return call.command[4]!;
+}
+
+function hasGnuTimeout(): boolean {
+  const probe = spawnSync("timeout", ["--verbose", "1", "true"], { encoding: "utf8" });
+  return probe.status === 0;
+}
+
 function userExecs(fake: FakeBoxd): ExecCall[] {
   return fake.execs.filter((call) =>
     call.command.join(" ") !== "true" && call.command[0] !== "mkdir"
@@ -581,42 +591,67 @@ describe("BoxdRuntime commands", () => {
   it("ends a command at its timeout inside the machine and reports it", async () => {
     const fake = new FakeBoxd();
     const { runtime, handle } = await launched(fake);
-    fake.execImpl = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      return { stdout: "partial", stderr: "", exitCode: 124 };
-    };
+    fake.execImpl = async (call) => ({
+      stdout: "partial",
+      stderr: `warn\n\n${timeoutMarkerOf(call)}\n`,
+      exitCode: 124,
+    });
     await assert.rejects(
       runtime.runScript(handle, { command: "sleep 100", timeoutMs: 10 }),
       (error: unknown) => {
         assert.ok(error instanceof BoxdCommandTimeoutError);
         assert.equal(error.stdout, "partial");
+        assert.equal(error.stderr, "warn\n");
         return true;
       },
     );
     const call = userExecs(fake)[0]!;
-    assert.deepEqual(call.command, ["timeout", "-k", "5s", "0.01s", "bash", "-lc", "sleep 100"]);
+    assert.deepEqual(call.command.slice(0, 2), ["bash", "-c"]);
+    assert.deepEqual(call.command.slice(3), [
+      "boxd-timeout",
+      timeoutMarkerOf(call),
+      "0.01s",
+      "5s",
+      "sleep 100",
+    ]);
+    assert.match(timeoutMarkerOf(call), /^boxd-command-timeout-[0-9a-f-]{36}$/);
     assert.ok(call.timeout! > 10);
   });
 
   it("reports a command killed after ignoring the timeout signal as a timeout", async () => {
     const fake = new FakeBoxd();
     const { runtime, handle } = await launched(fake);
-    fake.execImpl = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      return { stdout: "", stderr: "", exitCode: 137 };
-    };
+    fake.execImpl = async (call) => ({ stdout: "", stderr: `\n${timeoutMarkerOf(call)}\n`, exitCode: 137 });
     await assert.rejects(
       runtime.runScript(handle, { command: "trap '' TERM; sleep 100", timeoutMs: 10 }),
       BoxdCommandTimeoutError,
     );
   });
 
-  it("keeps a fast exit code 124 as the command's own result", async () => {
+  for (const code of [124, 137]) {
+    it(`keeps exit code ${code} as the command's own result when the response is slow`, async () => {
+      const fake = new FakeBoxd();
+      const { runtime, handle } = await launched(fake);
+      fake.execImpl = async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { stdout: "done\n", stderr: "err\n", exitCode: code };
+      };
+      const result = await runtime.runScript(handle, { command: `exit ${code}`, timeoutMs: 10 });
+      assert.deepEqual(result, { output: "done\nerr\n", stdout: "done\n", stderr: "err\n", exitCode: code });
+    });
+  }
+
+  it("ignores a timeout marker from another call", async () => {
     const fake = new FakeBoxd();
     const { runtime, handle } = await launched(fake);
-    fake.execImpl = async () => ({ stdout: "", stderr: "", exitCode: 124 });
-    const result = await runtime.runScript(handle, { command: "exit 124", timeoutMs: 60_000 });
+    const stale = "\nboxd-command-timeout-00000000-0000-0000-0000-000000000000\n";
+    fake.execImpl = async () => ({ stdout: "", stderr: stale, exitCode: 124 });
+    const result = await runtime.runScript(handle, { command: "exit 124", timeoutMs: 10 });
     assert.equal(result.exitCode, 124);
+    assert.equal(result.stderr, stale);
+    await runtime.runScript(handle, { command: "exit 124", timeoutMs: 10 });
+    const [first, second] = userExecs(fake);
+    assert.notEqual(timeoutMarkerOf(first!), timeoutMarkerOf(second!));
   });
 
   it("refuses to treat a missing exit code as success", async () => {
@@ -658,8 +693,8 @@ describe("BoxdRuntime commands", () => {
   });
 
   it("passes the command timeout to `timeout` exactly, in fractional seconds", () => {
-    const duration = (timeoutMs: number) => buildBoxdCommand("x", timeoutMs)[3];
-    assert.deepEqual(buildBoxdCommand("x", 1_500), ["timeout", "-k", "5s", "1.5s", "bash", "-lc", "x"]);
+    const duration = (timeoutMs: number) => buildBoxdCommand("x", timeoutMs)[5];
+    assert.equal(duration(1_500), "1.5s");
     assert.equal(duration(100), "0.1s");
     assert.equal(duration(1), "0.001s");
     assert.equal(duration(2_000), "2s");
@@ -667,6 +702,32 @@ describe("BoxdRuntime commands", () => {
     // `timeout 0` would run the command with no limit at all.
     assert.equal(duration(0), "0.001s");
     assert.equal(duration(0.2), "0.001s");
+    assert.throws(() => buildBoxdCommand("x", 1_000, "short"), /marker/);
+  });
+});
+
+describe("BoxdRuntime timeout script", { skip: !hasGnuTimeout() && "needs GNU coreutils timeout" }, () => {
+  const marker = "boxd-command-timeout-unit-test-marker";
+  const run = (command: string, timeoutMs: number) => {
+    const [file, ...args] = buildBoxdCommand(command, timeoutMs, marker);
+    return spawnSync(file!, args, { encoding: "utf8" });
+  };
+
+  it("passes through a command that exits 124 or 137 by itself", () => {
+    const own = run("echo out; echo err >&2; exit 124", 5_000);
+    assert.deepEqual([own.status, own.stdout, own.stderr], [124, "out\n", "err\n"]);
+    const killed = run("kill -9 $$", 5_000);
+    assert.deepEqual([killed.status, killed.stderr], [137, ""]);
+  });
+
+  it("marks a command that timeout ended", () => {
+    const result = run("echo out; printf err >&2; sleep 30", 200);
+    assert.deepEqual([result.status, result.stdout, result.stderr], [124, "out\n", `err\n${marker}\n`]);
+  });
+
+  it("marks a command that ignored the signal and was killed", () => {
+    const result = run("trap '' TERM; sleep 30", 200);
+    assert.deepEqual([result.status, result.stderr], [137, `\n${marker}\n`]);
   });
 });
 

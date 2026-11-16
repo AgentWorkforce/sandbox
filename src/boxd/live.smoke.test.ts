@@ -90,6 +90,15 @@ describe("boxd live smoke", { skip }, () => {
     assert.equal(leftover.output.trim(), "gone");
   });
 
+  it("keeps a command's own exit 124 and 137 under a timeout", async () => {
+    const own = await primary.runScript(handle, { command: "echo done; exit 124", timeoutMs: 2_000 });
+    assert.equal(own.exitCode, 124);
+    assert.equal(own.stdout, "done\n");
+    assert.equal(own.stderr, undefined);
+    const killed = await primary.runScript(handle, { command: "kill -9 $$", timeoutMs: 2_000 });
+    assert.equal(killed.exitCode, 137);
+  });
+
   it("round-trips a 5 MiB file byte for byte", async () => {
     const bytes = randomBytes(5 * 1024 * 1024);
     await timed("upload 5 MiB", () =>

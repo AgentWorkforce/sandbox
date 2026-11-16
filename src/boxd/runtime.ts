@@ -49,8 +49,30 @@ const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_LOOKUP_LIMIT = 10;
 const COMMAND_REQUEST_GRACE_MS = 15_000;
 const COMMAND_KILL_GRACE_SECONDS = 5;
-/** Exit codes of coreutils `timeout`: 124 after SIGTERM, 137 after SIGKILL. */
-const TIMEOUT_EXIT_CODES: ReadonlySet<number> = new Set([124, 137]);
+/**
+ * Runs the command under coreutils `timeout` and tells a real timeout apart
+ * from a command that exits 124 or 137 itself. `timeout --verbose` writes a
+ * line when it sends a signal. That line goes to a private file, while the
+ * command keeps the real stderr (fd 3 here). Only when the file has that line
+ * and the status is 124 (SIGTERM) or 137 (SIGKILL) does the script print the
+ * per-call marker ($1) on its own stderr line. The command never sees the
+ * marker. The script's own stderr goes to /dev/null so bash's "Killed" job
+ * notice does not reach the caller.
+ * Arguments: $1 marker, $2 limit, $3 kill grace, $4 command.
+ */
+const TIMEOUT_SCRIPT = [
+  "exec 3>&2 2>/dev/null",
+  "log=$(mktemp 2>&3) || exit 125",
+  "timeout --verbose -k \"$3\" \"$2\" bash -c 'exec 2>&3 3>&-; exec bash -lc \"$1\"' bash \"$4\" 2>\"$log\"",
+  "status=$?",
+  "if [ -s \"$log\" ] && { [ \"$status\" -eq 124 ] || [ \"$status\" -eq 137 ]; }; then",
+  "  printf '\\n%s\\n' \"$1\" >&3",
+  "elif [ -s \"$log\" ]; then",
+  "  cat \"$log\" >&3",
+  "fi",
+  "rm -f \"$log\"",
+  "exit \"$status\"",
+].join("\n");
 const SIZES: readonly BoxdMachineSize[] = [
   { vcpu: 1, memory: "4G" },
   { vcpu: 2, memory: "8G" },
@@ -470,7 +492,8 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
       ? Math.ceil(options.timeoutMs)
       : undefined;
     const cwd = options.cwd ?? handle.workdir;
-    const argv = buildBoxdCommand(options.command, commandTimeoutMs);
+    const timeoutMarker = `boxd-command-timeout-${randomUUID()}`;
+    const argv = buildBoxdCommand(options.command, commandTimeoutMs, timeoutMarker);
     // With a command timeout, `timeout` in the machine ends the process and
     // the request deadline only covers transport. Without one, the command
     // may run as long as it needs.
@@ -486,7 +509,6 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
         ...(requestTimeoutMs !== undefined ? { timeout: requestTimeoutMs } : {}),
       });
     };
-    const startedAt = Date.now();
     let result;
     try {
       result = await run();
@@ -498,16 +520,11 @@ export class BoxdRuntime implements SandboxRuntime, WorkflowRuntime {
       result = await run();
     }
     const stdout = result.stdout ?? "";
-    const stderr = result.stderr ?? "";
     const exitCode = typeof result.exitCode === "number" && result.exitCode >= 0
       ? result.exitCode
       : null;
-    if (
-      commandTimeoutMs !== undefined
-      && exitCode !== null
-      && TIMEOUT_EXIT_CODES.has(exitCode)
-      && Date.now() - startedAt >= commandTimeoutMs
-    ) {
+    const { stderr, timedOut } = takeTimeoutMarker(result.stderr ?? "", timeoutMarker);
+    if (commandTimeoutMs !== undefined && timedOut) {
       throw new BoxdCommandTimeoutError(commandTimeoutMs, stdout, stderr);
     }
     return {
@@ -1077,15 +1094,43 @@ function assertBoxdCapabilityImplementation(runtime: BoxdRuntime): void {
  * duration is passed in fractional seconds, so a limit under one second or
  * between whole seconds is enforced as given.
  */
-export function buildBoxdCommand(command: string, timeoutMs?: number): string[] {
+/**
+ * The argv for a command. With a timeout, the command runs under `timeout`
+ * inside the machine, and `timeoutMarker` is printed on its own stderr line
+ * only when `timeout` ended it.
+ */
+export function buildBoxdCommand(
+  command: string,
+  timeoutMs?: number,
+  timeoutMarker = `boxd-command-timeout-${randomUUID()}`,
+): string[] {
   if (typeof command !== "string" || !command.trim()) {
     throw new Error("boxd runScript requires a non-empty command");
   }
-  const shell = ["bash", "-lc", command];
-  if (timeoutMs === undefined) return shell;
+  if (timeoutMs === undefined) return ["bash", "-lc", command];
+  if (!/^[A-Za-z0-9-]{16,}$/u.test(timeoutMarker)) {
+    throw new Error("boxd timeout marker must be 16 or more letters, digits or dashes");
+  }
   // At least 1 ms: a duration of 0 would turn the limit off.
   const seconds = Math.max(1, Math.ceil(timeoutMs)) / 1_000;
-  return ["timeout", "-k", `${COMMAND_KILL_GRACE_SECONDS}s`, `${seconds}s`, ...shell];
+  return [
+    "bash",
+    "-c",
+    TIMEOUT_SCRIPT,
+    "boxd-timeout",
+    timeoutMarker,
+    `${seconds}s`,
+    `${COMMAND_KILL_GRACE_SECONDS}s`,
+    command,
+  ];
+}
+
+/** Remove the timeout marker line from stderr and say whether it was there. */
+function takeTimeoutMarker(stderr: string, marker: string): { stderr: string; timedOut: boolean } {
+  const line = `\n${marker}\n`;
+  const at = stderr.lastIndexOf(line);
+  if (at === -1) return { stderr, timedOut: false };
+  return { stderr: stderr.slice(0, at) + stderr.slice(at + line.length), timedOut: true };
 }
 
 /**
