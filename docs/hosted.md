@@ -44,5 +44,5 @@ points to the dashboard integration scope without including a token, session,
 or provider-native identifier.
 
 Existing provider-key quickstarts remain supported. For a directly configured
-provider runtime, see the [provider quickstart](../README.md#run-your-first-workload)
+provider runtime, see the [provider quickstart](repository-guide.md#run-your-first-workload)
 and [setup contract](setup.md).
