@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { resolveSandboxRuntimeCapabilities } from "../port.js";
@@ -708,9 +711,9 @@ describe("BoxdRuntime commands", () => {
 
 describe("BoxdRuntime timeout script", { skip: !hasGnuTimeout() && "needs GNU coreutils timeout" }, () => {
   const marker = "boxd-command-timeout-unit-test-marker";
-  const run = (command: string, timeoutMs: number) => {
+  const run = (command: string, timeoutMs: number, env: NodeJS.ProcessEnv = process.env) => {
     const [file, ...args] = buildBoxdCommand(command, timeoutMs, marker);
-    return spawnSync(file!, args, { encoding: "utf8" });
+    return spawnSync(file!, args, { encoding: "utf8", env });
   };
 
   it("passes through a command that exits 124 or 137 by itself", () => {
@@ -728,6 +731,20 @@ describe("BoxdRuntime timeout script", { skip: !hasGnuTimeout() && "needs GNU co
   it("marks a command that ignored the signal and was killed", () => {
     const result = run("trap '' TERM; sleep 30", 200);
     assert.deepEqual([result.status, result.stderr], [137, `\n${marker}\n`]);
+  });
+
+  it("marks a timeout and removes its temp file when the env sets SHELLOPTS=errexit", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "boxd-timeout-"));
+    try {
+      const env = { ...process.env, SHELLOPTS: "errexit", TMPDIR: tmp };
+      const timedOut = run("echo out; sleep 30", 200, env);
+      assert.deepEqual([timedOut.status, timedOut.stdout, timedOut.stderr], [124, "out\n", `\n${marker}\n`]);
+      const own = run("exit 124", 5_000, env);
+      assert.deepEqual([own.status, own.stderr], [124, ""]);
+      assert.deepEqual(readdirSync(tmp), []);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

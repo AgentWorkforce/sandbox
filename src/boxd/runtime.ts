@@ -57,10 +57,13 @@ const COMMAND_KILL_GRACE_SECONDS = 5;
  * and the status is 124 (SIGTERM) or 137 (SIGKILL) does the script print the
  * per-call marker ($1) on its own stderr line. The command never sees the
  * marker. The script's own stderr goes to /dev/null so bash's "Killed" job
- * notice does not reach the caller.
+ * notice does not reach the caller. `set +e` comes first because launch or
+ * command env can carry SHELLOPTS=errexit, which would otherwise end the
+ * script when `timeout` returns non-zero, before the marker and the cleanup.
  * Arguments: $1 marker, $2 limit, $3 kill grace, $4 command.
  */
 const TIMEOUT_SCRIPT = [
+  "set +e",
   "exec 3>&2 2>/dev/null",
   "log=$(mktemp 2>&3) || exit 125",
   "timeout --verbose -k \"$3\" \"$2\" bash -c 'exec 2>&3 3>&-; exec bash -lc \"$1\"' bash \"$4\" 2>\"$log\"",

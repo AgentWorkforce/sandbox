@@ -90,6 +90,20 @@ describe("boxd live smoke", { skip }, () => {
     assert.equal(leftover.output.trim(), "gone");
   });
 
+  it("reports a timeout and cleans up when the env sets SHELLOPTS=errexit", async () => {
+    const tmp = "/home/boxd/smoke/errexit-tmp";
+    await primary.exec(handle, `mkdir -p ${tmp}`);
+    const env = { SHELLOPTS: "errexit", TMPDIR: tmp };
+    await assert.rejects(
+      primary.runScript(handle, { command: "sleep 30", timeoutMs: 2_000, env }),
+      { name: "BoxdCommandTimeoutError" },
+    );
+    const own = await primary.runScript(handle, { command: "exit 124", timeoutMs: 2_000, env });
+    assert.equal(own.exitCode, 124);
+    const left = await primary.exec(handle, `ls -A ${tmp}`);
+    assert.equal(left.output, "");
+  });
+
   it("keeps a command's own exit 124 and 137 under a timeout", async () => {
     const own = await primary.runScript(handle, { command: "echo done; exit 124", timeoutMs: 2_000 });
     assert.equal(own.exitCode, 124);
